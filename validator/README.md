@@ -52,7 +52,10 @@ paid once.
 
 ## Running a round
 
-1. **Fix the corpus.** `verifier/make-corpus.py` builds one from local sources. In
+1. **Fix the corpus.** The one committed here is the development reference, with
+   its hashes in [`docs/CORPUS.md`](docs/CORPUS.md); `verifier/make-corpus.py`
+   builds a fresh mix from local sources and refuses to overwrite it without
+   `--force`. In
    a real round you commit to a hash first and reveal the contents after scoring;
    publish *shape* statistics only. [`docs/SCORING.md`](docs/SCORING.md) has the
    governance and the reason it matters.
@@ -98,5 +101,5 @@ verifier/
   make-corpus.py the scoring corpus
   PINS.json      hashes of everything a miner may not change
 corpus/          generated
-docs/            DESIGN, SCORING, THREAT_MODEL, TOOLCHAIN
+docs/            DESIGN, SCORING, CORPUS, THREAT_MODEL, TOOLCHAIN
 ```

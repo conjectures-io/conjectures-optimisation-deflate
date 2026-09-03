@@ -1,9 +1,10 @@
 # The reference corpus
 
-These are the exact bytes every score in this repository's documentation was
-measured against. `verifier/make-corpus.py` regenerates the mix from local
-sources and will refuse to overwrite these without `--force`; a real round uses
-a held-out, commit-revealed corpus instead. See `../docs/SCORING.md`.
+The corpus is `../corpus/`, five files, and these are the exact bytes every score
+in this repository's documentation was measured against.
+`../verifier/make-corpus.py` regenerates the mix from local sources and will
+refuse to overwrite them without `--force`; a real round uses a held-out,
+commit-revealed corpus instead. See [`SCORING.md`](SCORING.md).
 
 | file | bytes | sha256 |
 |---|---|---|
