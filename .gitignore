@@ -1,0 +1,6 @@
+target/
+.lake/
+validator/corpus/
+validator/lean/.extract/
+*.llbc
+__pycache__/
