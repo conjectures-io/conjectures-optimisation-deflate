@@ -20,6 +20,6 @@
   "slot/src/lib.rs": "1c7fe1aee3e1c37fa78b0b120b2a125ffd9a84a39afd8f7982bc9138343981e7",
   "verifier/config.sh": "cab6c28b13bd005a714f6901f9fe8ef9be2d0f944860014b7328e9f1cf860529",
   "verifier/extract.sh": "b4096b1088f1cfcfec7604f7433da034283210f40e75184e31577e4de3a3c814",
-  "verifier/make-corpus.py": "1508031b4244170f93d316067ed5c939af0f38515e6416040041967125124b31",
+  "verifier/make-corpus.py": "c7e77dba06c345087cd03c5fcb881f6ed315038ad550fd04919fe02ba9265d54",
   "verifier/verify.py": "0449c86368d55540da5f080a07691ebaf7a0dfcc89cce8651c42eecdaf9e435e"
 }

@@ -12,8 +12,12 @@ dominated by match emission, and reported a conclusion that was backwards.
 In a real round the corpus is **held out and commit-revealed**, and only its
 *shape* statistics are published -- byte-frequency histograms, mean line length,
 the proportion of each kind -- so that miners tune for the class of data rather
-than for the bytes. Here it is built from local sources and printed with hashes so
-that a number in the docs can be rechecked.
+than for the bytes.
+
+The corpus committed to this repository is the **reference** one: it is what every
+byte count in the docs was measured against, so running this script REPLACES it
+and those numbers stop matching. Do that deliberately (a new round, a new mix),
+not by habit; `git checkout validator/corpus` puts the reference back.
 """
 import hashlib
 import pathlib
@@ -69,8 +73,14 @@ def walk(roots, exts, cap, allow_target=False):
 
 
 def main():
-    roots = [pathlib.Path(a) for a in sys.argv[1:]] or DEFAULT_ROOTS
+    roots = [pathlib.Path(a) for a in sys.argv[1:] if not a.startswith("-")] or DEFAULT_ROOTS
     OUT.mkdir(exist_ok=True)
+    if any(OUT.iterdir()) and "--force" not in sys.argv:
+        sys.exit(
+            "corpus/ is not empty. This would replace the reference corpus every\n"
+            "byte count in the docs was measured against. Pass --force if that is\n"
+            "what you mean; `git checkout validator/corpus` puts it back."
+        )
     for old in OUT.iterdir():
         if old.is_file():
             old.unlink()
