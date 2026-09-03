@@ -7,6 +7,8 @@ just init                               # install everything, build, self-test
 just doctor                             # what is present, what is missing
 just check <submission-dir>             # the gate, then the score
 just check <submission-dir> --no-score  # the gate alone
+just headroom                           # what is left to win, and how much of
+                                        # it a submission can actually reach
 just corpus --force                     # rebuild the scoring corpus
 just repin                              # after an operator-side change
 ```
@@ -29,7 +31,7 @@ time with a program that has no proof.
 | 3 extract | **re-runs charon+aeneas itself** | an extraction that is a claim by the claimant |
 | 4 statement | `LZ77.Obligation slot.parse` typechecks | a weakened theorem |
 | 5 axioms | `#print axioms accepted` | `sorryAx` — Aeneas's own library contains `sorry` |
-| 6 score | round-trip, bytes, speed floor | everything else |
+| 6 score | round-trip, bytes, time budget | everything else |
 
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) goes through each one with the
 attack it answers and the negative test that shows it works.
@@ -44,7 +46,7 @@ attack it answers and the negative test that shows it works.
 | `lean/Verify/Obligation.lean` | 4 | the gate |
 | `harness/src/deflate.rs` | 411 | tokens to DEFLATE bytes. Trusted, fixed |
 | `harness/src/token.rs` | 47 | the token encoding |
-| `harness/src/main.rs` | 167 | round-trip check, scoring, the speed floor |
+| `harness/src/main.rs` | 190 | round-trip check, scoring, the time budget |
 | `verifier/verify.py` | 236 | the six stages |
 
 `lean/Lz77/` is the investment that makes submissions affordable, and
@@ -92,7 +94,7 @@ harness/
   src/token.rs   the token encoding — the same function as LZ77.emit
   src/deflate.rs tokens to DEFLATE bytes. Trusted, fixed, identical for everyone
   src/baseline.rs the incumbent: a frozen copy of a promoted parse.rs
-  src/main.rs    round-trip check, compressed bytes, speed floor
+  src/main.rs    round-trip check, compressed bytes, time budget
 verifier/
   verify.py      the six stages
   extract.sh     charon + aeneas, run by the verifier

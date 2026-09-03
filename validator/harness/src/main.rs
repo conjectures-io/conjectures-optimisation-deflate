@@ -9,8 +9,13 @@
 //! The score is **total compressed bytes over the corpus, lower wins**. It is an
 //! exact integer: two validators on different machines compute the *same* number,
 //! which is the property the previous project did not have and the reason its
-//! scoring was fragile. Wall clock appears only as a coarse floor gate, where
-//! ±10% noise is harmless.
+//! scoring was fragile. Wall clock appears only as a coarse budget gate, where
+//! ±10% noise is harmless — and as an *absolute* budget rather than a multiple of
+//! the incumbent, so that promoting a fast submission does not tighten the gate
+//! against the slow near-optimal parsers that hold the remaining headroom.
+//!
+//! `--headroom` runs a different job entirely: it measures how much of the gap to
+//! `libdeflate` a miner can actually reach through the slot. See `headroom.rs`.
 //!
 //! The round-trip check is empirical and the proof is what generalises it. Both
 //! are here on purpose: the harness must stay memory-safe and terminating even if
@@ -20,15 +25,46 @@
 
 mod baseline;
 mod deflate;
+mod headroom;
+mod reference;
 mod token;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// A submission may not be slower than this multiple of the incumbent. Loose on
-/// purpose: a tight floor puts SIMD back on the critical path, and SIMD is
-/// outside the provable subset. See `docs/EXP1_HEADROOM.md`.
-const SPEED_FLOOR: f64 = 8.0;
+/// The parse-time budget: **milliseconds per MiB of corpus, absolute**.
+///
+/// It is deliberately *not* a multiple of the incumbent's time, which is what it
+/// used to be. A relative floor ratchets: promote a fast submission and the
+/// budget shrinks to a multiple of a smaller number, so the competition becomes
+/// progressively more hostile to exactly the near-optimal parsers that hold the
+/// remaining compression headroom. That is backwards — the floor exists to
+/// exclude unbounded search, not to exclude the frontier.
+///
+/// Calibrated against the reference ladder in `reference.rs`, as measured by
+/// `just headroom` on this repository's corpus:
+///
+/// | parse | ms/MiB | bytes |
+/// |---|---|---|
+/// | the incumbent (a single-slot hash head) | 4.8 | 2605048 |
+/// | the accepted submission (16-deep chains) | 11.9 | 2239367 |
+/// | greedy, depth 256 | 17.0 | 2184978 |
+/// | lazy matching, depth 256 | 34.7 | 2125535 |
+/// | **the near-optimal shortest-path parse** | **1950** | **2059341** |
+///
+/// The frontier of *this* competition is the bottom row, and it is ~400x the
+/// incumbent. The old relative floor of 8x the incumbent would have rejected it
+/// out of hand — which is precisely the ratchet this constant exists to remove.
+///
+/// 8000 ms/MiB is ~4x the reference near-optimal parse, so a submission can be a
+/// shortest-path parser *and* be written for provability rather than for speed
+/// and still fit. For a validator the number that matters is the absolute one:
+/// on this 7.7 MiB corpus the parse cannot exceed ~62 s, and scoring is only ever
+/// reached by a submission whose proof has already been accepted.
+///
+/// This is an operator dial, not a law. `docs/SCORING.md` records what it is for
+/// and `just headroom` reprints the table it is calibrated against.
+const TIME_BUDGET_MS_PER_MIB: f64 = 8000.0;
 
 struct Run {
     bytes: u64,
@@ -53,7 +89,7 @@ fn parse_and_encode(
 /// Two independent decoders. `miniz_oxide` is the crate the competition is aimed
 /// at; the system zlib behind `flate2` is a different implementation entirely, so
 /// agreement between them is real evidence rather than a shared bug.
-fn check_round_trip(compressed: &[u8], original: &[u8]) -> Result<(), String> {
+pub fn check_round_trip(compressed: &[u8], original: &[u8]) -> Result<(), String> {
     match miniz_oxide::inflate::decompress_to_vec(compressed) {
         Ok(got) if got == original => {}
         Ok(got) => {
@@ -96,7 +132,14 @@ fn corpus_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let dir = PathBuf::from(args.get(1).cloned().unwrap_or_else(|| "../corpus".into()));
+    let want_headroom = args.iter().any(|a| a == "--headroom");
+    let dir = PathBuf::from(
+        args.iter()
+            .skip(1)
+            .find(|a| !a.starts_with("--"))
+            .cloned()
+            .unwrap_or_else(|| "../corpus".into()),
+    );
 
     let files = match corpus_files(&dir) {
         Ok(f) if !f.is_empty() => f,
@@ -109,6 +152,10 @@ fn main() {
             std::process::exit(2);
         }
     };
+
+    if want_headroom {
+        std::process::exit(headroom::report(&dir, &files));
+    }
 
     let mut base = Run { bytes: 0, time: Duration::ZERO };
     let mut cand = Run { bytes: 0, time: Duration::ZERO };
@@ -184,11 +231,15 @@ fn main() {
     println!();
 
     let ratio = cand.bytes as f64 / base.bytes.max(1) as f64;
-    let slowdown = cand.time.as_secs_f64() / base.time.as_secs_f64().max(1e-9);
+    let mib = (raw as f64 / (1024.0 * 1024.0)).max(1e-9);
+    let ms_per_mib = cand.time.as_secs_f64() * 1000.0 / mib;
+    let budget = TIME_BUDGET_MS_PER_MIB * mib / 1000.0;
     println!("score      {:.5}x of the incumbent's bytes  ({} vs {})",
         ratio, cand.bytes, base.bytes);
-    println!("parse time {:.3}s incumbent, {:.3}s submission ({:.2}x)",
-        base.time.as_secs_f64(), cand.time.as_secs_f64(), slowdown);
+    println!("parse time {:.3}s incumbent, {:.3}s submission",
+        base.time.as_secs_f64(), cand.time.as_secs_f64());
+    println!("           {:.1} ms/MiB against an absolute budget of {:.0} ms/MiB ({:.1}s for this corpus)",
+        ms_per_mib, TIME_BUDGET_MS_PER_MIB, budget);
     println!();
 
     if !failures.is_empty() {
@@ -198,8 +249,11 @@ fn main() {
         }
         std::process::exit(1);
     }
-    if slowdown > SPEED_FLOOR {
-        println!("REJECTED — {slowdown:.2}x slower than the incumbent, floor is {SPEED_FLOOR:.1}x");
+    if ms_per_mib > TIME_BUDGET_MS_PER_MIB {
+        println!(
+            "REJECTED — the parse took {ms_per_mib:.1} ms/MiB; the budget is {TIME_BUDGET_MS_PER_MIB:.0} ms/MiB ({:.2}s for this {:.1} MiB corpus, {:.2}s used)",
+            budget, mib, cand.time.as_secs_f64()
+        );
         std::process::exit(1);
     }
     if ratio < 1.0 {

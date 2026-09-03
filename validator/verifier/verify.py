@@ -24,7 +24,14 @@ validator time with a program that has no proof.
     3  extract     the verifier runs charon+aeneas ITSELF on the submitted Rust
     4  statement   `LZ77.Obligation slot.parse` typechecks from the miner's proof
     5  axioms      nothing beyond propext / Classical.choice / Quot.sound
-    6  score       only now: build, round-trip, compressed bytes, speed floor
+    6  score       only now: build, round-trip, compressed bytes, time budget
+
+Every stage that runs a subprocess runs it under a **wall-clock budget** (see
+`TIMEOUTS`), because a submission's `Parse.lean` is half a megabyte of arbitrary
+tactic script and Lean's own `maxHeartbeats` can be raised from inside that file.
+A budget outside the process is the only version of the limit a submission cannot
+argue with, and a timeout kills the whole process group so nothing is left
+pinning cores.
 
 Exit codes: 0 accepted, 1 rejected, 2 the validator itself is misconfigured.
 """
@@ -35,8 +42,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +77,8 @@ PINNED = [
     "harness/src/token.rs",
     "harness/src/baseline.rs",
     "harness/src/main.rs",
+    "harness/src/reference.rs",
+    "harness/src/headroom.rs",
     "harness/Cargo.toml",
     "slot/Cargo.toml",
     "slot/src/lib.rs",
@@ -105,6 +116,23 @@ POLICY = [
 #: Submitted files larger than this are rejected before anything is run.
 MAX_FILE_BYTES = 512 * 1024
 
+#: Wall-clock budgets, in seconds. A submission's `Parse.lean` is half a megabyte
+#: of arbitrary tactic script, so **stage 4 is the one stage a miner can make
+#: cost whatever they like**: `set_option maxHeartbeats 0`, a `simp` over a
+#: generated term, `decide` on something large. Lean's own `maxHeartbeats` is not
+#: the control here, because the submission can raise it from inside the file.
+#: A wall clock outside the process can't be argued with.
+#:
+#: Generous against the reference submissions, which elaborate in well under a
+#: minute; the budget is here to bound a hostile or accidental hang, not to make
+#: proving a race. Override for a slow validator with
+#: `VERIFY_TIMEOUT_STATEMENT=1800`.
+TIMEOUTS = {
+    "extract": int(os.environ.get("VERIFY_TIMEOUT_EXTRACT", 600)),
+    "statement": int(os.environ.get("VERIFY_TIMEOUT_STATEMENT", 900)),
+    "score": int(os.environ.get("VERIFY_TIMEOUT_SCORE", 1800)),
+}
+
 
 def sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -120,7 +148,23 @@ def misconfigured(msg: str) -> None:
     sys.exit(2)
 
 
-def run(cmd, **kw):
+class Timeout(Exception):
+    """A stage exceeded its wall-clock budget."""
+
+    def __init__(self, seconds, output=""):
+        super().__init__(f"exceeded {seconds}s")
+        self.seconds = seconds
+        self.output = output
+
+
+def run(cmd, timeout=None, **kw):
+    """Run `cmd` with the toolchain environment, optionally under a wall clock.
+
+    `start_new_session` puts the child in its own process group so that a
+    timeout kills *lake and every worker it spawned*, not just the shell in
+    front of them. Without that, a submission whose elaboration hangs leaves
+    `lean` processes pinning cores after the verifier has moved on.
+    """
     env = dict(os.environ)
     cfg = subprocess.run(
         ["bash", "-c", f'. "{ROOT}/verifier/config.sh" && env'],
@@ -130,7 +174,23 @@ def run(cmd, **kw):
         if "=" in line:
             k, v = line.split("=", 1)
             env[k] = v
-    return subprocess.run(cmd, env=env, capture_output=True, text=True, **kw)
+    if timeout is None:
+        return subprocess.run(cmd, env=env, capture_output=True, text=True, **kw)
+
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True, **kw
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        out, err = proc.communicate()
+        raise Timeout(timeout, (out or "") + (err or ""))
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +255,10 @@ def stage_pins(rewrite: bool) -> None:
 
 
 def stage_extract() -> None:
-    r = run([str(ROOT / "verifier/extract.sh")])
+    try:
+        r = run([str(ROOT / "verifier/extract.sh")], timeout=TIMEOUTS["extract"])
+    except Timeout as t:
+        fail("3 (extract)", f"charon+aeneas did not finish within {t.seconds}s")
     if r.returncode == 2:
         misconfigured((r.stderr or r.stdout).strip()[:2000])
     if r.returncode != 0:
@@ -203,8 +266,33 @@ def stage_extract() -> None:
     print("3 extract     ok — charon+aeneas re-run by the verifier, no new axioms")
 
 
+#: Stage 4 may need to build twice -- a cached build does not re-emit the axiom
+#: report, so `stage_axioms` touches the gate and rebuilds. The budget is spent
+#: *across* those calls rather than granted afresh to each, so the stage as a
+#: whole is bounded by `TIMEOUTS["statement"]` and not by a multiple of it.
+_statement_spent = 0.0
+
+
 def stage_build() -> str:
-    r = run(["lake", "build", "Verify"], cwd=LEAN)
+    global _statement_spent
+    left = TIMEOUTS["statement"] - _statement_spent
+    t0 = time.monotonic()
+    try:
+        if left <= 0:
+            raise Timeout(TIMEOUTS["statement"])
+        r = run(["lake", "build", "Verify"], cwd=LEAN, timeout=left)
+    except Timeout as t:
+        fail(
+            "4 (statement)",
+            f"the proof did not elaborate within {TIMEOUTS['statement']}s.\n"
+            "  A submission controls how long its own tactic script takes, so this\n"
+            "  budget is a gate and not a hint: reduce the proof's cost rather than\n"
+            "  asking for more time. Raise VERIFY_TIMEOUT_STATEMENT only if the\n"
+            "  *reference* submissions do not fit either, which means the validator\n"
+            "  is underpowered rather than the submission being slow.",
+        )
+    finally:
+        _statement_spent += time.monotonic() - t0
     out = r.stdout + r.stderr
     if r.returncode != 0:
         if "unknown package" in out or "no such file" in out.lower():
@@ -237,13 +325,30 @@ def stage_axioms(build_output: str) -> None:
 
 def stage_score() -> int:
     for crate in ("slot", "harness"):
-        r = run(["cargo", "build", "--release", "-q"], cwd=ROOT / crate)
+        try:
+            r = run(
+                ["cargo", "build", "--release", "-q"],
+                cwd=ROOT / crate, timeout=TIMEOUTS["score"],
+            )
+        except Timeout as t:
+            fail("6 (score)", f"{crate} did not build within {t.seconds}s")
         if r.returncode != 0:
             fail("6 (score)", f"{crate} does not build:\n{r.stderr[-2000:]}")
     corpus = ROOT / "corpus"
     if not corpus.exists() or not any(corpus.iterdir()):
         misconfigured("corpus is empty; run `verifier/make-corpus.py`")
-    r = run([str(ROOT / "harness/target/release/harness"), str(corpus)])
+    try:
+        r = run(
+            [str(ROOT / "harness/target/release/harness"), str(corpus)],
+            timeout=TIMEOUTS["score"],
+        )
+    except Timeout as t:
+        fail(
+            "6 (score)",
+            f"scoring did not finish within {t.seconds}s. The parse has its own "
+            "budget\n  inside the harness (ms per MiB); this is the backstop for "
+            "everything else.",
+        )
     print("6 score       running…\n")
     print(r.stdout.rstrip())
     if r.returncode != 0:

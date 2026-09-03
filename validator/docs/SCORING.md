@@ -15,38 +15,80 @@ had a ±10% noise floor against a 2% reward bar, and once had two arms running
 *identical* work report 1.120x. Roughly half its harness complexity and all of its
 scoring fragility existed to fight that noise. None of it is here.
 
-## The speed floor
+## The time budget
 
-A submission is rejected if its parse takes more than **8x the incumbent's** wall
-clock on the same corpus.
+A submission is rejected if its parse exceeds **8000 ms per MiB of corpus**.
 
 Wall clock re-enters only as a **coarse gate**, where ±10% noise is harmless, and
 never as the score. It exists because without it the degenerate submission is
 zopfli: spend unbounded time to shave a fraction of a percent.
 
-**The constant is load-bearing in both directions and it is not calibrated.**
-Too tight, and SIMD becomes decisive — at which point the target dies, because
-SIMD is outside the provable subset. Too loose, and the competition becomes a
-compute auction. 8x was chosen because the research phase measured that
-`miniz_oxide`'s own best ratio sits around 8x its level-9 time; the reference
-submission uses 3.0x of it. A near-optimal parser will want much more, and
-somebody will have to decide.
+### Why it is absolute and not a multiple of the incumbent
+
+It used to be *8x the incumbent's* time. That is the wrong shape, and not by a
+little:
+
+**A relative floor ratchets.** Promote a fast submission and the budget becomes 8x
+a smaller number. Every promotion tightens the gate — so the competition grows
+progressively more hostile to precisely the slow, near-optimal parsers that hold
+the remaining compression headroom. The floor exists to exclude unbounded search,
+not to exclude the frontier, and a relative one eventually does both.
+
+The scale of the error is measurable. `just headroom` prices the frontier:
+
+| parse | ms/MiB | bytes |
+|---|---|---|
+| the incumbent (single-slot hash head) | 4.8 | 2,605,048 |
+| the accepted submission (16-deep chains) | 11.9 | 2,239,367 |
+| greedy, depth 256 | 17.0 | 2,184,978 |
+| lazy matching, depth 256 | 34.7 | 2,125,535 |
+| **near-optimal shortest-path parse** | **1950** | **2,059,341** |
+
+The bottom row holds ~80% of the remaining prize
+([`ROADMAP.md`](ROADMAP.md)) and costs ~400x the incumbent. **A floor of 8x the
+incumbent would have rejected it without looking at its bytes.**
+
+8000 ms/MiB is ~4x that parse, so a submission can be a shortest-path parser
+*and* be written for provability rather than for speed and still fit. On this
+7.7 MiB corpus that is a ceiling of ~62 s in the parse, reached only by a
+submission whose proof has already been accepted.
+
+### What the constant is still trading off
+
+Too tight, and the frontier is excluded — that is the failure the absolute form
+fixes. Too loose, and the competition becomes a compute auction: at some budget
+the winning move is more search rather than better search.
+
+The old framing also worried that a loose floor "puts SIMD back on the critical
+path". It does not, and this is worth being precise about, because it was the main
+argument for keeping the floor tight. **The score is bytes.** SIMD makes the same
+decisions faster; it never changes which match is chosen, so a vectorised
+submission cannot score better than the same algorithm written plainly. A loose
+budget therefore risks a compute auction, which an absolute ceiling bounds
+directly — it does not risk SIMD becoming decisive, because SIMD has nothing to
+win here at any budget.
+
+It remains an operator dial. `just headroom` reprints the table it is calibrated
+against; re-run it and revisit the number when the frontier moves.
 
 ## Why compression ratio and not speed
 
 Three reasons, and the third is the one that makes the whole design work.
 
 1. **It is exact**, as above.
-2. **The headroom is real and durable.** libdeflate reaches ratios `miniz_oxide`
-   cannot match *at any speed*, because the gap comes from near-optimal parsing
-   and block splitting rather than from tuning. On this repository's corpus it is
-   22.7% under the incumbent.
+2. **The headroom is real, durable, and measured.** libdeflate reaches ratios
+   `miniz_oxide` cannot match *at any speed*, because the gap comes from
+   near-optimal parsing rather than from tuning. On this repository's corpus it is
+   22.7% under the incumbent, and `just headroom` shows that **79.6% of what is
+   left is reachable through the slot** — the rest is behind the trusted harness.
+   [`ROADMAP.md`](ROADMAP.md) has the decomposition.
 3. **SIMD cannot improve compression ratio.** Vectorisation makes the same
    decisions faster; it never changes which match is chosen. So the best
    achievable ratio is purely algorithmic, and a competition scored on smallest
-   output under a *generous* speed floor is entirely inside the provable subset.
-   The fact that SIMD is untranslatable stops mattering — but only while the floor
-   stays loose.
+   output under a *generous* time budget is entirely inside the provable subset.
+   The fact that SIMD is untranslatable stops mattering — and, because the score
+   is bytes rather than time, it stops mattering at *any* budget rather than only
+   while the budget is loose.
 
 ## The corpus
 
@@ -116,5 +158,9 @@ is once the bar has moved a few times.
 
 **Huffman coding and block splitting** sit in the trusted harness, identical for
 every submission. That is what makes the score a fair comparison of *parses*.
-Both are worth ratio and both are natural second slots, each needing its own
-contract.
+
+How much they are worth is now measured rather than guessed, and the guess was
+wrong about one of them: on this corpus the entropy coder accounts for 41,618
+bytes of the gap to libdeflate and block splitting for **4,381** — 0.17% of the
+incumbent. Huffman coding is a plausible second slot; block splitting is not.
+[`ROADMAP.md`](ROADMAP.md) has the numbers and the ordering.

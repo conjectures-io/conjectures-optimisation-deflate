@@ -1,8 +1,10 @@
 {
   "harness/Cargo.toml": "35f78668f7e682ed0c8a9fd87edc1da722af2042736c11872fd38acda237b147",
   "harness/src/baseline.rs": "c70881c46afd247965bb11007bc11c49e160ee95cfde1860e095a1dbdfa7e678",
-  "harness/src/deflate.rs": "15f6e7f7e6b9f6dc3c60cfa96615ca3bf69cb7240f7d535a8f9956674a381c71",
-  "harness/src/main.rs": "b344e61cca0c0d3528b0452aa405a855fa8abb64c4d78f655981e47d8ad4fa05",
+  "harness/src/deflate.rs": "2b9fc929d874dd317aaf13bc31cc7319f92739fcf8f2e138e26b65a0efbe15f8",
+  "harness/src/headroom.rs": "4733af3c79fd92415ca1ed2c2ef7f3b8f94cef9bc607d7535688029cf6f00d3d",
+  "harness/src/main.rs": "c8efd62a39220faa09b05a4ef5c3f4ba9f016f091eec94613de920c5f37d7ccf",
+  "harness/src/reference.rs": "9aea3086149092510d5967d043ea25b2b355d28a0e70dc0ff6fc057736be6985",
   "harness/src/token.rs": "134892588661b9aeb3c9e82f37fbf170007206a1b7fcb55603a3087eef491ce1",
   "lean/Lz77.lean": "f77ea9df6b0057d09d5d2c42ce028e988709a569f8366ceafc4c1346525a9744",
   "lean/Lz77/Interface.lean": "634e08ed79e8b209a216457e570a301c2a69a8ad4b535e741072f6e2cd4b8766",
@@ -21,5 +23,5 @@
   "verifier/config.sh": "f0ffa98456a64793b0a38aae2390fed8adabd2273c5fb9cd3163a1292a37adbb",
   "verifier/extract.sh": "8509d6eb4483843bdebbbcf876a06c47fec21d8c7b957608282d33a61f552ade",
   "verifier/make-corpus.py": "c7e77dba06c345087cd03c5fcb881f6ed315038ad550fd04919fe02ba9265d54",
-  "verifier/verify.py": "0449c86368d55540da5f080a07691ebaf7a0dfcc89cce8651c42eecdaf9e435e"
+  "verifier/verify.py": "d00647bedc233ffa0717eaa290b313a7726b95c7b58ae22d255327ad74e09d77"
 }

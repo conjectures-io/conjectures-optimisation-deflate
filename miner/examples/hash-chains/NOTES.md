@@ -16,7 +16,7 @@ just check miner/examples/hash-chains
 | `parse.rs` | 66 lines | 90 | +24 |
 | `Parse.lean` | 204 lines | 236 | **+32** |
 | score | 1.000x | **0.860x** | −14.0% |
-| parse time vs incumbent | 1.06x | 3.02x | floor is 8x |
+| parse time | 4.8 ms/MiB | 11.9 ms/MiB | budget is 8000 ms/MiB |
 
 ## What changed in the Rust
 

@@ -86,6 +86,34 @@ This is the predecessor's "statement check" done as a **type check** rather than
 string comparison, and that is the only version of it that cannot be gamed. There
 is nothing to read carefully and nothing to compare as text.
 
+**Second attack, and a different kind:** don't prove anything weaker — prove the
+right thing *arbitrarily slowly*. A submission's `Parse.lean` is up to 512 KB of
+tactic script and it controls its own elaboration cost: `set_option maxHeartbeats
+0`, a `simp` over a generated term, `decide` on something large. One submission
+can then occupy a validator indefinitely.
+
+**Defence:** a **wall-clock budget outside the Lean process** — `TIMEOUTS` in
+`verify.py`, 900 s for stage 4, overridable with `VERIFY_TIMEOUT_STATEMENT`.
+Stages 3 and 6 have their own.
+
+Lean's `maxHeartbeats` is *not* the control here, and this is the whole point:
+the submission can raise it from inside the file it wrote. A limit the claimant
+can edit is not a limit. The timeout also kills the whole **process group**, so a
+`lake` that has spawned workers does not leave them pinning cores after the
+verifier has moved on.
+
+The budget is generous — the reference submissions elaborate in well under a
+minute — because it exists to bound a hang, not to make proving a race.
+
+It is also **cumulative across the stage**. Stage 4 sometimes has to build twice,
+because a cached `lake build` does not re-emit the axiom report that stage 5 reads,
+so `stage_axioms` touches the gate and rebuilds. Granting each `lake` invocation a
+fresh 900 s would make the stage's real bound a multiple of its stated one; the
+budget is spent across the calls instead.
+
+**Checked:** `VERIFY_TIMEOUT_STATEMENT=1` rejects the reference submission at
+stage 4; `=30` accepts it, axiom rebuild included.
+
 **Checked:** substituting a proof of `⦃ fun _ => True ⦄` gives
 
 ```
@@ -114,9 +142,16 @@ would **build cleanly**. Build success is not the check; this is.
 produce a stream that scores well but does not decode; overfit to a corpus you
 have seen.
 
-**Defence:** the speed floor; the differential round-trip check against two
+**Defence:** the time budget; the differential round-trip check against two
 independent inflaters; and corpus governance —
 [`SCORING.md`](SCORING.md) covers all three.
+
+The budget is **absolute** — 8000 ms per MiB of corpus — and not a multiple of the
+incumbent's time, which is what it used to be. A relative budget tightens with
+every promotion, so it defends against unbounded search by also excluding the
+frontier: measured, a near-optimal parse is ~400x the incumbent and the old 8x
+floor would have rejected it unread. An absolute ceiling bounds what a validator
+can be made to spend, which is the property this stage actually needs.
 
 ---
 
@@ -142,9 +177,6 @@ Stated because a threat model that only lists wins is not one.
   Keeping them in step is an operator obligation, not a proved fact. The
   correspondence is tabulated in `token.rs`; the arithmetic half is checked
   exhaustively over every legal `(dist, len)`; the structural half is not.
-* **Resource exhaustion inside Lean.** A submission's `Parse.lean` is 512 KB of
-  arbitrary tactic script and could take a very long time to elaborate. There is
-  no timeout on stage 4 yet. It should have one.
 * **Corpus overfitting across rounds**, if the corpus is not re-mixed.
 * **Collusion and Sybil behaviour**, which are subnet-level concerns and not
   addressed here at all.

@@ -151,6 +151,55 @@ load-bearing is only that the bytes were compared before a match was emitted.
 `CONTRACT.md` says exactly where that line falls, and staying on the right side of
 it is the difference between a 30-line diff and a rewrite.
 
+## The two budgets
+
+Neither is a scoring term. Both are rejections, so know them before you start.
+
+| | limit | what the references use |
+|---|---|---|
+| **parse time** | 8000 ms per MiB of corpus | 4.8 (template), 11.9 (hash-chains) |
+| **proof elaboration** | 900 s wall clock for `lake build` | well under a minute |
+
+The parse budget is **absolute**, not a multiple of the incumbent's time. That is
+deliberate: a relative budget would tighten every time a fast submission was
+promoted, which would progressively exclude the slow near-optimal parsers that
+hold most of the remaining prize. 8000 ms/MiB is about 4x a full shortest-path
+parse, so you can write for provability rather than for speed and still fit.
+
+The proof budget is a wall clock outside Lean, so `set_option maxHeartbeats` in
+your file does not affect it. It is generous by two orders of magnitude against
+the reference proofs; if you are near it, something in your tactic script is
+looping rather than working.
+
+## What to attempt
+
+`just headroom` measures how much is left and how much of it is reachable through
+the slot at all. On this corpus, in increasing order of proof cost:
+
+| | bytes | vs incumbent | what it needs |
+|---|---|---|---|
+| the current incumbent | 2,605,048 | 1.000x | — |
+| `examples/hash-chains` | 2,239,367 | 0.860x | the diff in `NOTES.md` |
+| **greedy, depth 256** | **2,184,978** | **0.839x** | **a constant. No proof change at all.** |
+| lazy matching, depth 256 | 2,125,535 | 0.816x | one more case in the decision |
+| near-optimal shortest-path parse | 2,059,341 | 0.791x | a new lemma shape — see below |
+
+**Read the third row twice.** It is the *same algorithm* as `hash-chains` with the
+probe limit raised, and it beats the accepted submission by 2.4%. The depth is a
+number in the Rust with no consequence in Lean: `parse_loop0_loop0_spec` has
+postcondition `True`, and termination comes from the probe counter, not from the
+depth. That is the cheapest accepted submission available and it is a one-line
+diff.
+
+A shortest-path parse is the real prize and the real open question: it costs a
+whole block and *then* emits, so the emission becomes a second pass over a
+decision array. Keep the firewall and it should stay cheap — have the emission
+pass call `match_len` and re-verify each match before emitting it, exactly as the
+greedy loop does now, and the dynamic program lands where the hash chain already
+is: free to be arbitrarily wrong, because nothing downstream believes it. Nobody
+has written that submission yet.
+[`../validator/docs/ROADMAP.md`](../validator/docs/ROADMAP.md) has the reasoning.
+
 ## What it costs, measured
 
 | | `parse.rs` | `Parse.lean` |

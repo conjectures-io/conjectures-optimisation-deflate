@@ -78,6 +78,13 @@ prove DIR:
 repin:
     python3 {{val}}/verifier/verify.py --pin
 
+# Where the gap to libdeflate actually is: how much of it a miner can reach
+# through the slot, and how much lives in the trusted harness. Slow (minutes) --
+# it runs a shortest-path parse over the whole corpus. This is what calibrates
+# the time budget in harness/src/main.rs.
+headroom: build
+    {{val}}/harness/target/release/harness {{val}}/corpus --headroom
+
 # What a submission costs, in lines.
 cost DIR:
     #!/usr/bin/env bash

@@ -64,6 +64,43 @@ fn dist_code(dist: u32) -> (usize, u32, u32) {
 }
 
 // ---------------------------------------------------------------------------
+// The encoder's cost model, exposed
+// ---------------------------------------------------------------------------
+//
+// A parser that wants to minimise *bits* rather than tokens has to ask the
+// encoder what a symbol costs. These four items are that question, and they are
+// read-only: they expose what `write_block` already computes and change nothing
+// about it. `reference.rs` uses them; no submission can, because a submission is
+// two files and neither of them is this one.
+
+/// Size of the literal/length alphabet.
+pub const LITLEN_SYMBOLS: usize = NUM_LITLEN;
+/// Size of the distance alphabet.
+pub const DIST_SYMBOLS: usize = NUM_DIST;
+
+/// `(literal/length symbol, extra bits)` for a match length.
+pub fn len_symbol(len: u32) -> (usize, u32) {
+    let (sym, extra, _) = len_code(len);
+    (sym, extra)
+}
+
+/// `(distance symbol, extra bits)` for a match distance.
+pub fn dist_symbol(dist: u32) -> (usize, u32) {
+    let (sym, extra, _) = dist_code(dist);
+    (sym, extra)
+}
+
+/// The code lengths this encoder would choose for these frequencies — the same
+/// package-merge call `write_block` makes. A zero length means the symbol is
+/// unused; a cost model must charge for that rather than treat it as free.
+pub fn code_lengths(litlen_freq: &[u32], dist_freq: &[u32]) -> (Vec<u8>, Vec<u8>) {
+    (
+        package_merge(litlen_freq, MAX_BITS_LITLEN),
+        package_merge(dist_freq, MAX_BITS_LITLEN),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Bit writer
 // ---------------------------------------------------------------------------
 
@@ -380,6 +417,22 @@ pub const BLOCK_TOKENS: usize = 16384;
 /// the check is here regardless: the harness must not depend on the proof being
 /// sound in order to stay memory-safe and terminating.
 pub fn encode(tokens: &[u32], input_len: usize) -> Result<Vec<u8>, String> {
+    encode_with_block_tokens(tokens, input_len, BLOCK_TOKENS)
+}
+
+/// `encode`, with the block size as a parameter.
+///
+/// The scoring path never calls this with anything but [`BLOCK_TOKENS`] — that is
+/// what `encode` is. It exists so that `just headroom` can measure what the fixed
+/// block size costs, which is the part of the gap to `libdeflate` that a miner
+/// *cannot* reach through the slot. Keeping the measurement in the same encoder
+/// is the whole point: a separate one would measure a different encoder.
+pub fn encode_with_block_tokens(
+    tokens: &[u32],
+    input_len: usize,
+    block_tokens: usize,
+) -> Result<Vec<u8>, String> {
+    let block_tokens = block_tokens.max(1);
     let mut blocks: Vec<Block> = Vec::new();
     let mut cur = Block::new();
     let mut produced = 0usize;
@@ -401,7 +454,7 @@ pub fn encode(tokens: &[u32], input_len: usize) -> Result<Vec<u8>, String> {
             }
             token::Token::Invalid => return Err(format!("token {i}: {t} is not a legal token")),
         }
-        if cur.items.len() >= BLOCK_TOKENS && i + 1 < tokens.len() {
+        if cur.items.len() >= block_tokens && i + 1 < tokens.len() {
             blocks.push(std::mem::replace(&mut cur, Block::new()));
         }
     }
