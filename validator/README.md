@@ -4,7 +4,7 @@ Everything needed to accept, reject and score a submission.
 
 ```bash
 just setup                              # once
-just corpus                             # build the scoring corpus
+just corpus --force                     # rebuild the scoring corpus
 just check <submission-dir>             # the gate, then the score
 just check <submission-dir> --no-score  # the gate alone
 just repin                              # after an operator-side change
@@ -52,11 +52,10 @@ paid once.
 
 ## Running a round
 
-1. **Fix the corpus.** The one committed here is the development reference, with
-   its hashes in [`docs/CORPUS.md`](docs/CORPUS.md); `verifier/make-corpus.py`
-   builds a fresh mix from local sources and refuses to overwrite it without
-   `--force`. In
-   a real round you commit to a hash first and reveal the contents after scoring;
+1. **Fix the corpus.** The one committed here is the development reference and
+   its hashes are in [`docs/CORPUS.md`](docs/CORPUS.md); `verifier/make-corpus.py`
+   builds a fresh mix and refuses to overwrite it without `--force`. In a real
+   round you commit to a hash first and reveal the contents after scoring, and
    publish *shape* statistics only. [`docs/SCORING.md`](docs/SCORING.md) has the
    governance and the reason it matters.
 2. **Verify each submission** with `just check`. Rejections are cheap; the
@@ -100,6 +99,6 @@ verifier/
   config.sh      toolchain paths, all overridable from the environment
   make-corpus.py the scoring corpus
   PINS.json      hashes of everything a miner may not change
-corpus/          generated
+corpus/          the reference corpus; hashes in docs/CORPUS.md
 docs/            DESIGN, SCORING, CORPUS, THREAT_MODEL, TOOLCHAIN
 ```
