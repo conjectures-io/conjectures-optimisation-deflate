@@ -68,9 +68,12 @@ Ranked by measured prize, not by how interesting the contract would be.
 No new contract, no new work for the operator. Three rungs, in increasing order of
 proof cost:
 
-* **Deeper chains.** Purely a constant. The current proof does not change at all —
-  `parse_loop0_loop0_spec` has postcondition `True` and the probe counter is what
-  gives termination, so the depth is a number in the Rust with no Lean consequence.
+* **Deeper chains.** Two constants: `while probes < 16` in the Rust and the
+  `(measure := fun s => 16 - …)` that mirrors it in the proof, since the loop
+  measure must name the bound the loop counts to. No new lemma and no structural
+  change, because termination rests on the counter rather than on the chain being
+  acyclic, and `parse_loop0_loop0_spec` has postcondition `True` — deepening the
+  search cannot invalidate a claim that was never made about it.
 * **Lazy matching.** Emit a literal at `pos` when `pos+1` has a longer match. The
   emission stays one token per iteration and `pos` stays monotone, so the loop
   invariant keeps its shape; there is one more case in the decision.

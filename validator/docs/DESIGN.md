@@ -188,7 +188,7 @@ validator time with a program that has no proof.
 
 | stage | what it does | what it stops |
 |---|---|---|
-| 1 policy | scans the submitted Rust | code outside the translated subset |
+| 1 policy | scans the submitted Rust, and the proof for redeclarations | code outside the translated subset |
 | 2 pins | hashes 18 contract and harness files | editing the contract you are judged against |
 | 3 extract | **the verifier re-runs charon+aeneas itself** | an extraction that is a claim by the claimant |
 | 4 statement | `LZ77.Obligation slot.parse` typechecks | a weakened theorem |

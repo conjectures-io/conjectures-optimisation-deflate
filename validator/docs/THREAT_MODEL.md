@@ -26,7 +26,9 @@ capped at 512 KB before anything is run.
 precomputed table of the corpus.
 
 **Defence:** 11 regexes over the submitted Rust, comments stripped first so a rule
-*named* in a doc comment is not a violation. Documented with rejected/accepted
+*named* in a doc comment is not a violation. Three more over the submitted
+`Parse.lean`, which may not declare into the `slot` or `LZ77` namespaces — see
+stage 4, where the control that actually enforces that lives. Documented with rejected/accepted
 pairs in [`../../miner/RULES.md`](../../miner/RULES.md), because a miner who
 discovers a rule by failing is a miner who leaves.
 
@@ -114,6 +116,49 @@ budget is spent across the calls instead.
 **Checked:** `VERIFY_TIMEOUT_STATEMENT=1` rejects the reference submission at
 stage 4; `=30` accepts it, axiom rebuild included.
 
+**Third attack, and this one was live.** Don't weaken the statement and don't slow
+it down — **redefine the thing the statement is about**. `Verify/Obligation.lean`
+used to `import Proof.Parse` and nothing else, so the name `slot.parse` reached the
+gate through the submission's own imports. A submission that *omitted* `import
+Slot` from its `Parse.lean` left that name free, could define it there as any
+program it liked — a verbatim copy of another submission's extracted model, say —
+and prove the obligation about that. The generated model of the submitted
+`parse.rs` was then mentioned by nothing at all, while stage 6 went on to score it.
+**The proved program and the scored program were different programs, and the proof
+gate was bypassable with no proof effort.**
+
+**Defence, structural:** the gate imports `Lz77` and `Slot` itself. A file that
+checks a submission must not inherit the meaning of the names it is checking from
+that submission. With those imports the operator's definitions are in the
+environment first, and a submission that also declares `slot.parse` collides at
+import — Lean refuses an environment where one name has two declarations.
+
+**Defence, legibility:** stage 1 also scans the submitted `Parse.lean` and rejects
+`namespace slot`, `namespace LZ77`, any declaration into `slot.` or `LZ77.`, and
+any `axiom`. This is the usability half — it fails fast with a message that says
+what the problem is. It is a regex and it is evadable; that is fine, because it is
+not the control.
+
+**Checked, both halves:**
+
+```
+# the original attack, verbatim
+REJECTED at stage 1 (policy)
+  Parse.lean line ~5: 'namespace slot' — a submission may not open the `slot` or
+  `LZ77` namespace: those names are the extraction and the contract, and a proof
+  is about them, not a redefinition of them
+
+# the same attack with `namespace «slot»`, which the regex does not match
+1 policy      ok — the submitted Rust is inside the subset, the proof declares
+              nothing it should be proving about
+REJECTED at stage 4 (statement)
+  error: Verify/Obligation.lean:1:0: import Proof.Parse failed, environment
+  already contains 'slot.parse._proof_1' from Slot.Funs
+```
+
+The second block is the one that matters: policy passed, and the submission was
+still rejected.
+
 **Checked:** substituting a proof of `⦃ fun _ => True ⦄` gives
 
 ```
@@ -177,6 +222,11 @@ Stated because a threat model that only lists wins is not one.
   Keeping them in step is an operator obligation, not a proved fact. The
   correspondence is tabulated in `token.rs`; the arithmetic half is checked
   exhaustively over every legal `(dist, len)`; the structural half is not.
+* **A submission that shadows a name the gate does not import.** The gate imports
+  `Lz77` and `Slot`, which covers the contract and the extraction. Anything else a
+  submitted proof could redefine and the gate could then resolve to is the same
+  bug in a new place; an operator who adds an import to `Proof/Parse.lean`'s
+  dependencies should add it to the gate as well.
 * **Corpus overfitting across rounds**, if the corpus is not re-mixed.
 * **Collusion and Sybil behaviour**, which are subnet-level concerns and not
   addressed here at all.

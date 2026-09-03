@@ -105,6 +105,41 @@ entire diff to the proof was `find_match_spec`, a new lemma establishing `Found`
 for a chain walk, plus the state-tuple bookkeeping that follows from adding an
 array to `parse`.
 
+## What your `Parse.lean` may not do
+
+One rule, and it is about the proof file rather than the Rust.
+
+**Do not declare anything in the `slot` or `LZ77` namespaces.** They belong to the
+extraction and to the contract respectively. Your proof is *about* those names; it
+may not define them.
+
+```lean
+-- rejected at stage 1
+namespace slot
+def parse (input : Slice Std.U8) (out : Slice Std.U32) : … := ok (0#usize, out)
+end slot
+
+-- accepted: reason about the name, do not create it
+namespace Submission
+theorem parse_spec … : slot.parse input out ⦃ … ⦄ := by …
+end Submission
+```
+
+`open LZ77 (toks bytes …)` is fine — that brings names *into* scope, it does not
+declare them. `namespace Submission` is what the reference proofs use and the
+name is not special; you may restructure inside it freely.
+
+The reason is worth knowing, because it explains why the rule looks pedantic. If a
+submission could define `slot.parse`, it could prove the obligation about a
+program it wrote in Lean while submitting an entirely different `parse.rs` to be
+scored. `Verify/Obligation.lean` imports `Lz77` and `Slot` itself precisely so
+that this collides rather than shadows; the stage-1 check just makes the rejection
+readable. [`../validator/docs/THREAT_MODEL.md`](../validator/docs/THREAT_MODEL.md)
+has the worked attack.
+
+Stage 1 also rejects `axiom` in a submitted proof. Stage 5 would catch it anyway,
+but later and less clearly.
+
 ## The lemmas the contract gives you
 
 You will use exactly two, from `validator/lean/Lz77/Lemmas.lean`:
@@ -137,8 +172,9 @@ every submission, in `validator/harness/src/deflate.rs`. Nothing about it is in
 your obligation, and you cannot change it — which is also what makes the score a
 fair comparison of parses.
 
-**Block splitting.** Same: fixed in the harness. Worth ratio, and a natural second
-slot, but not this one.
+**Block splitting.** Same: fixed in the harness. Measured at 0.17% of the
+incumbent (`just headroom`), so it is worth very little and is the last thing on
+[`../validator/docs/ROADMAP.md`](../validator/docs/ROADMAP.md).
 
 **Stability or determinism beyond the above.** The score is a byte count, so any
 valid parse is acceptable. Two submissions that produce different token streams of

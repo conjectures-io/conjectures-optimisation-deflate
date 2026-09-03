@@ -180,16 +180,21 @@ the slot at all. On this corpus, in increasing order of proof cost:
 |---|---|---|---|
 | the current incumbent | 2,605,048 | 1.000x | — |
 | `examples/hash-chains` | 2,239,367 | 0.860x | the diff in `NOTES.md` |
-| **greedy, depth 256** | **2,184,978** | **0.839x** | **a constant. No proof change at all.** |
+| **greedy, depth 256** | **2,184,978** | **0.839x** | **one constant, in both files** |
 | lazy matching, depth 256 | 2,125,535 | 0.816x | one more case in the decision |
 | near-optimal shortest-path parse | 2,059,341 | 0.791x | a new lemma shape — see below |
 
 **Read the third row twice.** It is the *same algorithm* as `hash-chains` with the
-probe limit raised, and it beats the accepted submission by 2.4%. The depth is a
-number in the Rust with no consequence in Lean: `parse_loop0_loop0_spec` has
-postcondition `True`, and termination comes from the probe counter, not from the
-depth. That is the cheapest accepted submission available and it is a one-line
-diff.
+probe limit raised, and it beats the accepted submission by 2.4%. No new lemma, no
+new proof structure: raise `while probes < 16` in `parse.rs` and the matching
+`(measure := fun s => 16 - s.2.2.2.val)` in `Parse.lean`, because the loop measure
+has to name the same bound the loop counts to. Two constants.
+
+That is as cheap as a submission gets, and it is cheap for a specific reason:
+termination rests on the *counter*, not on the chain being acyclic
+([`RULES.md`](RULES.md) rule 4), and `parse_loop0_loop0_spec` — the loop that
+maintains the chains — has postcondition `True`. Deepening the search cannot
+invalidate anything, because nothing was claimed about the search.
 
 A shortest-path parse is the real prize and the real open question: it costs a
 whole block and *then* emits, so the emission becomes a second pass over a

@@ -113,6 +113,30 @@ POLICY = [
      "the slot is one file; no modules and no embedded data"),
 ]
 
+#: Namespaces a submitted proof may not declare into, and why.
+#:
+#: A proof that declares `slot.parse` is claiming to *be* the extraction rather
+#: than to be about it. The structural defence is that `Verify/Obligation.lean`
+#: imports `Lz77` and `Slot` itself, so the gate resolves those names to the
+#: operator's definitions and a submission's redeclaration collides at import.
+#: This check exists so the rejection says what went wrong.
+#:
+#: It was found by attack, not by review: a submission that omitted `import Slot`
+#: from its own `Parse.lean` left `slot.parse` free, defined it as a program it
+#: could prove, and passed the statement check — while stage 6 scored the real
+#: `parse.rs`, which nothing had proved anything about.
+PROOF_POLICY = [
+    (r"^\s*namespace\s+(?:slot|LZ77)\b",
+     "a submission may not open the `slot` or `LZ77` namespace: those names are "
+     "the extraction and the contract, and a proof is about them, not a "
+     "redefinition of them"),
+    (r"^\s*(?:@\[[^\]]*\]\s*)?(?:noncomputable\s+)?(?:private\s+|protected\s+)?"
+     r"(?:def|abbrev|theorem|lemma|instance|axiom|opaque|structure|inductive)\s+"
+     r"(?:slot|LZ77)\.",
+     "a submission may not declare into `slot.` or `LZ77.`"),
+    (r"^\s*axiom\s", "a submission may not introduce axioms; stage 5 would reject it anyway"),
+]
+
 #: Submitted files larger than this are rejected before anything is run.
 MAX_FILE_BYTES = 512 * 1024
 
@@ -227,10 +251,22 @@ def stage_policy() -> None:
     for pattern, why in POLICY:
         for m in re.finditer(pattern, stripped):
             line = stripped[: m.start()].count("\n") + 1
-            bad.append(f"line ~{line}: {m.group(0)!r} — {why}")
+            bad.append(f"parse.rs line ~{line}: {m.group(0)!r} — {why}")
+
+    # And the proof, for the one thing a proof must not do: declare the names it
+    # is supposed to be reasoning about.
+    proof = (ROOT / "lean/Proof/Parse.lean").read_text()
+    proof = re.sub(r"--[^\n]*", "", proof)
+    proof = re.sub(r"/-.*?-/", "", proof, flags=re.S)
+    for pattern, why in PROOF_POLICY:
+        for m in re.finditer(pattern, proof, flags=re.M):
+            line = proof[: m.start()].count("\n") + 1
+            bad.append(f"Parse.lean line ~{line}: {m.group(0).strip()!r} — {why}")
+
     if bad:
         fail("1 (policy)", "\n  ".join(bad))
-    print("1 policy      ok — the submitted Rust is inside the subset")
+    print("1 policy      ok — the submitted Rust is inside the subset, "
+          "the proof declares nothing it should be proving about")
 
 
 def stage_pins(rewrite: bool) -> None:
