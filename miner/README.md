@@ -15,14 +15,18 @@ what you proved — the validator regenerates or supplies all of those itself.
 
 ## Step 1 — get the toolchain
 
-You need Lean 4.31.0 with Mathlib and Aeneas, and the Charon/Aeneas binaries.
-[`../validator/docs/TOOLCHAIN.md`](../validator/docs/TOOLCHAIN.md) has the
-details; the short version:
+One command, from nothing:
 
 ```bash
-just setup     # installs/points at the Lean side, then builds the contract
-just corpus    # builds a local scoring corpus
+just init      # Lean 4.31.0, Mathlib, Aeneas, Charon, then build and self-test
 ```
+
+About 15 minutes and 9 GB on a bare machine; seconds if you already have a Lean
+and Mathlib at the same pins, which `init` will find and reuse rather than
+download again. `just doctor` reports what is present without installing
+anything, and
+[`../validator/docs/TOOLCHAIN.md`](../validator/docs/TOOLCHAIN.md) has the pins
+and the traps.
 
 Check it works before writing anything:
 

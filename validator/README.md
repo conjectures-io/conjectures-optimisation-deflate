@@ -3,10 +3,11 @@
 Everything needed to accept, reject and score a submission.
 
 ```bash
-just setup                              # once
-just corpus --force                     # rebuild the scoring corpus
+just init                               # install everything, build, self-test
+just doctor                             # what is present, what is missing
 just check <submission-dir>             # the gate, then the score
 just check <submission-dir> --no-score  # the gate alone
+just corpus --force                     # rebuild the scoring corpus
 just repin                              # after an operator-side change
 ```
 
@@ -95,8 +96,8 @@ harness/
 verifier/
   verify.py      the six stages
   extract.sh     charon + aeneas, run by the verifier
-  setup.sh       first-time Lean dependency setup
-  config.sh      toolchain paths, all overridable from the environment
+  init.sh        install the whole toolchain from nothing; --check to report only
+  config.sh      the pins, and where each tool is found
   make-corpus.py the scoring corpus
   PINS.json      hashes of everything a miner may not change
 corpus/          the reference corpus; hashes in docs/CORPUS.md

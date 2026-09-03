@@ -1,4 +1,5 @@
 target/
+validator/.work/
 .lake/
 validator/lean/.extract/
 *.llbc

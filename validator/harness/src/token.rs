@@ -16,8 +16,13 @@
 //! | `if d ≤ acc.length then … else none`       | checked by `deflate::encode`   |
 //! | otherwise `none`                           | `Invalid`                      |
 //!
-//! `test_agrees_with_spec` below re-checks the arithmetic half of that table
-//! exhaustively over every legal `(dist, len)`.
+//! `round_trips_over_every_legal_match` below re-checks the arithmetic half of
+//! that table exhaustively over every legal `(dist, len)`.
+
+// The bounds and `encode_match` are documentation of the encoding as much as
+// code: they are what a reader checks the table above against, and what the
+// tests use. The encoder itself only needs `decode`.
+#![allow(dead_code)]
 
 /// Where match tokens start. `LZ77.MATCH_BASE`.
 pub const MATCH_BASE: u32 = 16_777_216;

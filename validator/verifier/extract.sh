@@ -17,12 +17,12 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 . "$root/verifier/config.sh"
 src="${1:-$root/slot/src/parse.rs}"
 
-for tool in "$AENEAS_WORK/charon/bin/charon" "$AENEAS_WORK/aeneas"; do
-    [ -x "$tool" ] || { echo "missing $tool -- set AENEAS_WORK" >&2; exit 2; }
+for tool in "$CHARON_DIR/charon" "$AENEAS_WORK/aeneas"; do
+    [ -x "$tool" ] || { echo "missing $tool -- run \`just init\`" >&2; exit 2; }
 done
 
 cd "$root/slot"
-PATH="$AENEAS_WORK/charon/bin:$PATH" charon rustc --preset=aeneas \
+PATH="$CHARON_DIR:$PATH" charon rustc --preset=aeneas \
     --dest-file "$root/lean/slot.llbc" \
     -- --crate-name=slot --crate-type=lib --edition=2021 "$src" 2>&1 \
     | grep -v "cargo miri setup\|rustup component add" || true

@@ -11,16 +11,22 @@ default:
 
 # --- Setup ------------------------------------------------------------------
 
-# First-time setup: Lean toolchain, dependencies, and build the contract.
-setup:
-    {{val}}/verifier/setup.sh
+# Install everything: Lean, Aeneas, Charon, Mathlib, then build and self-test.
+# Idempotent -- rerun it any time. Takes ~15 min and ~9 GB on a bare machine,
+# and seconds on one that already has the toolchain.
+init *ARGS:
+    {{val}}/verifier/init.sh {{ARGS}}
+
+# Report what is installed and what is missing. Installs nothing. Exit 1 if
+# anything is missing, so it works as a precondition check in CI.
+doctor:
+    {{val}}/verifier/init.sh --check
 
 # Build the scoring corpus. Pass source roots to override the defaults.
 corpus *ROOTS:
     python3 {{val}}/verifier/make-corpus.py {{ROOTS}}
 
-# Build both crates. Needed before `corpus`, which takes its binary part from
-# the release output.
+# Build both crates. `init` does this; this is for after an edit.
 build:
     cd {{val}}/slot && cargo build --release -q
     cd {{val}}/harness && cargo build --release -q

@@ -79,7 +79,8 @@ validator/
   docs/DESIGN.md         why the slot, the metric and the gate are what they are
   docs/SCORING.md        the metric, the speed floor, corpus governance
   docs/THREAT_MODEL.md   what each stage of the gate stops
-  docs/TOOLCHAIN.md      charon, aeneas, lean, and the traps
+  docs/TOOLCHAIN.md      the pins, what `init` installs, and four traps
+  docs/CORPUS.md         the reference corpus, with hashes
   lean/Lz77/             THE CONTRACT — written once, pinned, never by a miner
   lean/Verify/           THE GATE — three lines the verifier writes itself
   lean/Slot/             generated from the submission by the verifier
@@ -87,19 +88,22 @@ validator/
   slot/                  the crate root the submitted parse.rs becomes
   harness/               trusted DEFLATE encoder, round-trip check, scoring
   verifier/verify.py     the six-stage gate
+  verifier/init.sh       installs Lean, Aeneas, Charon and Mathlib from nothing
 ```
 
 ## Quick start
 
 ```bash
-just setup                          # Lean toolchain + dependencies (once)
-just corpus                         # build the scoring corpus
-just check miner/template           # the gate, then the score
-just check miner/examples/hash-chains
+just init                           # Lean, Aeneas, Charon, Mathlib, build, self-test
+just smoke                          # both reference submissions, end to end
+just check miner/template           # the gate, then the score, on one submission
 ```
 
-`just setup` needs Charon and Aeneas binaries; see
-[`validator/docs/TOOLCHAIN.md`](validator/docs/TOOLCHAIN.md).
+`just init` starts from nothing and is idempotent: about 15 minutes and 9 GB on
+a bare machine, seconds on one that already has the toolchain. `just doctor`
+reports what is present without installing anything.
+[`validator/docs/TOOLCHAIN.md`](validator/docs/TOOLCHAIN.md) has the pins and the
+traps.
 
 ## Provenance
 
