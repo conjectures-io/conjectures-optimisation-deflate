@@ -1,0 +1,8 @@
+name = "hc-d4"
+author = "operator"
+description = "4-deep hash chains. A deliberately shallow point on the speed/ratio dial -- cheap, and only modestly worse than 16-deep chains."
+
+[claims]
+score = 0.90385
+parse_time_vs_incumbent = 1.59
+proof_lines = 331

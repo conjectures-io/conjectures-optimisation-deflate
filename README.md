@@ -1,158 +1,420 @@
-# conjectures-rust-competition
+# conjectures-miniz-oxide-competition
 
-A competition in which miners submit **Rust**, a **Lean proof** gates it, and
-accepted submissions are scored against a baseline by a fixed test harness.
+## Quick Summary
 
-The task is DEFLATE compression: you write the LZ77 parser, you prove that the
-token stream it produces decodes back to the input, and you are scored on total
-compressed bytes over a held-out corpus. Lower wins.
+- A proof-gated DEFLATE competition. Miners submit a Rust LZ77 parser and a Lean proof that its token stream decodes back to the input; a six-stage verifier re-extracts the Rust with Charon and Aeneas, type-checks the proof against a pinned contract inside a sandbox, and scores accepted parsers by compressed bytes on a held-out corpus. Lower wins.
+- Participation is one signed upload, paid for by one subnet registration: the service verifies submissions as they arrive and ranks every hotkey's best on a leaderboard. Ties go to the earlier submission. The speed floor is 8x the incumbent. A registration is spent only when the gate accepts, so a rejection is a free retry.
+- One command from a fresh clone to a passing self-test.
 
-```
-   your parse.rs  ──charon+aeneas──►  Lean  ──your Parse.lean──►  proof
-        │                                                            │
-        │                          the gate: LZ77.Obligation slot.parse
-        │                                                            │
-        └──cargo──► tokens ──► trusted DEFLATE encoder ──► bytes ◄───┘ accepted
-                                                             │
-                                        vs the incumbent, on the corpus
+```bash
+git clone <this repo> && cd conjectures-miniz-oxide-competition
+./setup.sh                      # apt packages, just, .venv, .env, Lean/Aeneas toolchain (~15 min, 9 GB); idempotent
+just check miner/template       # the whole gate, then the score, on the first incumbent
+just --list                     # everything else
 ```
 
-| | |
-|---|---|
-| **I want to submit** | [`miner/README.md`](miner/README.md) — step by step, with a template that already passes |
-| **I run the competition** | [`validator/README.md`](validator/README.md) — the gate, the corpus, promotion |
-| **Why it is built this way** | [`validator/docs/DESIGN.md`](validator/docs/DESIGN.md) |
+## Why enter
 
-## The two claims worth checking before you spend time
+**The slot is the whole LZ77 parsing stage**, not a constant: hash, match verifier,
+candidate search, the greedy, lazy or optimal decision, emission. 66 to 254 lines of Rust that
+Charon and Aeneas translate with no hand-written axioms.
 
-**The slot is not a sliver.** What you replace is the *entire LZ77 parsing stage*
-— hash function, match verifier, candidate search, greedy decision, emission —
-66 to 90 lines of Rust that Charon and Aeneas translate with **zero** hand-written
-axioms. You are not tuning a constant.
+**Correctness does not depend on the search.** The proof says the hash lands in range
+and nothing about what it computes; the loop that maintains the chains has postcondition
+`True`; only the bytes actually compared before a match is emitted are load-bearing.
+So a better search costs one rewritten lemma, and even a change to the emission stayed
+under 120 lines:
 
-**A real improvement costs about thirty proof lines.** The two submissions in
-`miner/` differ by moving from a single-slot hash head to 16-deep hash chains.
-That is worth **14.0%** on the corpus here, and its proof is **32 lines longer**:
+| | `parse.rs` | `Parse.lean` | bytes | vs incumbent |
+|---|---|---|---|---|
+| `miner/template` (greedy, hash head) - the first incumbent | 66 | 204 | 2,605,048 | 1.210x |
+| `miner/examples/hash-chains` (16 probes) | 90 | 236 | 2,239,367 | 1.040x |
+| `miner/examples/lazy` (lazy, 32 probes) - **the incumbent** | 118 | 323 | 2,153,387 | 1.000x |
+| `miner/examples/mo-lazy` (miniz level-9 strategy) | 254 | 497 | 2,118,446 | 0.984x |
+| `miner/examples/optimal` (optimal parse, 24 probes) | 198 | 442 | 2,115,138 | 0.982x |
+| miniz_oxide level 9 | | | 2,126,479 | 0.987x |
+| **libdeflate level 12** | | | **2,013,342** | **0.935x** |
 
-| | `parse.rs` | `Parse.lean` | score |
-|---|---|---|---|
-| `miner/template` (hash head) | 66 | 204 | 1.000x — this is the incumbent |
-| `miner/examples/hash-chains` | 90 | 236 | **0.860x** |
+The incumbent moved once already: lazy was promoted over the template, and with it
+the speed floor (8x of the incumbent) grew sevenfold in absolute terms, which is what
+made optimal parsing admissible. libdeflate is still 6.5% under the incumbent, and the
+gap is algorithmic: hash chains saturate at miniz level 9 whatever their depth; the
+rest is optimal parsing and block splitting, all inside the provable subset, because
+SIMD cannot change which match is chosen.
 
-That ratio — a few dozen proof lines for a double-digit ratio win — is the whole
-economic question, and it comes out of one design decision: **correctness does not
-depend on the search.** The proof that the hash lands in range says nothing about
-what the hash computes; the loop that maintains the chains has the postcondition
-`True`. Only the bytes actually compared before a match is emitted are
-load-bearing. Replace the search with a suffix automaton and you rewrite one lemma.
+## Miner
 
-**Where that claim is measured and where it is expected.** Hash head to hash chains
-is a change to the *search*, which is exactly what this design makes cheap. Most of
-the headroom left is in the *decision* — lazy matching, and a shortest-path parse
-over the whole block. Lazy matching keeps the loop's shape. A shortest-path parse
-does not: it costs a block and then emits, so emission becomes a second pass over a
-decision array, and keeping the cost bounded means keeping the firewall — have the
-emission pass re-verify each match with `match_len` before emitting it, and the
-dynamic program lands where the hash chain already is, free to be wrong because
-nothing downstream believes it. That is expected to hold and nobody has paid for it
-yet; it is the most valuable open question about the mechanism, and it is tracked in
-[`validator/docs/ROADMAP.md`](validator/docs/ROADMAP.md).
+```bash
+cp -r miner/template my-submission          # a passing submission to start from
+just bench my-submission                    # ratio and time only, seconds - measure before proving
+just check my-submission                    # the six-stage gate, then the score
 
-## Is there anything left to win?
+python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url http://<validator>:9200
+python miner/submit.py status <id> --url ...                            # the stage report, bytes, time ratio, minutes later
+python miner/submit.py leaderboard --url ...                            # every hotkey's best accepted submission, ranked
+```
 
-Yes: **180,026 bytes, or 8.0% against the current incumbent.** That is a measured
-number, not an estimate — `just headroom` reprints it.
+A submission is exactly two files, `parse.rs` and `Parse.lean`, signed with the hotkey over
+their hash, your address and the current time; the five references above are complete,
+passing examples to start from. Submissions are verified as they arrive and the same files
+twice return the same id.
 
-On the corpus in this repository:
+**Submitting costs one registration on the subnet.** Register, submit, and the slot is
+spent when the gate *accepts* -- a rejection costs nothing, so fix the proof and resubmit
+on the same registration. `submit` prints how many slots you have left. Your machine's
+clock has to be roughly right: the signature carries a timestamp and the validator refuses
+one more than five minutes from its own.
 
-| | bytes | vs incumbent |
+## The benchmark
+
+Two stages, one manifest, 28 files and ~15.9 MB each, cut from a ~900 MB pool of real
+data. **Stage 1 is public**, so a miner scores against exactly what a validator does and
+never needs the pool. **Stage 2 is held out**: the same 28 filenames, the same format
+labels and the same size budget, cut from the *disjoint* half of every pool with a seed
+the operator keeps.
+
+Neither is committed here. Each lives in its own repository and arrives via
+`just corpus-pull`:
+
+| repository | | |
 |---|---|---|
-| incumbent (`miner/template`) | 2,605,048 | 1.000x |
-| accepted (`miner/examples/hash-chains`) | 2,239,367 | 0.860x |
-| greedy, depth 256 — *the same algorithm, unconstrained* | 2,184,978 | 0.839x |
-| miniz_oxide level 9 | 2,126,479 | 0.816x |
-| lazy matching, depth 256 | 2,125,535 | 0.816x |
-| **near-optimal shortest-path parse** | **2,059,341** | **0.791x** |
-| libdeflate level 12 (whole compressor) | 2,013,342 | 0.773x |
+| `conjectures-compression-corpus-1` | public | `data/benchmark/corpus-stage1/` |
+| `conjectures-compression-corpus-2` | private | `data/benchmark/corpus-stage2/` |
 
-The rows in the middle matter more than the last one. **libdeflate is not the
-target, because two thirds of what separates it from the best submission is not
-in the slot at all** — it is in the trusted harness, where no submission can
-reach. The bolded row is the target: a parse, emitting the competition's own
-tokens, through the competition's own encoder, so it is reachable by construction.
+That split is deliberate. If stage 2's bytes were committed here, this repository could
+never be made public and could never be forked into the miner-facing one -- and since
+git keeps history, deleting the files later would not undo either. Separating the
+datasets puts the boundary on a repository ACL, which you can change, rather than on
+this history, which you cannot. `corpus-pull` skips stage 2 with a note rather than an
+error when you lack access, so a miner still gets a working checkout.
 
-The 226,025 bytes between the best accepted submission and libdeflate split like
-this:
+```bash
+just corpus-pull                            # both stages; stage 2 skipped without access
+                                             # corpus-stage1 is the default (validator/corpora.toml)
+VERIFY_CORPUS=corpus-stage2 just check my-submission
+```
 
-| | bytes | of the gap | reachable in the slot? |
-|---|---|---|---|
-| a better **parse** | 180,026 | **79.6%** | **yes** |
-| **block splitting** | 4,381 | 1.9% | no — harness |
-| **entropy coder** + residual | 41,618 | 18.4% | no — harness |
+Re-cutting a corpus -- for a new round, or after a leak -- needs the pool:
 
-Two things in that table were surprises. **Block splitting is nearly worthless
-here** — 0.17% of the incumbent — so the "natural second slot" it was assumed to
-be is the last thing worth building. And **the cheapest rung needs no new idea at
-all**: plain greedy at depth 256 is the incumbent's own algorithm with the
-proof-friendliness constraints lifted, and it already beats the accepted
-submission by 2.4%.
+```bash
+just corpus-sources                         # once: ~900 MB into data/benchmark/sources/
+just corpus-verify                          # complete? undrifted? still reproduces?
+just corpus-build --stage 1                 # reproduces the published public set
+just corpus-build --stage 2                 # reads BENCHMARK_STAGE2_SEED from .env
+```
 
-None of this is threatened by SIMD, at any time budget, because the score is
-*bytes*: vectorisation makes the same decisions faster, it never changes which
-match is chosen.
+Then commit the result to the matching dataset repository.
 
-[`validator/docs/ROADMAP.md`](validator/docs/ROADMAP.md) has the ladder, the
-ordering, and what runs out when.
+**Why the corpora are distributed as bytes rather than rebuilt from the fetch script.**
+The tidier design is to ship the fetch script and have everyone build their own, and it
+does not work here: **38 of the 73 sources are floating URLs.** Eighteen are GitHub
+branch heads -- sqlite, curl, mathlib4, django and TypeScript all take commits most days
+-- and the rest are live Wikipedia articles, current npm metadata, CSVs regenerated
+daily, and an arXiv OAI query that returns different records every call. A miner and a
+validator fetching a week apart would score against different corpora, which for a
+competition ranked on compressed bytes is fatal. The bytes in the dataset repositories
+are the specification; the pool is only needed to cut a new stage.
+
+`just corpus-verify` checks a pool anyway, and `just corpus-sources` runs it on the way
+out: every source present and non-empty, and -- the one that matters -- whether the pool
+as it stands still cuts a byte-identical stage 1. Exit 1 means re-fetch; exit 3 means
+upstream moved, which is expected in time and breaks nothing, because the published
+bytes are the reference.
+
+**The same volatility means stage 2 must be distributed as bytes, not as a seed.** Two
+validators rebuilding from one seed at different times get different corpora and would
+rank submissions differently. `just corpus-package` writes the held-out set to a single
+checksummed archive under `data/benchmark/dist/` (gitignored), carrying a manifest with
+per-file hashes and the seed's *fingerprint* — never the seed. Put it somewhere private;
+publishing it ends its usefulness. Each validator then runs `just corpus-install <url>`,
+which verifies the archive checksum, checks every file against the manifest, and refuses
+to overwrite an existing corpus unless told to.
+
+Everything except one 40 KB file is real. `scripts/fetch-corpus-sources.sh` downloads from
+GitHub (sqlite, redis, curl, ripgrep, tokio, serde, django, flask, requests, mathlib4,
+maven, TypeScript, bootstrap, the Rust book), Project Gutenberg, loghub's log corpora,
+cdnjs, the npm registry, NCBI, Wikipedia and Hugging Face.
+**[CORPUS-SOURCES.md](CORPUS-SOURCES.md) lists them all** -- what each corpus file
+is cut from, every download with its licence, and the licence totals. It is generated
+from the download manifest and the byte counts recorded while the pools are built, so it
+cannot drift from what was actually used. Nothing third-party is redistributed by this repository -- the pool is
+gitignored and each machine fetches its own.
+
+| group | files | source |
+|---|---|---|
+| source code | `source.c.txt` `source.rs.txt` `source.py.txt` `lean.txt` | sqlite/redis/curl, ripgrep/tokio/serde, django/flask/requests, mathlib4 |
+| natural language | `prose.txt` `docs.md.txt` `multibyte.txt` | Gutenberg English; repo docs and the Rust book; Chinese/Japanese/Russian novels plus gettext catalogues |
+| structured text | `records.json.txt` `catalog.xml.txt` `page.html.txt` `metrics.csv.txt` `dump.sql.txt` `server.log` | npm registry, arXiv OAI and Maven POMs, Wikipedia articles, OurAirports and COVID data, Chinook/Sakila/Northwind, loghub |
+| dense / encoded | `bundle.min.js.txt` `sourcemap.map.txt` | cdnjs bundles; source maps, which are base64 VLQ inside JSON |
+| binary and compressed | `binary.db.bin` `images.bin` `compressed.bin` `genome.fasta` | SQLite test databases and gettext `.mo`; real PNG/JPEG; jars and gzip tarballs; E. coli and yeast genomes |
+| model weights | `weights-f32.bin` `weights-f16.bin` `weights-bf16.bin` `weights-q8.bin` | all-MiniLM-L6-v2 (F32), pythia-70m (F16), SmolLM2-135M (BF16), and SmolLM2-135M-Instruct quantized to Q8_0 and Q4_K_M — all Apache-2.0, fetched as 16 MB heads |
+| degenerate *(the one generated part)* | `sparse.bin` | 40 KB of long zero runs |
+
+Most parts are concatenations of many real files, so they take the repository's
+existing `<what>.<ext>.txt` convention: `catalog.xml.txt` is XML, but it is not one XML
+document.
+
+**The one generated part carries 0.25% of the bytes and 0.00% of the headroom.** It
+is there because nothing natural exercises distance-1 matches at the 258 cap cleanly;
+everything else is real.
+
+An earlier version of this corpus generated most parts from seeded PRNGs. That version
+was tuned until its match distances sat on Silesia's and its weight compressibility sat
+within 0.2% of a real checkpoint's, and it was still the wrong idea: synthetic data can
+only contain the structure someone thought to model, which is exactly the structure a
+parser can be tuned against. It also flattered submissions -- its most redundant file
+had a `gap` of 0.655 against 0.686 for the most redundant real one. The calibration did
+hold up, for what it is worth: real BF16 profiles at `gap` 0.984 and 79.8% zlib against
+the generator's 0.984 and 79.2%.
+
+Real checkpoints also carry what a generator was never going to: `weights-q8.bin` and
+`weights-q4k.bin` are llama.cpp's own output, Q8_0's flat 34-byte blocks against
+Q4_K_M's 256-element superblocks with 6-bit scales. Both profile dead flat (`gap`
+1.000) -- quantized weights are genuinely incompressible, which is worth knowing and is
+why they are small. Only BF16 moves at all, at 0.984. One wrinkle the profiler caught:
+two quantizations of the same model share their metadata byte for byte, and for SmolLM2
+that is 1.8 MB of tokenizer vocabulary. Pooling it made the two parts measure the same
+thing; the builder skips past it to the tensor data.
+
+### How the sizes were chosen
+
+A `corpus-profile` binary reported, per file, `gap` = optimal-parse bytes over
+greedy-parse bytes -- the entire quantity this competition scores -- plus match length
+and distance distributions:
+
+```bash
+corpus-profile stage1 data/benchmark/corpus-stage1 silesia data/benchmark/silesia
+```
+
+Its source lived in `scripts/pareto-bench/`, retired along with the rest of the old
+benchmark path (see Layout, below) -- these commands can't be re-run as written until
+it's ported to `validator/measure`. The methodology below is what it settled.
+
+Two things it settles. First, which files can rank anyone at all: parts profiling at
+`gap` ≥ 0.98 cannot change their output under any parser, so they are held to a small
+share of the corpus and kept only for what they do test -- that a parser round-trips
+hostile input and does not crawl on it.
+
+Second, speed. Real logs and SQL dumps turn out to be so redundant that `optimal` costs
+38x and 41x the incumbent's time on them for little headroom, while prose, markdown and
+C source buy more at 3-5x. A first balance put `optimal` at 7.6x against the harness's
+8.0x floor -- 5% of headroom, enough that the next better-but-slower parser would be
+rejected on time rather than judged on bytes. Weighting toward the cheap discriminators
+brought it to 5.6x and raised total headroom 16% at the same time.
+
+Measured results for the whole candidate set -- the two stages against each other,
+the Pareto frontier, per-format behaviour and the speed margin -- are in
+[docs/benchmark/RESULTS.md](docs/benchmark/RESULTS.md), with the raw run file beside
+it. Headline: every provable candidate ranks the same on both stages to within 0.001.
+
+### Coverage
+
+A second tool, `scripts/corpus-coverage.py`, asks whether the manifest spans the parse
+behaviour real data shows (it reads `corpus-profile`'s output, so it's affected by the
+same retirement noted above) -- over measured behaviour, not over format names, because
+an LZ77 parser does not see formats and two extensions can be one
+behaviour. Each file becomes a point in six profile axes; it reports **reach** (for each
+file in an external reference corpus, the distance to the nearest benchmark file) and
+**spacing** (parts that measure the same thing twice). Silesia is the reference.
+
+It has decided three manifest changes. A `.docx` part was built and dropped at 0.035
+from `images.bin` -- a zip of XML behaves like any other compressed container. Two GGUF
+quantizations profiled 0.002 apart, so only Q8_0 is carried. WebAssembly was added
+because Silesia's `mozilla` had nothing within 0.125; it is now 0.066. Current worst
+reach is 0.161, on `osdb`.
+
+[CORPUS-SOURCES.md](CORPUS-SOURCES.md) carries the full data-type taxonomy, the list of
+popular types that are *not* here and why, and the two places the metric is deliberately
+overruled.
+
+### What the hidden stage does and does not stop
+
+**It stops memorization.** The pool is cut into 128 KB blocks and split by index
+parity: stage 1 gets the even blocks, stage 2 the odd ones. Measured, 24 of the 26
+sliced parts share *no* 512-byte block between the stages; the two that do share 1.4%
+and 0.3% are genuinely repeated boilerplate in the upstream data. So stage 2 is real
+data the public set never contained.
+
+The pool itself is public -- it is GitHub and Gutenberg, and the fetch script is in the
+open. What is hidden is which slice, in which order. That is a quantitative
+defence, and a much stronger one than the synthetic corpus had: stage 0 of the gate
+caps a submission at 1 MB, against ~290 MB in stage 2's half of the pool. It does not
+depend on anyone failing to find the data.
+
+**It does not stop distributional tuning**, and should not pretend to: the two stages
+are deliberately the same distribution, because a held-out set that is a *different*
+problem is not a fair one. Picking chain depth by content is legitimate adaptive
+compression and no gate can tell it from overfitting. Breadth is what limits it.
+
+Stage 2 is a fair drop-in, not a harder test. Every reference ranks identically on
+both, within 0.1%:
+
+| | stage 1 | stage 2 |
+|---|---|---|
+| `miner/template` | 1.14718x | 1.14718x |
+| `miner/examples/hash-chains` | 1.02853x | 1.02920x |
+| `miner/examples/lazy` (incumbent) | 1.00000x | 1.00000x |
+| `miner/examples/optimal` | 0.98423x | 0.98481x |
+
+### Cost, against `corpus-initial`
+
+| | `corpus-initial` | staged corpus |
+|---|---|---|
+| files / raw bytes | 5 / 8.1 MB | 28 / 15.9 MB |
+| compressibility span | 12.5% – 40.2% | 3.1% – 94.8% |
+| `optimal` vs incumbent | 0.98224x | 0.98423x |
+| `optimal` parse time vs incumbent | 5.86x | 5.53x |
+
+14% of the corpus is near-incompressible and the score is a pooled byte ratio, so a
+gain on the compressible part is diluted -- `optimal` wins 1.58% here against 1.78% on
+`corpus-initial`. Byte counts are exact rather than sampled, so this costs display
+range, not resolution: a one-byte win is still a one-byte win, and ties still break on
+submission time. The per-file budget is one table at the top of
+`scripts/make-benchmark-corpus.py`; re-run `corpus-profile` after changing it, because
+headroom and speed trade against each other.
+
+## Operator
+
+```bash
+./setup.sh --chain              # the bittensor SDK on top of a normal setup; validators only
+just db-up && just db-migrate   # Postgres 17, then the schema
+just service                    # the API
+just service-worker             # the gate, draining the queue
+just chain-watcher              # subnet registrations -> the store
+just weight-setter              # scores the round and sets weights, once an epoch
+# or, all four at once:  pm2 start pm2/service.config.js
+```
+
+Four processes, one database, one wallet -- [docs/OPERATIONS.md](docs/OPERATIONS.md) is
+the whole of it, including what to check when something is wrong.
+
+The store is Postgres, not a file. It holds submissions, the subnet registrations the
+chain watcher records, the entitlement claims that tie the two together, and the audit of
+every weight vector. `just db-psql` opens a shell on it; `just db-weights` prints what the
+last vector paid and why. A validator upgrading from the old SQLite file runs
+`just db-import-sqlite` once.
+
+**One registration buys one accepted submission.** A hotkey with no registration on the
+subnet cannot submit at all; a hotkey with one may have one submission in the queue, and
+it is charged only when the gate accepts. A rejection is a free retry -- fix the proof and
+resubmit on the same registration. To submit again after an acceptance, register again.
+
+The API and the gate are separate processes on purpose: the gate is a ~45 minute
+subprocess per submission, so as a thread it pinned the API to one worker and took the API
+down whenever it died. Several `service-worker` processes can drain one queue, on one
+machine or on several -- each claims a different submission. Run exactly one chain watcher
+and one weight setter; without the watcher no hotkey has a registration, and so nobody can
+submit at all.
+
+**Emission is 60% Pareto position, 40% recent improvement.** Sixty per cent follows the
+frontier, weighted by how much each point actually buys rather than by mere membership;
+forty follows the last ten improvements on the record, decaying, newest most. What neither
+claims burns. `just weights-preview` prints what the scorer would pay right now without
+touching the chain, `WEIGHT_DRY_RUN=1` runs the whole weight-setting path except the last
+call, and [docs/SCORING.md](docs/SCORING.md) is the argument for why the default weight
+function is the one it is.
+
+Corpora live in `validator/corpora.toml` (`just corpora` lists them); a held-out one is marked `public = false`, which keeps its per-file numbers inside the validator and reports only totals. `VERIFY_CORPUS` in `.env` overrides the default for one run, by name or by directory -- a validator running the staged benchmark points it at `corpus-stage2`, pulled by `just corpus-pull` and built by `just corpus-build --stage 2` from a `BENCHMARK_STAGE2_SEED` that must never reach the public repo, CI logs or the miners' side of the wire. Promote a leader by copying its `parse.rs` over `validator/incumbent/parse.rs` (keep the header) and running `just repin`; every later submission is scored against it. After any edit to a pinned file, `just repin`.
+
+## The gate
+
+| stage | checks | stops |
+|---|---|---|
+| 0 intake | exactly two files, each under 512 KB | smuggled files |
+| 1 policy | Rust inside the translated subset; Lean that runs no code | `unsafe`, iterators, `#eval`, `elab` |
+| 2 pins | 40 contract, engine and gate files unchanged | editing what you are judged against |
+| 3 extract | Charon and Aeneas run by the validator | a self-supplied extraction |
+| 4 statement | `LZ77.Obligation slot.parse` type-checks, in bubblewrap, under time and memory caps | a weakened theorem, a runaway proof |
+| 5 axioms | only `propext`, `Classical.choice`, `Quot.sound`, read from a separate `lean` run; pins re-hashed | `sorry`, a forged report |
+| 6 score | each parser built as its own cdylib in a sandbox that may write only its own workspace, then measured in one that may write nothing: round trip through two inflaters, bytes, speed floor | wrong output, a slow win |
+
+Exit 0 accepted, 1 rejected, 2 the validator itself is broken.
 
 ## Layout
 
 ```
+setup.sh                 from a fresh clone to a passing self-test
+CORPUS-SOURCES.md        every benchmark source, its licence, and what it feeds
+justfile                 every command; `just --list`
+pyproject.toml           all Python deps (uv), ruff and pyright config; ./.venv via `uv sync`
+                         the `chain` group is the bittensor SDK: `./setup.sh --chain`, validators only
+compose.yaml             Postgres 17 and the one-shot migration runner
+.env.example             VERIFY_*, SERVICE_*, POSTGRES_* with defaults; copied to .env
+deploy/
+  db/                    first-boot extensions, GUCs, the read-only monitor role; tuned postgresql.conf
+  migrate/               Alembic: the schema's deploy path, and the image that applies it
 miner/
-  README.md              step by step: install, write, prove, submit
-  RULES.md               prover-friendly Rust, with rejected/accepted pairs
-  CONTRACT.md            what you must prove, and what you need not
-  template/              a complete submission that passes. Start here.
-  examples/hash-chains/  a real 14% improvement, with its proof and a diff
-
+  submit.py              submit, status, leaderboard
+  template/              the simplest passing submission, with its proof
+  examples/              hash-chains, lazy (the incumbent), optimal: proven improvements
 validator/
-  README.md              running a round
-  docs/DESIGN.md         why the slot, the metric and the gate are what they are
-  docs/ROADMAP.md        what is left to win, measured, and in what order
-  docs/SCORING.md        the metric, the time budget, corpus governance
-  docs/THREAT_MODEL.md   what each stage of the gate stops
-  docs/TOOLCHAIN.md      the pins, what `init` installs, and four traps
-  docs/CORPUS.md         the reference corpus, with hashes
-  lean/Lz77/             THE CONTRACT — written once, pinned, never by a miner
-  lean/Verify/           THE GATE — three lines the verifier writes itself
-  lean/Slot/             generated from the submission by the verifier
-  lean/Proof/            where the submission's proof is placed
-  slot/                  the crate root the submitted parse.rs becomes
-  harness/               trusted DEFLATE encoder, round-trip check, scoring
-  verifier/verify.py     the six-stage gate
-  verifier/init.sh       installs Lean, Aeneas, Charon and Mathlib from nothing
+  verifier/              verify.py (the gate), init.sh (toolchain), config.sh (pins), extract.sh
+  lean/Lz77/             the contract: token spec, the two lemmas a proof uses, the obligation
+  lean/Verify/           the gate's three lines
+  measure/               the engine: trusted DEFLATE encoder, round trip, timing; candidate/ is the crate template every parser is built from
+  incumbent/parse.rs     what every submission is measured against
+  bench/                 the driver (workspace, sandboxed build, sandboxed measurement), the verdict, the reports, and `python -m bench`
+  sandbox/bwrap.py       generic confinement; knows nothing about benchmarks
+  corpora.toml           what can be measured, which is the default, and which is held out
+                         (format labels live beside each corpus instead, see below)
+  db/                    the store: models, migrations' source of truth, and four repositories
+  chain/                 the subnet: the two seams, the poll loop, the cadence; finney.py alone touches the SDK
+  scoring/               the 60/40 rule, and the eight weight functions scripts/pareto-weights.py argued over
+  workers/               chain-watcher, weight-setter, and `weights-preview`
+  service/               the API, and the gate worker that drains the queue (separate processes)
+  tools/                 one-off operator scripts (the SQLite import)
+  tests/                 `just test`: one test per attack, plus the references through the gate
+scripts/
+  fetch-corpus-sources.sh   the ~800 MB real-world pool the corpus is cut from, weights included
+  SOURCES.tsv               machine record of the pool; renders to CORPUS-SOURCES.md
+  make-benchmark-corpus.py  the staged benchmark: one 28-part manifest, cut twice
+  pull-corpus.sh            fetch both corpora from their dataset repositories
+  download-silesia.sh       the Silesia reference corpus: the control
+  corpus-coverage.py        does the manifest span real-world parse behaviour? (WIP: its
+                            corpus-profile source lived in the now-retired pareto-bench/;
+                            needs porting to validator/measure, see below)
+  pareto-weights.py         the eight weight functions compared on synthetic shapes and real
+                            runs; the functions themselves are validator/scoring/pareto.py
+  verify-corpus.py          is a downloaded pool complete, undrifted, reproducing?
+data/benchmark/          corpus-stage1/ and corpus-stage2/ (gitignored; `just corpus-pull`
+                         fetches them from their own repositories), sources/ (gitignored,
+                         the ~900 MB pool both stages are cut from), corpus-initial/
+                         (committed, the original five files), silesia/ and
+                         silesia-subset/ (gitignored, downloaded); each corpus has a
+                         <name>.formats.json sibling (filename -> format label) -- never
+                         inside the directory itself, so scoring never compresses it as
+                         data. corpus-initial.formats.json is committed by hand;
+                         silesia*.formats.json are regenerated by download-silesia.sh;
+                         corpus-stage{1,2}.formats.json are mirrored by corpus-pull from
+                         formats.json in each dataset repo's own root, beside its README
+                         and SOURCES.md
+data/bench-workspace/    one directory per benchmark run; kept on failure, swept by `just bench-clean`
+pm2/                     the service under PM2
+.github/workflows/       CI: fast tier on every push, full tier with the toolchain nightly
 ```
 
-## Quick start
+Configuration is `.env`: `VERIFY_SANDBOX=off` lets a miner without bubblewrap run the gate unconfined (never a validator); `VERIFY_LEAN_TIMEOUT`, `VERIFY_LEAN_MEMORY_MB`, `VERIFY_TOTAL_TIMEOUT`, `SERVICE_PORT` do what their names say. The store is `POSTGRES_*`, or a single `DATABASE_URL` that overrides them. `VERIFY_CORPUS=<name|dir>` scores against a corpus other than the default, e.g. `VERIFY_CORPUS=silesia-subset just bench miner/template`; `just corpus-download` fetches the Silesia reference corpus (`--subset` for a fast ~34 MB mix, `--full` for the standard ~202 MB set). `VERIFY_BENCH_*` tune the benchmark's own sandbox, reps and workspace retention — see `validator/bench/driver.py`.
+
+## Benchmark
 
 ```bash
-just init                           # Lean, Aeneas, Charon, Mathlib, build, self-test
-just smoke                          # both reference submissions, end to end
-just check miner/template           # the gate, then the score, on one submission
-just headroom                       # what is left to win, and how much is reachable
+just bench                                                     # every candidate on the default corpus, timed as the gate times
+just bench my-submission --corpus silesia-subset               # any submissions, any configured corpus
+just corpora                                                   # what is configured, and which is the default
+just bench-report                                              # score, floor verdicts, Pareto front, per-format tables, stability, plots
+just bench-compare data/benchmark-runs/A.jsonl data/benchmark-runs/B.jsonl   # two runs of the same code must agree
 ```
 
-`just init` starts from nothing and is idempotent: about 15 minutes and 9 GB on
-a bare machine, seconds on one that already has the toolchain. `just doctor`
-reports what is present without installing anything.
-[`validator/docs/TOOLCHAIN.md`](validator/docs/TOOLCHAIN.md) has the pins and the
-traps.
+With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; the incumbent, `miniz_oxide` and `libdeflate` are always measured. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Only the parse is timed, with a warmup round and round-robin over methods, and every round hashes the token stream so a non-deterministic parser is caught. Runs record the sha256 of every source and corpus file and are never overwritten.
 
-## Provenance
+## Documents
 
-The target was chosen by measurement, not argument, in
-[`../conjectures-research`](../conjectures-research): what Aeneas can translate,
-what a proof costs, where the compression headroom actually is, and four claims
-that measurement overturned. The mechanism — task commitment, pinned hashes, a
-policy scanner, an axiom check, and the rule that nothing is timed until the proof
-is accepted — comes from [`../conjectures-rust`](../conjectures-rust), whose own
-target could not contain a win.
+| | |
+|---|---|
+| [docs/SCORING.md](docs/SCORING.md) | how emission is scored: the 60/40 rule, worked on the real frontier |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | running a validator: the four processes, the store, the wallet, what to check |
+| [CORPUS-SOURCES.md](CORPUS-SOURCES.md) | every benchmark source, its licence, and what it feeds |
+
+## Trusted base
+
+Lean's kernel with its three axioms; Mathlib; Aeneas's Lean library; Charon and Aeneas themselves (the extracted model is what the proof is about); `measure/src/deflate.rs` and `token.rs`, unproved. Every toolchain download is sha256-pinned in `validator/verifier/config.sh`. The round-trip check through two independent inflaters is the empirical backstop for the last two.

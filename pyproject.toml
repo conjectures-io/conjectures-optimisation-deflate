@@ -1,0 +1,100 @@
+[project]
+name = "conjectures-miniz-oxide-competition"
+version = "0.1.0"
+# 3.11 for tomllib, which validator/bench/corpora.py reads corpora.toml with.
+requires-python = ">=3.11"
+# The gate (verify.py) needs only loguru; the rest is the service and the client.
+dependencies = [
+    "loguru>=0.7",
+    "fastapi>=0.110",
+    "pydantic>=2",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    # The keypair, not substrate-interface: that pulls scalecodec, the bittensor SDK the
+    # chain workers need pulls cyscale, and the two claim the same namespace. A validator
+    # runs both, so one had to go. The two are wire-compatible.
+    "bittensor-wallet>=3.0",
+    "requests>=2.31",
+    "sqlalchemy>=2.0.30",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.13",
+    "pydantic-settings>=2.2",
+]
+
+[dependency-groups]
+# The chain watcher and the weight setter only. Never installed by default: the SDK
+# pulls a large dependency tree a miner running `just check` has no use for. Upper
+# bounded because bittensor 11.x removed Subtensor.get_uid_for_hotkey_on_subnet and
+# reshuffled the sync Subtensor surface validator/chain/weights.py calls.
+chain = [
+    "bittensor>=10.4.1,<11",
+]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "ruff>=0.5",
+    "basedpyright>=1.40.1",
+    "matplotlib>=3.8",
+]
+
+[tool.ruff]
+line-length = 100
+# validator/ is a source root, not an installed package: the service runs as
+# `cd validator && python -m service.api` and the tests put it on sys.path. Without
+# this, `import db` -- and `import sandbox`, which predates the store -- sort as
+# third-party packages.
+src = ["validator", "."]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: needs the Lean/Charon/Aeneas toolchain, or runs the real gate end to end",
+]
+
+[tool.basedpyright]
+include = [
+    "validator/verifier",
+    "validator/bench",
+    "validator/sandbox",
+    "validator/service",
+    "validator/tests",
+    "miner/submit.py",
+]
+# Mirrors the sys.path.insert() calls in miner/submit.py and validator/tests/*.py.
+extraPaths = ["validator", "validator/verifier"]
+venvPath = "."
+venv = ".venv"
+
+reportUnusedCallResult = false
+reportImplicitStringConcatenation = false
+reportCallInDefaultInitializer = false
+reportMissingTypeStubs = false
+
+# `typing.override` is 3.12, and this project still supports 3.11 for the sake of one
+# tomllib import. The two middlewares below do override BaseHTTPMiddleware.dispatch;
+# there is just no way to say so that runs on the oldest Python we claim.
+[[tool.basedpyright.executionEnvironments]]
+root = "validator/service"
+reportImplicitOverride = false
+
+[[tool.basedpyright.executionEnvironments]]
+root = "validator/tests"
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+# A test's parameters are pytest fixtures, and their types are the fixture
+# definitions in conftest.py. Restating each one at every use is noise that makes
+# the tests harder to read without making them any safer.
+reportUnknownParameterType = false
+reportMissingParameterType = false
+reportAny = false
+# A fixture is often requested for its side effect -- a stub installed, a clock
+# frozen -- and never referenced in the body. That is how pytest works, not a bug.
+reportUnusedParameter = false
+# The chain and scoring tests stand in for the SDK with small hand-written fakes.
+# Declaring every attribute and marking every override on a throwaway stub buys
+# nothing: the thing it has to match is asserted by the tests themselves.
+reportUnannotatedClassAttribute = false
+reportImplicitOverride = false

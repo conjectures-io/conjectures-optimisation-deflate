@@ -1,0 +1,8 @@
+name = "mo-lazy"
+author = "operator"
+description = "miniz_oxide's level-9 strategy in the provable subset: budgeted probes, far-and-small rejection, immediate accept at 128, lazy otherwise. On the Pareto front at 0.984x and 2.7x."
+
+[claims]
+score = 0.984
+parse_time_vs_incumbent = 2.7
+proof_lines = 497

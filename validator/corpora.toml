@@ -1,0 +1,55 @@
+# Every corpus the benchmark can be pointed at. `path` is relative to the
+# repository root unless it is absolute. `VERIFY_CORPUS` overrides the default,
+# by name or by directory.
+#
+# `public = false` means per-file numbers stay inside the validator and only
+# aggregates are reported back to whoever submitted -- repeated submissions plus
+# per-file results are an oracle over held-out data. A directory that is not
+# configured here carries no held-out policy and is treated as public, so if you
+# hold a corpus back, give it an entry.
+#
+# Format labels are not here: they describe the data, not how the validator
+# treats it, so they live with the data as a `<name>.formats.json` sibling of
+# each corpus directory (never a member of it -- see validator/bench/corpora.py).
+# A file with no label is reported as "unknown".
+
+# Fetched by `just corpus-pull` from its own repository (public); absent until
+# then, which is not an error until something asks for it. The default: it is
+# what every submission that passes the gate is scored against.
+[[corpus]]
+name = "corpus-stage1"
+path = "data/benchmark/corpus-stage1"
+public = true
+default = true
+
+# The held-out twin of corpus-stage1, same 28 filenames cut from the disjoint half
+# of the same pool -- fetched by `just corpus-pull` from a private repository, and
+# `public = false` keeps its per-file numbers inside the validator. Never the
+# default: it is scored on demand, not on every submission (see README).
+[[corpus]]
+name = "corpus-stage2"
+path = "data/benchmark/corpus-stage2"
+public = false
+
+[[corpus]]
+name = "corpus-initial"
+path = "data/benchmark/corpus-initial"
+public = true
+
+# Downloaded by `just corpus-download`; absent until then, which is not an error
+# until something asks for it.
+[[corpus]]
+name = "silesia"
+path = "data/benchmark/silesia"
+public = true
+
+[[corpus]]
+name = "silesia-subset"
+path = "data/benchmark/silesia-subset"
+public = true
+
+# A validator's held-out corpus. Uncomment and point it somewhere real.
+# [[corpus]]
+# name = "private"
+# path = "/srv/held-out"
+# public = false

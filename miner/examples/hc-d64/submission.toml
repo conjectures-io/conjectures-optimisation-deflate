@@ -1,0 +1,8 @@
+name = "hc-d64"
+author = "operator"
+description = "64-deep hash chains. The graduated deep-chain point beyond hash-chains-16, still the same greedy decision."
+
+[claims]
+score = 0.84359
+parse_time_vs_incumbent = 4.28
+proof_lines = 331

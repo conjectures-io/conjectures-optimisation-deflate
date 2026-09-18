@@ -1,0 +1,8 @@
+{
+    "_comment": "Maps filename -> a human-chosen format label, so benchmark analysis can group and normalize by file format instead of pooling raw bytes. A file missing here gets \"unknown\" at collection time. Extend by hand when this corpus gains new files. A sibling of corpus-initial/, not a member of it, so nothing that iterates the corpus directory -- the real scoring engine included -- ever finds it.",
+    "binary.bin": "binary",
+    "json.txt": "json",
+    "lean.txt": "lean-source",
+    "prose.md.txt": "prose",
+    "source.rs.txt": "rust-source"
+}

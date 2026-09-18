@@ -1,11 +1,11 @@
 # Submission metadata. Edit `name`; the rest is informational.
 name = "reference-hash-head"
 author = "operator"
-description = "Greedy matching against a single-slot hash table. The incumbent."
+description = "Greedy matching against a single-slot hash table. The first incumbent; the simplest passing submission."
 
 # What you claim, so a validator can sanity-check its own run against yours.
-# These are not trusted — the validator recomputes everything.
+# These are not trusted - the validator recomputes everything.
 [claims]
-score = 1.000
-parse_time_vs_incumbent = 1.06
+score = 1.210
+parse_time_vs_incumbent = 0.15
 proof_lines = 204

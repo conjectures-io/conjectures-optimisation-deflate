@@ -1,0 +1,7 @@
+# Pins the rustc that builds measure/, slot/ and, copied into each generated
+# crate, every parser the benchmark measures.
+# Separate from CHARON_TOOLCHAIN in verifier/config.sh, which only extracts LLBC.
+# Bump with `just repin` after changing this.
+[toolchain]
+channel = "1.90.0"
+profile = "minimal"

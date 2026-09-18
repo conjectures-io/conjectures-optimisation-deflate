@@ -22,7 +22,7 @@ purpose — `Nat` `+`, `*`, `/` and `%` are what `omega` reasons about, whereas
 
 ## The shape of the specification, and why it is this shape
 
-`docs/EXP3_PERMUTATION.md` measured that the *form* of a published contract is
+The research phase measured that the *form* of a published contract is
 worth roughly a factor of two in the proof that discharges it. The lever here is
 `copyN`: rather than describing a back-reference as a list-valued function of the
 window (which forces reasoning about slices of `List.set`), it describes it as

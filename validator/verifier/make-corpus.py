@@ -1,37 +1,22 @@
 #!/usr/bin/env python3
-"""Build the scoring corpus.
+"""Build the scoring corpus - five files of different kinds, so the score measures every parse.
 
-    verifier/make-corpus.py [source-root ...]
+    verifier/make-corpus.py [source-root ...] [--force] [--allow-partial]
 
-Five files, deliberately different in kind, because a corpus of one kind measures
-one kind of parse. This is not fussiness: the first headroom measurement in this
-project's research phase used repetitive synthetic data, compressed ~300:1, was
-dominated by match emission, and reported a conclusion that was backwards.
-`docs/SCORING.md` records the trap.
-
-In a real round the corpus is **held out and commit-revealed**, and only its
-*shape* statistics are published -- byte-frequency histograms, mean line length,
-the proportion of each kind -- so that miners tune for the class of data rather
-than for the bytes.
-
-The corpus committed to this repository is the **reference** one: it is what every
-byte count in the docs was measured against, so running this script REPLACES it
-and those numbers stop matching. Do that deliberately (a new round, a new mix),
-not by habit; `git checkout validator/corpus` puts the reference back.
+The committed corpus is the reference every byte count was measured against; rerunning this
+replaces it (`git checkout data/benchmark/corpus-initial` restores). A live service scores
+against whatever validator/corpora.toml or VERIFY_CORPUS names instead.
 """
+
 import hashlib
 import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / "corpus"
+OUT = ROOT.parent / "data/benchmark/corpus-initial"
 
-DEFAULT_ROOTS = [
-    ROOT.parent,                                    # this repository
-    ROOT.parent.parent / "conjectures-research",
-    ROOT.parent.parent / "conjectures-rust",
-    ROOT.parent.parent / "conjectures-validator",
-]
+# With no roots given, this repository alone; a held-out corpus passes its own.
+DEFAULT_ROOTS = [ROOT.parent]
 
 # (name, extensions, cap in bytes)
 PARTS = [
@@ -45,10 +30,10 @@ PARTS = [
 SKIP_PARTS = {".lake", ".git", "packages", "corpus", "node_modules", "target"}
 # `target/` is skipped for text but is the only source of binaries, so the binary
 # part is collected from release build directories explicitly.
-BIN_DIRS = ["validator/harness/target/release", "validator/slot/target/release"]
+BIN_DIRS = ["validator/measure/target/release", "validator/slot/target/release"]
 
 
-def walk(roots, exts, cap, allow_target=False):
+def walk(roots: list[pathlib.Path], exts: set[str], cap: int, allow_target: bool = False) -> bytes:
     buf = bytearray()
     for base in roots:
         base = pathlib.Path(base)
@@ -72,19 +57,21 @@ def walk(roots, exts, cap, allow_target=False):
     return bytes(buf[:cap])
 
 
-def main():
+def main() -> None:
     roots = [pathlib.Path(a) for a in sys.argv[1:] if not a.startswith("-")] or DEFAULT_ROOTS
     OUT.mkdir(exist_ok=True)
     if any(OUT.iterdir()) and "--force" not in sys.argv:
         sys.exit(
-            "corpus/ is not empty. This would replace the reference corpus every\n"
-            "byte count in the docs was measured against. Pass --force if that is\n"
-            "what you mean; `git checkout validator/corpus` puts it back."
+            "data/benchmark/corpus-initial/ is not empty. This would replace the\n"
+            "reference corpus every byte count in the docs was measured against.\n"
+            "Pass --force if that is what you mean;\n"
+            "`git checkout data/benchmark/corpus-initial` puts it back."
         )
     for old in OUT.iterdir():
         if old.is_file():
             old.unlink()
-    total, empty = 0, []
+    total = 0
+    empty: list[str] = []
     print(f"{'file':<18} {'bytes':>10}  sha256")
     for name, exts, cap in PARTS:
         if name == "binary.bin":
@@ -100,12 +87,17 @@ def main():
         print(f"{name:<18} {len(data):>10}  {hashlib.sha256(data).hexdigest()[:16]}")
     print(f"{'TOTAL':<18} {total:>10}")
     if total == 0:
-        sys.exit("corpus is empty -- pass source roots on the command line")
+        sys.exit("corpus is empty - pass source roots on the command line")
     if empty:
-        print(f"\nWARNING: {', '.join(empty)} came out empty. A corpus of one kind")
-        print("measures one kind of parse; see docs/SCORING.md.")
-        if "binary.bin" in empty:
-            print("For binary.bin, build the crates first (`just build`).")
+        hint = " Build the crates first (`just build`)." if "binary.bin" in empty else ""
+        msg = f"{', '.join(empty)} came out empty: one kind measures one kind of parse.{hint}"
+        if "--allow-partial" not in sys.argv:
+            for f in OUT.iterdir():
+                f.unlink()
+            sys.exit(
+                f"REFUSED: {msg} Pass more source roots, or --allow-partial to keep it anyway."
+            )
+        print(f"\nWARNING: {msg}")
 
 
 if __name__ == "__main__":

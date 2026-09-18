@@ -15,7 +15,7 @@ theorem accepted : LZ77.Obligation slot.parse := fun i o h => Submission.parse_s
 
 into a file the submission never sees. If the miner weakened their statement, that
 line does not typecheck, and no amount of care in reading Lean is needed to notice.
-This is v1's "statement check" done as a type check rather than as a string
+This is the predecessor's "statement check" done as a type check rather than as a string
 comparison, which is the only version of it that cannot be gamed.
 
 `toks` and `bytes` live here rather than in the submission for the same reason:

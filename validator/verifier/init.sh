@@ -1,30 +1,15 @@
 #!/usr/bin/env bash
-# Install everything needed to verify a submission, starting from nothing.
-#
-#   verifier/init.sh                 install what is missing, then self-test
+# Install everything needed to verify a submission, starting from nothing; idempotent, every download sha256-pinned in config.sh.
+#   verifier/init.sh                 install what is missing, then self-test (~15 min and 9 GB bare, seconds warm)
 #   verifier/init.sh --check         report what is present; install nothing
 #   verifier/init.sh --force         reinstall even if present
-#   verifier/init.sh --build-charon  build Charon from source instead of using
-#                                    the one in the Aeneas release
-#
-# Six stages, each idempotent and each skipped when its output already exists.
-# On a machine that already has a suitable toolchain -- `config.sh` looks in the
-# sibling repositories -- most are no-ops.
-#
-# Budget on a bare machine: roughly 15 minutes and 9 GB. Nearly all of it is
-# Mathlib's olean cache; the Rust nightly with `rustc-dev` is about 1.5 GB.
-#
-# Charon is NOT built from source. The Aeneas release tarball ships a `charon`
-# and `charon-driver` built against that exact Aeneas, which is the pairing that
-# matters -- Aeneas refuses LLBC from any other Charon. Checked: the bundled pair
-# and a `cargo install`ed Charon at the pinned revision produce byte-identical
-# `Slot/Funs.lean`. What the bundled binaries still need is the nightly they were
-# compiled against, with `rustc-dev`, because `charon-driver` links rustc's own
-# internals; stage 3 installs that and nothing else.
+#   verifier/init.sh --build-charon  build Charon from source instead of the one in the Aeneas release
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$root/.." && pwd)"
+PYTHON="${PYTHON:-$repo/.venv/bin/python}"
+[ -x "$PYTHON" ] || PYTHON=python3
 work="$root/.work"
 CHECK=0 FORCE=0 BUILD_CHARON=0
 for a in "$@"; do
@@ -32,7 +17,7 @@ for a in "$@"; do
         --check) CHECK=1 ;;
         --force) FORCE=1 ;;
         --build-charon) BUILD_CHARON=1 ;;
-        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help) sed -n '2,6p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown flag: $a (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -45,8 +30,7 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 missing=0
 
-# In `--check` mode every stage reports and installs nothing. `--force` makes
-# each presence test fail so the stage runs again.
+# `--check` installs nothing; `--force` makes every presence test fail so the stage reruns.
 present() { [ "$FORCE" = 1 ] && [ "$CHECK" = 0 ] && return 1; "$@"; }
 
 # ---------------------------------------------------------------------------
@@ -58,10 +42,11 @@ else
     missing=1
     if [ "$CHECK" = 0 ]; then
         mkdir -p "$work"
-        curl -sSfL https://elan.lean-lang.org/elan-init.sh -o "$work/elan-init.sh"
-        ELAN_HOME="$work/elan" sh "$work/elan-init.sh" -y --no-modify-path \
+        fetch_pinned "$ELAN_URL" "$work/elan.tar.gz" "$ELAN_SHA256" || exit 2
+        tar xzf "$work/elan.tar.gz" -C "$work" elan-init
+        ELAN_HOME="$work/elan" "$work/elan-init" -y --no-modify-path \
             --default-toolchain "$LEAN_TOOLCHAIN" >/dev/null
-        rm -f "$work/elan-init.sh"
+        rm -f "$work/elan.tar.gz" "$work/elan-init"
         export ELAN_HOME="$work/elan"
         export PATH="$ELAN_HOME/bin:$PATH"
         ok "installed elan at $ELAN_HOME"
@@ -70,8 +55,7 @@ fi
 if [ "$CHECK" = 0 ] && command -v elan >/dev/null; then
     elan toolchain install "$LEAN_TOOLCHAIN" >/dev/null 2>&1 || true
 fi
-# The version the PROJECT resolves, not elan's global default: they are routinely
-# different and only the project's matters.
+# The version the project resolves, not elan's global default.
 if command -v lean >/dev/null; then
     want="$(tr -d '[:space:]' < "$root/lean/lean-toolchain")"
     got="$(cd "$root/lean" && lean --version 2>/dev/null || true)"
@@ -100,8 +84,7 @@ else
     if [ "$CHECK" = 0 ]; then
         export AENEAS_WORK="$work/aeneas"
         mkdir -p "$AENEAS_WORK"
-        url="https://github.com/AeneasVerif/aeneas/releases/download/$AENEAS_TAG/aeneas-linux-x86_64.tar.gz"
-        curl -sSfL -o "$AENEAS_WORK/aeneas.tar.gz" "$url"
+        fetch_pinned "$AENEAS_URL" "$AENEAS_WORK/aeneas.tar.gz" "$AENEAS_SHA256" || exit 2
         tar xzf "$AENEAS_WORK/aeneas.tar.gz" -C "$AENEAS_WORK"
         rm -f "$AENEAS_WORK/aeneas.tar.gz"
         export CHARON_DIR="$AENEAS_WORK"
@@ -111,8 +94,7 @@ fi
 
 # ---------------------------------------------------------------------------
 step "3/6  Rust nightly for charon-driver ($CHARON_TOOLCHAIN + rustc-dev)"
-# The release ships its own `rust-toolchain`; if it disagrees with our pin, the
-# release wins, because the binaries were compiled against it.
+# If the release's own rust-toolchain disagrees with the pin, the release wins: the binaries were built with it.
 if [ -f "$AENEAS_WORK/rust-toolchain" ]; then
     shipped=$(sed -n 's/^ *channel *= *"\(.*\)"/\1/p' "$AENEAS_WORK/rust-toolchain")
     if [ -n "$shipped" ] && [ "$shipped" != "$CHARON_TOOLCHAIN" ]; then
@@ -127,8 +109,11 @@ else
     missing=1
     if [ "$CHECK" = 0 ]; then
         if ! command -v rustup >/dev/null; then
-            miss "rustup not found — installing it too"
-            curl -sSfL https://sh.rustup.rs | sh -s -- -y --no-modify-path >/dev/null
+            miss "rustup not found — installing $RUSTUP_VERSION"
+            fetch_pinned "$RUSTUP_URL" "$work/rustup-init" "$RUSTUP_SHA256" || exit 2
+            chmod +x "$work/rustup-init"
+            "$work/rustup-init" -y --no-modify-path >/dev/null
+            rm -f "$work/rustup-init"
             # shellcheck source=/dev/null
             . "$HOME/.cargo/env"
         fi
@@ -175,14 +160,47 @@ step "5/6  Build"
 if [ "$CHECK" = 1 ]; then
     present test -d "$root/lean/.lake/build/lib" \
         && ok "contract built" || { miss "contract not built"; missing=1; }
-    present test -x "$root/harness/target/release/harness" \
-        && ok "harness built" || { miss "harness not built"; missing=1; }
+    present test -x "$root/measure/target/release/measure" \
+        && ok "engine built" || { miss "measurement engine not built"; missing=1; }
 else
     (cd "$root/lean" && lake build Lz77) >/dev/null
     ok "contract (lean/Lz77)"
+    # slot/generated/parse.rs is gitignored (verify.py/justfile overwrite it per
+    # submission before every real build) so a fresh clone has nothing there yet
+    # -- seed it with the template before this sanity build.
+    mkdir -p "$root/slot/generated"
+    cp "$repo/miner/template/parse.rs" "$root/slot/generated/parse.rs"
     (cd "$root/slot" && cargo build --release -q)
-    (cd "$root/harness" && cargo build --release -q)
-    ok "slot and harness crates"
+    (cd "$root/measure" && cargo build --release -q)
+    ok "slot and measure crates"
+fi
+
+# Things init does not install: a C linker for the engine's zlib and libdeflate,
+# the proof sandbox (needs root), and the service's Python deps. Report, do not guess.
+if command -v cc >/dev/null || [ -n "${CC:-}" ]; then
+    ok "C compiler for the engine (${CC:-cc})"
+else
+    bad "no C compiler — ./setup.sh installs build-essential, or set CC"
+    missing=1
+fi
+if "$PYTHON" -c "import loguru, fastapi, bittensor_wallet, pytest" 2>/dev/null; then
+    ok "python deps in $PYTHON"
+else
+    bad "python deps missing — run ./setup.sh (creates .venv via uv sync from pyproject.toml)"
+    missing=1
+fi
+if command -v bwrap >/dev/null; then
+    ok "bubblewrap for the proof sandbox"
+elif [ "${VERIFY_SANDBOX:-bwrap}" = off ]; then
+    miss "bubblewrap absent; VERIFY_SANDBOX=off so the proof runs unconfined"
+else
+    bad "bubblewrap not found — \`sudo apt install bubblewrap\` (or VERIFY_SANDBOX=off on a miner's machine)"
+    missing=1
+fi
+if command -v systemd-run >/dev/null; then
+    ok "systemd-run for the memory cap"
+else
+    miss "systemd-run not found — the proof will run without a memory cap"
 fi
 
 # ---------------------------------------------------------------------------
@@ -195,9 +213,8 @@ if [ "$CHECK" = 1 ]; then
     printf '\n\033[1mSomething is missing.\033[0m Run: just init\n'
     exit 1
 fi
-# The reference submission through the proof gate. If this passes, the toolchain
-# is not merely installed, it agrees with itself.
-python3 "$root/verifier/verify.py" "$repo/miner/template" --no-score
+# The reference submission through the proof gate: the toolchain agrees with itself.
+"$PYTHON" "$root/verifier/verify.py" "$repo/miner/template" --no-score
 
 printf '\n\033[1minit ok.\033[0m Toolchain in use:\n'
 printf '  AENEAS_WORK    %s\n' "$AENEAS_WORK"

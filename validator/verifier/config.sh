@@ -1,51 +1,43 @@
 #!/usr/bin/env bash
-# Toolchain pins and paths. Source this; do not run it.
-#
-# `just init` installs everything named here into `.work/`. Every path can be
-# overridden from the environment, and if a suitable toolchain already exists
-# elsewhere on the machine it is reused rather than downloaded again.
+# Toolchain pins and paths, all overridable from the environment; `just init` installs into `.work/`. Source this; do not run it.
 
 _cfg_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 _work="$_cfg_root/.work"
 
-# --- Pins -------------------------------------------------------------------
-#
-# These four are pinned TO EACH OTHER, not chosen independently.
-#
-# Aeneas refuses LLBC produced by any Charon but the one it was built against,
-# so CHARON_REV is whatever `charon-pin` carries at AENEAS_TAG, and
-# CHARON_TOOLCHAIN is the nightly that revision of Charon compiles with -- it is
-# a rustc driver, so it needs that exact compiler and its `rustc-dev` component.
-# Bump all of them together or none of them.
-#
-# LEAN_TOOLCHAIN must match `lean/lean-toolchain`, which must match what the
-# pinned Aeneas Lean backend requires, which is also what
-# `lean/lake-manifest.json` pins Mathlib against.
+# --- Pins: pinned to each other, bump all or none. Aeneas reads LLBC only from its `charon-pin` Charon, which needs this nightly.
+# LEAN_TOOLCHAIN must match `lean/lean-toolchain`, the Aeneas Lean backend, and the Mathlib pin in `lean/lake-manifest.json`.
 : "${AENEAS_TAG:=nightly-2026.08.27-5b9dcf3}"
 : "${CHARON_REV:=4ad295c1bf982b5533ce7d85f4ddc889ff3127f8}"
 : "${CHARON_TOOLCHAIN:=nightly-2026-08-18}"
 : "${LEAN_TOOLCHAIN:=leanprover/lean4:v4.31.0}"
 
-# --- Charon and Aeneas ------------------------------------------------------
-#
-# Two layouts are accepted, because there are two ways to get these tools:
-#
-#   release tarball   $AENEAS_WORK/aeneas, $AENEAS_WORK/charon
-#   cargo install     $AENEAS_WORK/aeneas, $AENEAS_WORK/charon/bin/charon
-#
-# The tarball ships a Charon built against the matching Aeneas, so `just init`
-# uses it and nobody has to build a rustc driver. Checked: the two produce
-# identical models, differing only in the paths inside doc comments.
-_have_pair() {
-    [ -x "$1/aeneas" ] && { [ -x "$1/charon" ] || [ -x "$1/charon/bin/charon" ]; }
+# --- Download pins: every fetch sha256-checked so all validators get a byte-identical `Slot/Funs.lean`; Mathlib and Aeneas are pinned by git revision in the lake manifest, rustup checks the nightly itself.
+# The Aeneas tarball digest was taken from a download on 2026-09-11, the one the smoke numbers were measured with.
+AENEAS_URL="https://github.com/AeneasVerif/aeneas/releases/download/$AENEAS_TAG/aeneas-linux-x86_64.tar.gz"
+AENEAS_SHA256="bd6e2379969796af6d1784532a7f5a162ec27d01237fdde8570244052f297e94"
+ELAN_VERSION="v4.2.4"
+ELAN_URL="https://github.com/leanprover/elan/releases/download/$ELAN_VERSION/elan-x86_64-unknown-linux-gnu.tar.gz"
+ELAN_SHA256="42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63"
+RUSTUP_VERSION="1.29.1"
+RUSTUP_URL="https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init"
+RUSTUP_SHA256="dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71"
+
+# fetch_pinned URL DEST SHA256 - download and verify, or remove the file and return 2; a mismatch is never installed.
+fetch_pinned() {
+    curl -sSfL -o "$2" "$1" || { echo "download failed: $1" >&2; return 2; }
+    local got; got="$(sha256sum "$2" | cut -d' ' -f1)"
+    if [ "$got" != "$3" ]; then
+        rm -f "$2"
+        echo "sha256 mismatch for $1" >&2
+        echo "  expected $3" >&2
+        echo "  got      $got" >&2
+        return 2
+    fi
 }
-if [ -z "${AENEAS_WORK:-}" ]; then
-    for _c in "$_work/aeneas" \
-              "$_cfg_root/../../conjectures-rust/.work/aeneas"; do
-        if _have_pair "$_c"; then AENEAS_WORK="$(cd "$_c" && pwd)"; break; fi
-    done
-    : "${AENEAS_WORK:=$_work/aeneas}"
-fi
+
+# --- Charon and Aeneas: release tarball ($AENEAS_WORK/{aeneas,charon}) or cargo install ($AENEAS_WORK/charon/bin/charon) ---
+# `just init` uses the tarball, whose Charon matches its Aeneas; both layouts produce identical models.
+: "${AENEAS_WORK:=$_work/aeneas}"
 
 # The directory to put on PATH so that `charon` resolves, whichever layout it is.
 if [ -x "$AENEAS_WORK/charon/bin/charon" ]; then
@@ -55,28 +47,19 @@ else
 fi
 
 # --- Lean -------------------------------------------------------------------
-# Anything with a `bin/lake`.
+# elan: the one `init` installs, or an existing user install; anything with `bin/lake`.
 if [ -z "${ELAN_HOME:-}" ]; then
-    for _c in "$_work/elan" "$HOME/.elan" \
-              "$_cfg_root/../../conjectures-validator/.elan"; do
+    for _c in "$_work/elan" "$HOME/.elan"; do
         if [ -x "$_c/bin/lake" ]; then ELAN_HOME="$(cd "$_c" && pwd)"; break; fi
     done
     : "${ELAN_HOME:=$_work/elan}"
 fi
 
-# An existing Mathlib + Aeneas checkout at the same pins, to share rather than
-# fetch again. Mathlib's olean cache is about 7 GB, so this is worth the
-# coupling. Leave it empty to always fetch our own.
-if [ -z "${LEAN_PACKAGES:-}" ]; then
-    for _c in "$_cfg_root/../../conjectures-research/probes/aeneas-reach/.lake/packages"; do
-        if [ -d "$_c/mathlib/.lake/build/lib/lean" ]; then
-            LEAN_PACKAGES="$(cd "$_c" && pwd)"; break
-        fi
-    done
-    : "${LEAN_PACKAGES:=}"
-fi
+# LEAN_PACKAGES: an existing Mathlib + Aeneas checkout at the same pins to share; empty fetches our own 7 GB.
+: "${LEAN_PACKAGES:=}"
 
 export AENEAS_TAG CHARON_REV CHARON_TOOLCHAIN LEAN_TOOLCHAIN
+export AENEAS_URL AENEAS_SHA256 ELAN_URL ELAN_SHA256 RUSTUP_URL RUSTUP_SHA256
 export AENEAS_WORK CHARON_DIR ELAN_HOME LEAN_PACKAGES
 export PATH="$ELAN_HOME/bin:$PATH"
-unset _cfg_root _work _c
+unset _cfg_root _work _c 2>/dev/null || true

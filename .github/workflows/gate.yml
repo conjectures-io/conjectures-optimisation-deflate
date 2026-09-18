@@ -1,0 +1,72 @@
+# The gate's own tests. `fast` on every push: setup without the toolchain, lint, the
+# tests that need no Lean (the rest skip). `full` nightly and on demand: the whole
+# setup.sh from a bare runner (toolchain cached), every test, the smoke on all three
+# reference submissions with their byte counts asserted.
+name: gate
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Ubuntu 24.04 runners restrict unprivileged user namespaces via AppArmor; bwrap needs this.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: ./setup.sh --no-toolchain
+      - run: just check-pins
+      - run: just lint
+      - run: just test -rs
+
+  full:
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ELAN_HOME: ${{ github.workspace }}/validator/.work/elan
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The toolchain is ~10 GB and the image leaves ~14 GB free; drop the SDKs nothing here uses.
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
+      # Restore and save are split so the toolchain is cached as soon as setup succeeds,
+      # even if a later step fails; a cold install is ~20 min.
+      - name: Restore the toolchain
+        id: toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            validator/.work
+            validator/lean/.lake
+            ~/.rustup/toolchains
+          key: toolchain-${{ hashFiles('validator/verifier/config.sh', 'validator/lean/lake-manifest.json', 'validator/lean/lean-toolchain') }}
+      - run: ./setup.sh
+      - name: Save the toolchain
+        if: always() && steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            validator/.work
+            validator/lean/.lake
+            ~/.rustup/toolchains
+          key: ${{ steps.toolchain.outputs.cache-primary-key }}
+      - run: just lint
+      - run: just test -rs
+      - run: just smoke
+      - name: The byte counts still hold
+        run: |
+          test "$(jq .methods.submission.output_bytes /tmp/smoke-template.json)" = 2605048
+          test "$(jq .methods.submission.output_bytes /tmp/smoke-hash-chains.json)" = 2239367
+          test "$(jq .methods.submission.output_bytes /tmp/smoke-lazy.json)" = 2153387
+          test "$(jq .methods.submission.output_bytes /tmp/smoke-mo-lazy.json)" = 2118446
+          test "$(jq .methods.submission.output_bytes /tmp/smoke-optimal.json)" = 2115138

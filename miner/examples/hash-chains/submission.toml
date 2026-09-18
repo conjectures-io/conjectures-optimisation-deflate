@@ -3,6 +3,6 @@ author = "operator"
 description = "16-deep hash chains. Same greedy decision, more candidates."
 
 [claims]
-score = 0.85963
-parse_time_vs_incumbent = 3.02
+score = 1.040
+parse_time_vs_incumbent = 0.47
 proof_lines = 236

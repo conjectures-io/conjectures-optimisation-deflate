@@ -1,0 +1,8 @@
+name = "optimal-24"
+author = "operator"
+description = "Optimal parse per 32 KB block over 24-deep hash chains: candidates forward, costs backward, emission re-verified before it is written. The first parser under miniz level 9."
+
+[claims]
+score = 0.982
+parse_time_vs_incumbent = 6.6
+proof_lines = 442

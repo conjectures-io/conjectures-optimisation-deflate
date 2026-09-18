@@ -1,0 +1,8 @@
+name = "lazy-32"
+author = "operator"
+description = "Lazy matching over 32-deep hash chains. The incumbent since 2026-09-15; the first change to the emission, not the search."
+
+[claims]
+score = 1.000
+parse_time_vs_incumbent = 1.0
+proof_lines = 323
