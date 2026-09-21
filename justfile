@@ -132,6 +132,14 @@ bench-report *RUN:
 bench-compare A B:
     {{python}} -m bench.compare {{A}} {{B}}
 
+# Benchmark locally and explicitly persist per-candidate evidence in Postgres.
+bench-db *ARGS: build
+    {{bench}} {{ARGS}} --runs-dir {{root}}/data/benchmark-runs --store-db
+
+# Import/retry saved single-candidate JSONL artifacts without rerunning benchmarks.
+bench-import +FILES:
+    {{python}} -m bench.storage {{FILES}}
+
 # Remove every retained run workspace under data/bench-workspace/.
 bench-clean:
     {{bench}} --clean
@@ -208,6 +216,10 @@ db-down:
 # Apply every migration. Idempotent; safe to re-run.
 db-migrate:
     cd deploy/migrate && {{python}} -m alembic upgrade head
+
+# Reverse migrations to a revision; removes data introduced by those revisions.
+db-downgrade REVISION:
+    cd deploy/migrate && {{python}} -m alembic downgrade {{REVISION}}
 
 # Drop the schema and rebuild it from the migrations. Destroys every submission.
 db-reset:

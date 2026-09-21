@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Text,
@@ -75,6 +76,12 @@ class Submission(Base):
     __tablename__ = "submissions"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    aggregation_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_submission_aggregation"
+        ),
+    )
     hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     # sha256(parse.rs || Parse.lean), hex -- what the miner signed, and the submission's
     # identity. The same files from the same hotkey are the same submission.
@@ -186,6 +193,12 @@ class ScoreSnapshot(Base):
     weight_set_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("weight_sets.id", ondelete="CASCADE"), nullable=False
     )
+    aggregation_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_scoresnapshot_aggregation"
+        ),
+    )
     hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     # The submission the hotkey was scored on (their best accepted at the time).
     submission_id: Mapped[int | None] = mapped_column(
@@ -223,3 +236,171 @@ class RateLimitWindow(Base):
     hits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     __table_args__ = (Index("ix_rate_limit_windows_window_start", "window_start"),)
+
+
+class BenchmarkRun(Base):
+    """One candidate on one corpus, with its paired incumbent and references.
+
+    raw_data is the original JSONL evidence. Compression results and speed samples
+    are its SQL projections; writers must insert all three atomically.
+    """
+
+    __tablename__ = "benchmark_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_key: Mapped[str | None] = mapped_column(Text)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    candidate_method: Mapped[str] = mapped_column(Text, nullable=False)
+    corpus: Mapped[str] = mapped_column(Text, nullable=False)
+    corpus_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidation_reason: Mapped[str | None] = mapped_column(Text)
+    raw_data: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("run_key", name="uq_benchmark_runs_run_key"),
+        CheckConstraint("source_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_runs_source"),
+        CheckConstraint("corpus_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_runs_corpus"),
+        CheckConstraint("status IN ('complete', 'failed')", name="ck_benchmark_runs_status"),
+        CheckConstraint("jsonb_typeof(raw_data) = 'array'", name="ck_benchmark_runs_raw"),
+        CheckConstraint(
+            "(invalidated_at IS NULL) = (invalidation_reason IS NULL)",
+            name="ck_benchmark_runs_invalidation",
+        ),
+        Index("ix_benchmark_runs_lookup", "source_sha256", "corpus_sha256", "created_at", "id"),
+    )
+
+
+class BenchmarkCompressionResult(Base):
+    """One method's compression result on one input file, independent of timing reps."""
+
+    __tablename__ = "benchmark_compression_results"
+
+    run_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("benchmark_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    file_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    method: Mapped[str] = mapped_column(Text, primary_key=True)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    output_sha256: Mapped[str | None] = mapped_column(Text)
+    tokens_sha256: Mapped[str | None] = mapped_column(Text)
+    # None means no repeated token comparison was available (e.g. external references).
+    tokens_deterministic: Mapped[bool | None] = mapped_column(Boolean)
+    succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("file_index >= 0", name="ck_benchmark_compression_results_index"),
+        CheckConstraint(
+            "raw_bytes >= 0 AND (output_bytes IS NULL OR output_bytes >= 0)",
+            name="ck_benchmark_compression_results_bytes",
+        ),
+        CheckConstraint(
+            "file_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_file_hash",
+        ),
+        CheckConstraint(
+            "output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_output_hash",
+        ),
+        CheckConstraint(
+            "tokens_sha256 IS NULL OR tokens_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_tokens_hash",
+        ),
+        CheckConstraint(
+            "NOT succeeded OR (output_bytes IS NOT NULL AND output_sha256 IS NOT NULL"
+            " AND tokens_deterministic IS DISTINCT FROM FALSE)",
+            name="ck_benchmark_compression_results_success",
+        ),
+    )
+
+
+class BenchmarkSpeedSample(Base):
+    """One parse-time repetition linked to its file/method compression result."""
+
+    __tablename__ = "benchmark_speed_samples"
+
+    run_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    file_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    method: Mapped[str] = mapped_column(Text, primary_key=True)
+    repetition: Mapped[int] = mapped_column(Integer, primary_key=True)
+    phase: Mapped[str] = mapped_column(Text, nullable=False)
+    order_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    time_s: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "file_index", "method"],
+            [
+                "benchmark_compression_results.run_id",
+                "benchmark_compression_results.file_index",
+                "benchmark_compression_results.method",
+            ],
+            ondelete="CASCADE",
+            name="fk_benchmark_speed_samples_result",
+        ),
+        CheckConstraint(
+            "file_index >= 0 AND repetition >= 0 AND order_index >= 0",
+            name="ck_benchmark_speed_samples_indices",
+        ),
+        CheckConstraint("phase IN ('warmup', 'measured')", name="ck_benchmark_speed_samples_phase"),
+        CheckConstraint(
+            "time_s >= 0 AND time_s < 'Infinity'::float8", name="ck_benchmark_speed_samples_time"
+        ),
+    )
+
+
+class BenchmarkAggregation(Base):
+    """One successful calculation over explicitly recorded run inputs."""
+
+    __tablename__ = "benchmark_aggregations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    calculator_version: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    raw_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    incumbent_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    incumbent_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    parse_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_aggregations_source"
+        ),
+        CheckConstraint(
+            "raw_bytes > 0 AND incumbent_bytes >= 0 AND bytes >= 0",
+            name="ck_benchmark_aggregations_bytes",
+        ),
+        CheckConstraint(
+            "incumbent_seconds > 0 AND incumbent_seconds < 'Infinity'::float8 "
+            "AND parse_seconds >= 0 AND parse_seconds < 'Infinity'::float8",
+            name="ck_benchmark_aggregations_time",
+        ),
+    )
+
+
+class BenchmarkAggregationInput(Base):
+    """The exact runs used, preserved when later runs or aggregations are created."""
+
+    __tablename__ = "benchmark_aggregation_inputs"
+
+    aggregation_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("benchmark_aggregations.id", ondelete="CASCADE"), primary_key=True
+    )
+    run_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("benchmark_runs.id", ondelete="RESTRICT"), primary_key=True
+    )
+
+    __table_args__ = (Index("ix_benchmark_aggregation_inputs_run_id", "run_id"),)

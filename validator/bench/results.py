@@ -117,6 +117,7 @@ class Run:
 
     meta: Meta
     files: tuple[FileResult, ...]
+    raw_records: tuple[dict[str, object], ...] = ()
 
     def method_names(self) -> tuple[str, ...]:
         return tuple(self.meta.methods)
@@ -174,7 +175,7 @@ def parse(stdout: str, corpus: Corpus) -> Run:
     if meta.schema_version != SCHEMA_VERSION:
         raise Malformed(f"schema version {meta.schema_version}, expected {SCHEMA_VERSION}")
     files = tuple(_file(r, corpus) for r in records[1:] if r.get("kind") == "file")
-    return Run(meta=meta, files=files)
+    return Run(meta=meta, files=files, raw_records=tuple(records))
 
 
 def incumbent_agreement(runs: Iterable[Run]) -> tuple[str, ...]:

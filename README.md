@@ -446,6 +446,9 @@ If the systemd resource-limit probe fails, the local benchmark CLI warns that it
 
 ## Documents
 
+[Benchmark storage](docs/BENCHMARK_STORAGE.md) describes the five-table raw result and
+aggregation schema, timing queries, and migration rollback commands.
+
 | | |
 |---|---|
 | [docs/SCORING.md](docs/SCORING.md) | how emission is scored: the 60/40 rule, worked on the real frontier |
@@ -455,3 +458,24 @@ If the systemd resource-limit probe fails, the local benchmark CLI warns that it
 ## Trusted base
 
 Lean's kernel with its three axioms; Mathlib; Aeneas's Lean library; Charon and Aeneas themselves (the extracted model is what the proof is about); `measure/src/deflate.rs` and `token.rs`, unproved. Every toolchain download is sha256-pinned in `validator/verifier/config.sh`. The round-trip check through two independent inflaters is the empirical backstop for the last two.
+
+### Saving benchmark evidence to Postgres
+
+Ordinary `just bench` remains local and does not connect to Postgres. To opt in:
+
+```bash
+just db-migrate
+just bench-db miner/examples/lazy/parse.rs --corpus silesia-subset
+just bench-import data/benchmark-runs/<run-uuid>.jsonl
+```
+
+`bench-db` accepts the same arguments as `bench`, checks the database before benchmarking,
+and saves one complete local JSONL artifact per candidate before importing it. Both DB
+commands use `DATABASE_URL` or the existing `POSTGRES_*` settings in `.env`.
+They print database run IDs; aggregation, scoring, and weights remain separate.
+
+If a database write fails, the command exits unsuccessfully and the artifacts remain
+available for `bench-import`. Retrying returns the existing run ID. Multiple paths are
+accepted; each file is committed independently. Old single-candidate v3 JSONL files are
+supported. Old merged multi-candidate reports are rejected because they discarded
+reference samples. Importing requires neither corpus/source files nor a Rust build.
