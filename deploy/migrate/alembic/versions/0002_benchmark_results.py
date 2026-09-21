@@ -1,4 +1,4 @@
-"""Raw benchmark runs, timing samples and explicit aggregation inputs."""
+"""Raw runs, compression results, speed samples and aggregation inputs."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -44,6 +44,8 @@ def upgrade() -> None:
     op.create_table(
         "benchmark_runs",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
+        sa.Column("run_key", sa.Text(), nullable=True),
+        sa.UniqueConstraint("run_key", name="uq_benchmark_runs_run_key"),
         sa.Column("source_sha256", sa.Text(), nullable=False),
         sa.Column("candidate_method", sa.Text(), nullable=False),
         sa.Column("corpus", sa.Text(), nullable=False),
@@ -93,26 +95,72 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "benchmark_measurements",
+        "benchmark_compression_results",
+        sa.Column("run_id", sa.BigInteger(), nullable=False),
+        sa.Column("file_index", sa.Integer(), nullable=False),
+        sa.Column("method", sa.Text(), nullable=False),
+        sa.Column("file_path", sa.Text(), nullable=False),
+        sa.Column("file_sha256", sa.Text(), nullable=False),
+        sa.Column("raw_bytes", sa.BigInteger(), nullable=False),
+        sa.Column("output_bytes", sa.BigInteger(), nullable=True),
+        sa.Column("output_sha256", sa.Text(), nullable=True),
+        sa.Column("tokens_sha256", sa.Text(), nullable=True),
+        sa.Column("tokens_deterministic", sa.Boolean(), nullable=True),
+        sa.Column("succeeded", sa.Boolean(), nullable=False),
+        sa.ForeignKeyConstraint(["run_id"], ["benchmark_runs.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("run_id", "file_index", "method"),
+        sa.CheckConstraint("file_index >= 0", name="ck_benchmark_compression_results_index"),
+        sa.CheckConstraint(
+            "raw_bytes >= 0 AND (output_bytes IS NULL OR output_bytes >= 0)",
+            name="ck_benchmark_compression_results_bytes",
+        ),
+        sa.CheckConstraint(
+            "file_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_file_hash",
+        ),
+        sa.CheckConstraint(
+            "output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_output_hash",
+        ),
+        sa.CheckConstraint(
+            "tokens_sha256 IS NULL OR tokens_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_tokens_hash",
+        ),
+        sa.CheckConstraint(
+            "NOT succeeded OR (output_bytes IS NOT NULL AND output_sha256 IS NOT NULL"
+            " AND tokens_deterministic IS DISTINCT FROM FALSE)",
+            name="ck_benchmark_compression_results_success",
+        ),
+    )
+    op.create_table(
+        "benchmark_speed_samples",
         sa.Column("run_id", sa.BigInteger(), nullable=False),
         sa.Column("file_index", sa.Integer(), nullable=False),
         sa.Column("method", sa.Text(), nullable=False),
         sa.Column("repetition", sa.Integer(), nullable=False),
-        sa.Column("file_path", sa.Text(), nullable=False),
         sa.Column("phase", sa.Text(), nullable=False),
         sa.Column("order_index", sa.BigInteger(), nullable=False),
         sa.Column("time_s", sa.Float(), nullable=False),
         sa.CheckConstraint(
-            "phase IN ('warmup', 'measured')", name="ck_benchmark_measurements_phase"
+            "phase IN ('warmup', 'measured')", name="ck_benchmark_speed_samples_phase"
         ),
         sa.CheckConstraint(
-            "time_s >= 0 AND time_s < 'Infinity'::float8", name="ck_benchmark_measurements_time"
+            "time_s >= 0 AND time_s < 'Infinity'::float8", name="ck_benchmark_speed_samples_time"
         ),
         sa.CheckConstraint(
             "file_index >= 0 AND repetition >= 0 AND order_index >= 0",
-            name="ck_benchmark_measurements_indices",
+            name="ck_benchmark_speed_samples_indices",
         ),
-        sa.ForeignKeyConstraint(["run_id"], ["benchmark_runs.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["run_id", "file_index", "method"],
+            [
+                "benchmark_compression_results.run_id",
+                "benchmark_compression_results.file_index",
+                "benchmark_compression_results.method",
+            ],
+            ondelete="CASCADE",
+            name="fk_benchmark_speed_samples_result",
+        ),
         sa.PrimaryKeyConstraint("run_id", "file_index", "method", "repetition"),
     )
     op.add_column("score_snapshots", sa.Column("aggregation_id", sa.BigInteger(), nullable=True))
@@ -140,7 +188,8 @@ def downgrade() -> None:
     op.drop_column("submissions", "aggregation_id")
     op.drop_constraint("fk_scoresnapshot_aggregation", "score_snapshots", type_="foreignkey")
     op.drop_column("score_snapshots", "aggregation_id")
-    op.drop_table("benchmark_measurements")
+    op.drop_table("benchmark_speed_samples")
+    op.drop_table("benchmark_compression_results")
     op.drop_index(
         "ix_benchmark_aggregation_inputs_run_id", table_name="benchmark_aggregation_inputs"
     )

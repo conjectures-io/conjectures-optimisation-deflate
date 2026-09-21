@@ -132,6 +132,14 @@ bench-report *RUN:
 bench-compare A B:
     {{python}} -m bench.compare {{A}} {{B}}
 
+# Benchmark locally and explicitly persist per-candidate evidence in Postgres.
+bench-db *ARGS: build
+    {{bench}} {{ARGS}} --runs-dir {{root}}/data/benchmark-runs --store-db
+
+# Import/retry saved single-candidate JSONL artifacts without rerunning benchmarks.
+bench-import +FILES:
+    {{python}} -m bench.storage {{FILES}}
+
 # Remove every retained run workspace under data/bench-workspace/.
 bench-clean:
     {{bench}} --clean

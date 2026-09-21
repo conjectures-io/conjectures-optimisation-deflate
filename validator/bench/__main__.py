@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
 from loguru import logger
 
@@ -55,6 +56,7 @@ class Options:
     keep: bool
     bars: bool
     quiet: bool
+    store_db: bool
 
 
 def parse_args(argv: list[str] | None = None) -> Options:
@@ -75,6 +77,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
     ap.add_argument("--keep", action="store_true", help="keep the run workspace")
     ap.add_argument("--no-bars", action="store_true", help="skip miniz_oxide and libdeflate")
     ap.add_argument("--quiet", action="store_true", help="no table on stdout")
+    ap.add_argument("--store-db", action="store_true", help="also store per-candidate runs in DB")
     a = ap.parse_args(argv)
     return Options(
         submissions=cast("list[str]", a.submissions),
@@ -89,6 +92,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
         keep=cast(bool, a.keep),
         bars=not cast(bool, a.no_bars),
         quiet=cast(bool, a.quiet),
+        store_db=cast(bool, a.store_db),
     )
 
 
@@ -157,8 +161,8 @@ def write_runs_file(m: Measurement, runs_dir: Path, floor: float) -> Path:
     # One permanent, independently-readable artifact per run, never overwritten.
     runs_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    path = runs_dir / f"{stamp}_v{SCHEMA_VERSION}.jsonl"
-    with path.open("w") as f:
+    path = runs_dir / f"{stamp}_{uuid4().hex[:12]}_v{SCHEMA_VERSION}.jsonl"
+    with path.open("x") as f:
         for rec in report.records(m, floor):
             f.write(json.dumps(rec) + "\n")
     return path
@@ -179,6 +183,24 @@ def main(argv: list[str] | None = None) -> int:
         sweep(config)
         print(f"swept {config.workspace}")
         return 0
+    if o.store_db:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from db.engine import create_db_engine
+
+        from .storage import preflight
+
+        engine = create_db_engine()
+        try:
+            preflight(engine)
+        except SQLAlchemyError:
+            print(
+                "Database preflight failed; check DB configuration and run just db-migrate.",
+                file=sys.stderr,
+            )
+            return 2
+        finally:
+            engine.dispose()
     gone = corpora.load(VALIDATOR).missing()
     if gone:
         logger.warning(
@@ -194,15 +216,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{e}\n{detail}".rstrip(), file=sys.stderr)
         return 2
 
+    artifacts: list[Path] = []
+    if o.store_db:
+        from .artifacts import write_import_files
+
+        artifacts = write_import_files(m, o.runs_dir or REPO / "data/benchmark-runs", o.speed_floor)
+        for path in artifacts:
+            print(path)
+
     if not o.quiet:
         print(report.table(m, o.speed_floor))
     if o.out is not None:
         o.out.write_text(json.dumps(report.summary(m, o.speed_floor), indent=2) + "\n")
         logger.info(f"[bench] wrote {o.out}")
-    if o.runs_dir is not None:
+    if o.runs_dir is not None and not o.store_db:
         print(write_runs_file(m, o.runs_dir, o.speed_floor))
     if m.kept:
         logger.info(f"[bench] kept {m.workspace}")
+    if o.store_db:
+        from .storage import main as import_main
+
+        return import_main([str(path) for path in artifacts])
     return 0
 
 

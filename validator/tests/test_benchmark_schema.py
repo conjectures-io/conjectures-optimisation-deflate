@@ -33,6 +33,24 @@ def run(conn, corpus="a", raw=None, status="complete"):
     )
 
 
+def compression_result(conn, rid, **overrides):
+    values = dict(
+        run_id=rid,
+        file_index=0,
+        method="candidate",
+        file_path="f",
+        file_sha256="b" * 64,
+        raw_bytes=100,
+        output_bytes=70,
+        output_sha256="c" * 64,
+        tokens_sha256="d" * 64,
+        tokens_deterministic=True,
+        succeeded=True,
+    )
+    values.update(overrides)
+    conn.execute(sa.insert(models.BenchmarkCompressionResult).values(**values))
+
+
 def aggregate(conn, *runs):
     aid = add(
         conn,
@@ -92,12 +110,12 @@ def test_raw_roundtrip_and_sql_statistics(migrated):
     try:
         with engine.begin() as conn:
             rid = run(conn, raw=raw)
+            compression_result(conn, rid, file_path="test.bin")
             for i, (phase, time) in enumerate([("warmup", 20), ("measured", 1), ("measured", 3)]):
                 conn.execute(
-                    sa.insert(models.BenchmarkMeasurement).values(
+                    sa.insert(models.BenchmarkSpeedSample).values(
                         run_id=rid,
                         file_index=0,
-                        file_path="test.bin",
                         method="candidate",
                         repetition=i,
                         phase=phase,
@@ -108,7 +126,7 @@ def test_raw_roundtrip_and_sql_statistics(migrated):
             assert conn.execute(sa.select(models.BenchmarkRun.raw_data)).scalar_one() == raw
             stddev = conn.execute(
                 sa.text(
-                    "SELECT stddev_pop(time_s) FROM benchmark_measurements "
+                    "SELECT stddev_pop(time_s) FROM benchmark_speed_samples "
                     "WHERE run_id=:r AND phase='measured'"
                 ),
                 {"r": rid},
@@ -174,12 +192,12 @@ def test_invalid_timings_rejected(migrated, time):
     try:
         with engine.begin() as conn:
             rid = run(conn)
+            compression_result(conn, rid)
         with pytest.raises(IntegrityError), engine.begin() as conn:
             conn.execute(
-                sa.insert(models.BenchmarkMeasurement).values(
+                sa.insert(models.BenchmarkSpeedSample).values(
                     run_id=rid,
                     file_index=0,
-                    file_path="f",
                     method="candidate",
                     repetition=0,
                     phase="measured",
@@ -219,5 +237,50 @@ def test_upgrade_and_downgrade_preserve_legacy_rows(migrated):
                 == "digest"
             )
         command.upgrade(config, "head")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"output_bytes": None},
+        {"output_bytes": -1},
+        {"raw_bytes": None},
+        {"raw_bytes": -1},
+        {"output_sha256": None},
+        {"file_sha256": "wrong"},
+        {"tokens_deterministic": False},
+    ],
+)
+def test_successful_compression_requires_valid_sizes_and_hashes(migrated, bad):
+    engine = sa.create_engine(migrated)
+    try:
+        with engine.begin() as conn:
+            rid = run(conn)
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            compression_result(conn, rid, **bad)
+    finally:
+        engine.dispose()
+
+
+def test_speed_sample_requires_matching_compression_result(migrated):
+    engine = sa.create_engine(migrated)
+    try:
+        with engine.begin() as conn:
+            rid = run(conn)
+            compression_result(conn, rid)
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                sa.insert(models.BenchmarkSpeedSample).values(
+                    run_id=rid,
+                    file_index=0,
+                    method="other",
+                    repetition=0,
+                    phase="measured",
+                    order_index=0,
+                    time_s=1,
+                )
+            )
     finally:
         engine.dispose()

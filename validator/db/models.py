@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Text,
@@ -240,13 +241,14 @@ class RateLimitWindow(Base):
 class BenchmarkRun(Base):
     """One candidate on one corpus, with its paired incumbent and references.
 
-    raw_data is the authoritative JSONL record array. Measurements are its SQL
-    timing projection; writers must insert both atomically.
+    raw_data is the original JSONL evidence. Compression results and speed samples
+    are its SQL projections; writers must insert all three atomically.
     """
 
     __tablename__ = "benchmark_runs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_key: Mapped[str | None] = mapped_column(Text)
     source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     candidate_method: Mapped[str] = mapped_column(Text, nullable=False)
     corpus: Mapped[str] = mapped_column(Text, nullable=False)
@@ -262,6 +264,7 @@ class BenchmarkRun(Base):
     raw_data: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
 
     __table_args__ = (
+        UniqueConstraint("run_key", name="uq_benchmark_runs_run_key"),
         CheckConstraint("source_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_runs_source"),
         CheckConstraint("corpus_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_runs_corpus"),
         CheckConstraint("status IN ('complete', 'failed')", name="ck_benchmark_runs_status"),
@@ -274,31 +277,83 @@ class BenchmarkRun(Base):
     )
 
 
-class BenchmarkMeasurement(Base):
-    """A timing sample; file_index and repetition refer to positions in raw_data."""
+class BenchmarkCompressionResult(Base):
+    """One method's compression result on one input file, independent of timing reps."""
 
-    __tablename__ = "benchmark_measurements"
+    __tablename__ = "benchmark_compression_results"
 
     run_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("benchmark_runs.id", ondelete="CASCADE"), primary_key=True
     )
     file_index: Mapped[int] = mapped_column(Integer, primary_key=True)
     method: Mapped[str] = mapped_column(Text, primary_key=True)
-    repetition: Mapped[int] = mapped_column(Integer, primary_key=True)
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    output_sha256: Mapped[str | None] = mapped_column(Text)
+    tokens_sha256: Mapped[str | None] = mapped_column(Text)
+    # None means no repeated token comparison was available (e.g. external references).
+    tokens_deterministic: Mapped[bool | None] = mapped_column(Boolean)
+    succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("file_index >= 0", name="ck_benchmark_compression_results_index"),
+        CheckConstraint(
+            "raw_bytes >= 0 AND (output_bytes IS NULL OR output_bytes >= 0)",
+            name="ck_benchmark_compression_results_bytes",
+        ),
+        CheckConstraint(
+            "file_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_file_hash",
+        ),
+        CheckConstraint(
+            "output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_output_hash",
+        ),
+        CheckConstraint(
+            "tokens_sha256 IS NULL OR tokens_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_benchmark_compression_results_tokens_hash",
+        ),
+        CheckConstraint(
+            "NOT succeeded OR (output_bytes IS NOT NULL AND output_sha256 IS NOT NULL"
+            " AND tokens_deterministic IS DISTINCT FROM FALSE)",
+            name="ck_benchmark_compression_results_success",
+        ),
+    )
+
+
+class BenchmarkSpeedSample(Base):
+    """One parse-time repetition linked to its file/method compression result."""
+
+    __tablename__ = "benchmark_speed_samples"
+
+    run_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    file_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    method: Mapped[str] = mapped_column(Text, primary_key=True)
+    repetition: Mapped[int] = mapped_column(Integer, primary_key=True)
     phase: Mapped[str] = mapped_column(Text, nullable=False)
     order_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    # Same unit and representation as the engine's time_s; no lossy ns conversion.
     time_s: Mapped[float] = mapped_column(Float, nullable=False)
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "file_index", "method"],
+            [
+                "benchmark_compression_results.run_id",
+                "benchmark_compression_results.file_index",
+                "benchmark_compression_results.method",
+            ],
+            ondelete="CASCADE",
+            name="fk_benchmark_speed_samples_result",
+        ),
         CheckConstraint(
             "file_index >= 0 AND repetition >= 0 AND order_index >= 0",
-            name="ck_benchmark_measurements_indices",
+            name="ck_benchmark_speed_samples_indices",
         ),
-        CheckConstraint("phase IN ('warmup', 'measured')", name="ck_benchmark_measurements_phase"),
+        CheckConstraint("phase IN ('warmup', 'measured')", name="ck_benchmark_speed_samples_phase"),
         CheckConstraint(
-            "time_s >= 0 AND time_s < 'Infinity'::float8", name="ck_benchmark_measurements_time"
+            "time_s >= 0 AND time_s < 'Infinity'::float8", name="ck_benchmark_speed_samples_time"
         ),
     )
 
