@@ -38,7 +38,7 @@ from loguru import logger
 from sandbox import bwrap
 
 from .corpora import Corpus
-from .errors import Malformed, Misconfigured
+from .errors import BenchError, Malformed, Misconfigured
 from .results import INCUMBENT, Run, incumbent_agreement
 from .results import parse as parse_results
 
@@ -59,7 +59,7 @@ class Keep(Enum):
     NEVER = "never"
 
 
-class Failed(RuntimeError):
+class Failed(BenchError):
     """A run that did not produce measurements, with its workspace left on disk."""
 
     def __init__(self, message: str, *, detail: str, workspace: Path) -> None:
@@ -184,6 +184,10 @@ def check(config: Config) -> str:
     # Refuse to claim a sandbox that cannot confine anything; return the limits in force.
     try:
         bwrap.check(config.enabled)
+        for memory_mb in {config.build_memory_mb, config.memory_mb}:
+            bwrap.check_resources(
+                bwrap.Sandbox(enabled=config.enabled, memory_mb=memory_mb, cpus=config.cpus)
+            )
     except bwrap.Unavailable as e:
         raise Misconfigured(str(e)) from e
     if not config.engine.exists():

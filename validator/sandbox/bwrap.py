@@ -57,6 +57,21 @@ def check(enabled: bool) -> None:
         )
 
 
+def check_resources(sandbox: Sandbox) -> None:
+    """Check requested systemd limits before attributing failures to a parser."""
+    if not sandbox.enabled:
+        return
+    argv = _resource_wrap(sandbox, ["true"])
+    if argv == ["true"]:
+        return
+    try:
+        probe = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired as e:
+        raise Unavailable("systemd resource limits probe timed out") from e
+    if probe.returncode != 0:
+        raise Unavailable("systemd resource limits are unavailable: " + probe.stderr.strip())
+
+
 def run(sandbox: Sandbox, cmd: list[str], *, cwd: Path | None, timeout: float) -> Result:
     # Confine `cmd` per `sandbox` and run it; the sandbox is the whole story.
     argv = _argv(sandbox) + cmd
