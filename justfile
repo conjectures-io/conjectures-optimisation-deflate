@@ -233,7 +233,7 @@ db-weights:
     SQL
 
 # One-time: move an old SQLite queue into Postgres. See the script's own --help.
-db-import-sqlite DB="validator/.work/service.db" *ARGS:
+db-import-sqlite DB="validator/.work/service.db" *ARGS="":
     {{python}} {{val}}/tools/import-sqlite.py {{DB}} {{ARGS}}
 
 # --- Submission service -----------------------------------------------------
