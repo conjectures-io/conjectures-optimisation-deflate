@@ -209,6 +209,10 @@ db-down:
 db-migrate:
     cd deploy/migrate && {{python}} -m alembic upgrade head
 
+# Reverse migrations to a revision; removes data introduced by those revisions.
+db-downgrade REVISION:
+    cd deploy/migrate && {{python}} -m alembic downgrade {{REVISION}}
+
 # Drop the schema and rebuild it from the migrations. Destroys every submission.
 db-reset:
     cd deploy/migrate && {{python}} -m alembic downgrade base

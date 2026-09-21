@@ -446,6 +446,9 @@ If the systemd resource-limit probe fails, the local benchmark CLI warns that it
 
 ## Documents
 
+[Benchmark storage](docs/BENCHMARK_STORAGE.md) describes the four-table raw result and
+aggregation schema, timing queries, and migration rollback commands.
+
 | | |
 |---|---|
 | [docs/SCORING.md](docs/SCORING.md) | how emission is scored: the 60/40 rule, worked on the real frontier |
