@@ -83,6 +83,17 @@ def accept(store, hotkey, byte_count, seconds, *, incumbent=2_153_387, digest=No
         incumbent_seconds=0.52,
         time_ratio=seconds / 0.52,
     )
+    from verifier.identity import fingerprint
+
+    with store_pkg.session_scope(store.sessions) as session:
+        row = session.get(models.Submission, sub_id)
+        assert row is not None
+        row.source_sha256 = "a" * 64
+        row.proof_sha256 = "b" * 64
+        row.verifier_fingerprint = fingerprint()
+        row.static_verified_at = store_pkg.now()
+        row.lean_verified_at = store_pkg.now()
+        row.measured_source_sha256 = row.source_sha256
     return sub_id
 
 

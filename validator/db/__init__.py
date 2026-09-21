@@ -20,6 +20,7 @@ from .registrations import NoSlot, RegistrationsDb
 from .scoring import ScoredSubmission, ScoringDb
 from .status import PENDING, TERMINAL, SubmissionState
 from .submissions import SubmissionsDb
+from .verification import VerificationDb
 
 __all__ = [
     "NoSlot",
@@ -57,6 +58,7 @@ class Store:
         self.engine = engine
         self.sessions = session_factory(engine)
         self.submissions = SubmissionsDb(self.sessions)
+        self.verification = VerificationDb(self.sessions)
         self.registrations = RegistrationsDb(self.sessions)
         self.scoring = ScoringDb(self.sessions)
         self.rate = RateLimiter(self.sessions, limit=rate_limit, window_seconds=rate_window_seconds)

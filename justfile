@@ -168,28 +168,36 @@ check DIR *ARGS:
 check-proof DIR:
     {{python}} {{val}}/verifier/verify.py {{root}}/{{DIR}} --no-score
 
-# Translate a submission's Rust into Lean, and stop. For seeing what your proof
-# will be about before writing it.
-extract DIR:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{val}}/slot/generated
-    cp {{root}}/{{DIR}}/parse.rs {{val}}/slot/generated/parse.rs
-    {{val}}/verifier/extract.sh
-    echo
-    echo "read {{val}}/lean/Slot/Funs.lean -- that is what the proof is about"
+# Identity to configure on a separate scoring service.
+verification-fingerprint:
+    {{python}} -m verifier.identity
 
-# Build the Lean side of a submission: contract, extracted slot, proof, gate.
+# Preview old completed workspaces; pass --apply to remove them.
+verification-clean *ARGS:
+    {{python}} {{val}}/verifier/cleanup.py {{ARGS}}
+
+# Static syntax and resolved Rust checks; does not invoke Lean.
+preverify RUST:
+    {{python}} {{val}}/verifier/verify.py {{RUST}} --stage static --keep always
+
+# Verify immutable stored submissions; DB access is checked before tools run.
+preverify-db ID:
+    {{python}} {{val}}/verifier/verify.py --submission-id {{ID}} --stage static --keep always
+
+verify-lean-db ID:
+    {{python}} {{val}}/verifier/verify.py --submission-id {{ID}} --stage lean --keep always
+
+# Translation, statement and axiom checks; no DB required.
+verify-lean RUST PROOF:
+    {{python}} {{val}}/verifier/verify.py {{RUST}} --stage lean --proof {{PROOF}} --keep always
+
+# Produce a private extracted model for proof development.
+extract DIR:
+    {{python}} {{val}}/verifier/verify.py {{DIR}}/parse.rs --stage extract --keep always
+
+# Check a proof in its own workspace.
 prove DIR:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    . {{val}}/verifier/config.sh
-    export PYTHON={{python}}
-    mkdir -p {{val}}/slot/generated
-    cp {{root}}/{{DIR}}/parse.rs {{val}}/slot/generated/parse.rs
-    cp {{root}}/{{DIR}}/Parse.lean {{val}}/lean/Proof/Parse.lean
-    {{val}}/verifier/extract.sh
-    cd {{val}}/lean && lake build
+    {{python}} {{val}}/verifier/verify.py {{DIR}}/parse.rs --stage lean --proof {{DIR}}/Parse.lean --keep always
 
 # --- The store --------------------------------------------------------------
 

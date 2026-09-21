@@ -10,8 +10,10 @@ means several of these can drain one queue, on one box or on several.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -83,19 +85,46 @@ def scored(results: Path) -> dict[str, int | float]:
     return full
 
 
-def run_gate(submission_dir: Path, results: Path) -> subprocess.CompletedProcess[str]:
+def run_gate(
+    submission_dir: Path,
+    results: Path,
+    claim: dt.datetime | None = None,
+    attempt: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     # Run verify.py over one submission directory, capped. A timeout is the validator
     # refusing to spend more; it is reported to the miner as a rejection with the reason.
     cmd = [sys.executable, str(VERIFY), str(submission_dir), "--results", str(results)]
-    try:
-        return subprocess.run(
-            cmd, capture_output=True, text=True, env=dict(os.environ), timeout=TOTAL_TIMEOUT
-        )
-    except subprocess.TimeoutExpired as exc:
-        out = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        return subprocess.CompletedProcess(
-            cmd, 1, out + f"\nREJECTED: the gate did not finish within {TOTAL_TIMEOUT:.0f}s\n", ""
-        )
+    # Stored submission directories are named by their database ID. Local gate
+    # invocations remain available separately through just check/verify-lean.
+    cmd += ["--submission-id", str(int(submission_dir.name))]
+    if claim is not None:
+        cmd += ["--claim", claim.isoformat()]
+    if attempt is not None:
+        cmd += ["--claim-token", attempt]
+    with subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=dict(os.environ),
+        start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=TOTAL_TIMEOUT)
+            return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                stdout, stderr = process.communicate()
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout + f"\nREJECTED: the gate did not finish within {TOTAL_TIMEOUT:.0f}s\n",
+                stderr,
+            )
 
 
 def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> str:
@@ -108,7 +137,9 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
     logger.info(f"[worker] verifying submission {sub.id} ({sub.hotkey[:8]}…)")
     with tempfile.TemporaryDirectory(prefix=f"score-{sub.id}-") as tmp:
         results = Path(tmp) / "results.json"
-        result = run_gate(settings.submission_dir(sub.id), results)
+        result = run_gate(
+            settings.submission_dir(sub.id), results, sub.claimed_at, sub.verification_attempt
+        )
         measured = scored(results) if result.returncode == 0 else {}
     report = result.stdout
     state = STATE_OF_EXIT.get(result.returncode)
@@ -118,13 +149,21 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
             f"[worker] validator error on submission {sub.id}:\n"
             f"{report[-1500:]}\n{result.stderr[-1500:]}"
         )
-        store.submissions.requeue(sub.id)
+        store.submissions.requeue(
+            sub.id, expected_claim=sub.claimed_at, expected_attempt=sub.verification_attempt
+        )
         return SubmissionState.ERROR.value
 
     fields: dict[str, object] = {"exit_code": result.returncode, "report": report}
     if state is SubmissionState.ACCEPTED:
         fields |= measured
-    final = store.submissions.finish(sub.id, state, **fields)
+    final = store.submissions.finish(
+        sub.id,
+        state,
+        expected_claim=sub.claimed_at,
+        expected_attempt=sub.verification_attempt,
+        **fields,
+    )
     logger.info(
         f"[worker] submission {sub.id} {final}"
         + (f" {fields['bytes']} bytes" if "bytes" in fields else "")

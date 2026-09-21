@@ -94,6 +94,15 @@ class Submission(Base):
     # The gate's full stdout: the stage report a miner reads to find out what failed.
     report: Mapped[str | None] = mapped_column(Text)
 
+    source_sha256: Mapped[str | None] = mapped_column(Text)
+    proof_sha256: Mapped[str | None] = mapped_column(Text)
+    verifier_fingerprint: Mapped[str | None] = mapped_column(Text)
+    verification_attempt: Mapped[str | None] = mapped_column(Text)
+    static_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    lean_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Only the trusted gate can bind its measurements to a verification identity.
+    measured_source_sha256: Mapped[str | None] = mapped_column(Text)
+
     # --- the score, as the harness measured it -------------------------------
     # Uncompressed corpus size. Needed for the Pareto frontier's ratio axis, which is
     # bytes as a percentage of raw; without it a submission cannot be scored.
@@ -117,6 +126,27 @@ class Submission(Base):
 
     __table_args__ = (
         UniqueConstraint("hotkey", "digest", name="uq_submissions_hotkey_digest"),
+        CheckConstraint(
+            "lean_verified_at IS NULL OR static_verified_at IS NOT NULL",
+            name="ck_submission_lean_requires_static",
+        ),
+        CheckConstraint(
+            "static_verified_at IS NULL OR (source_sha256 IS NOT NULL AND "
+            "proof_sha256 IS NOT NULL AND verifier_fingerprint IS NOT NULL)",
+            name="ck_submission_verification_identity",
+        ),
+        *[
+            CheckConstraint(
+                f"{name} IS NULL OR {name} ~ '^[0-9a-f]{{64}}$'", name=f"ck_submission_{name}"
+            )
+            for name in (
+                "source_sha256",
+                "proof_sha256",
+                "verifier_fingerprint",
+                "measured_source_sha256",
+            )
+        ],
+        Index("ix_submissions_source_sha256", "source_sha256"),
         CheckConstraint(f"state IN ({_in_list(STATE_VALUES)})", name="ck_submissions_state"),
         Index("ix_submissions_hotkey", "hotkey"),
         # The queue scan: oldest queued first, arrival order.

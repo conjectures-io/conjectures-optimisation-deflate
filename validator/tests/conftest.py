@@ -174,7 +174,7 @@ def settings(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def stub_verifier(tmp_path, monkeypatch):
+def stub_verifier(tmp_path, monkeypatch, store):
     # Stand in for the six-stage gate, so the service tests need no toolchain. The stub
     # writes the same `--results` JSON the real gate does, which is what the worker
     # reads; the TOTAL and `parse time` lines are there because the report is still a
@@ -184,6 +184,28 @@ def stub_verifier(tmp_path, monkeypatch):
     path = tmp_path / "verify.py"
     path.write_text(STUB_VERIFIER)
     monkeypatch.setattr(worker_mod, "VERIFY", path)
+    original = worker_mod.run_gate
+
+    def run_gate(directory, results, claim=None, attempt=None):
+        result = original(directory, results, claim, attempt)
+        if result.returncode == 0 and worker_mod.VERIFY == path:
+            # The stub stands in for all successful verification milestones too.
+            from verifier.identity import fingerprint
+
+            sid = int(directory.name)
+            token, _ = store.verification.begin(
+                sid,
+                (directory / "parse.rs").read_bytes(),
+                (directory / "Parse.lean").read_bytes(),
+                fingerprint(),
+                expected_claim=claim,
+                expected_attempt=attempt,
+            )
+            for stage in ("static", "lean", "measured"):
+                store.verification.publish(sid, token, stage)
+        return result
+
+    monkeypatch.setattr(worker_mod, "run_gate", run_gate)
     return path
 
 

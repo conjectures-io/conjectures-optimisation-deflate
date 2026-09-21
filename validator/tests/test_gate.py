@@ -33,7 +33,7 @@ sys.path.insert(0, str(VALIDATOR / "verifier"))
 import verify  # noqa: E402 - the verifier is a script, not a package
 
 #: Not copied into the throwaway tree, but symlinked back so a build can reuse them.
-SHARED = [".work", "lean/.lake", "slot/target", "measure/target"]
+SHARED = [".work", "lean/.lake", "slot/target", "measure/target", "precheck/target"]
 
 FORGED_REPORT = "'accepted' depends on axioms: [propext, Classical.choice, Quot.sound]"
 
@@ -77,8 +77,11 @@ def submission(tmp_path: Path) -> Path:
 
 def check(tree: Path, submission: Path) -> subprocess.CompletedProcess[str]:
     # The proof gate on `submission`, stages 0-5, never the score.
+    import os
+
     return subprocess.run(
         [sys.executable, str(tree / "verifier/verify.py"), str(submission), "--no-score"],
+        env=dict(os.environ, VERIFY_LEAN_MEMORY_MB="0"),
         capture_output=True,
         text=True,
     )
@@ -143,7 +146,7 @@ def test_policy_accepts_the_reference_submissions(d: Path):
 @pytest.mark.parametrize(
     "rust, why",
     [
-        ("'outer: while pos < n {", "labelled loops"),
+        ("'outer: while pos < n {}", "labelled loops"),
         ("unsafe { }", "`unsafe`"),
         ("for x in 0..3 { }", "Iterator"),
         ('let t = include_bytes!("corpus.bin");', "embedded data"),
@@ -344,57 +347,36 @@ def test_forged_axiom_report_in_the_build_log_is_ignored(tree: Path, submission:
 needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap not installed")
 
 
-def sandboxed(cmd: str) -> subprocess.CompletedProcess[str]:
-    # A shell command inside exactly the sandbox the verifier uses for the proof.
-    return subprocess.run(
-        verify.sandbox_prefix() + ["sh", "-c", cmd], capture_output=True, text=True
+def test_private_sandbox_cannot_modify_inputs_or_dependencies(tmp_path, monkeypatch):
+    from workspace import Workspace
+
+    from sandbox import bwrap
+
+    workspace = Workspace(VALIDATOR, tmp_path)
+    monkeypatch.setattr(verify, "work_root", workspace.path)
+    monkeypatch.setattr(verify, "lean_root", workspace.path / "lean")
+    monkeypatch.setattr(verify, "LEAN_MEMORY_MB", 0)
+    target = workspace.path / "lean/Lz77/Spec.lean"
+    before = target.read_bytes()
+    result = bwrap.run(
+        verify.sandbox_spec(),
+        ["sh", "-c", 'echo bad > "$1"', "test", str(target)],
+        cwd=workspace.path,
+        timeout=10,
+        env=verify.tool_environment(),
     )
-
-
-@needs_bwrap
-@pytest.mark.parametrize(
-    "target",
-    [
-        "lean/Lz77/Spec.lean",
-        "lean/Verify/Obligation.lean",
-        "lean/Slot/Funs.lean",
-        "lean/.lake/packages/mathlib/README.md",
-        "lean/.lake/build/lib/lean/Lz77.olean",
-        "verifier/PINS.json",
-    ],
-)
-def test_sandbox_blocks_writes_to_what_the_proof_is_judged_against(target: str):
-    # Source, contract oleans, Mathlib and the pins are all read-only inside.
-    path = VALIDATOR / target
-    if not path.exists():
-        pytest.skip(f"{target} not built here")
-    before = path.read_bytes()
-    # EROFS as a user; EACCES when root is mapped to nobody inside the namespace (CI containers).
-    r = sandboxed(f"echo x >> {path}")
-    assert r.returncode != 0 and ("Read-only" in r.stderr or "Permission denied" in r.stderr), (
-        r.stderr
+    assert result.returncode != 0
+    assert target.read_bytes() == before
+    result = bwrap.run(
+        verify.sandbox_spec(),
+        ["cat", "/proc/net/dev"],
+        cwd=workspace.path,
+        timeout=10,
+        env=verify.tool_environment(),
     )
-    assert path.read_bytes() == before
-
-
-@needs_bwrap
-def test_sandbox_lets_lake_write_only_the_proof_artifacts():
-    # The build directory is writable (Lake needs it), Mathlib's tree is not.
-    build = VALIDATOR / "lean/.lake/build"
-    if not build.exists():
-        pytest.skip("lean/.lake/build not built here")
-    probe = build / ".sandbox-probe"
-    assert sandboxed(f"echo x > {probe} && rm {probe}").returncode == 0
-    assert not probe.exists()
-
-
-@needs_bwrap
-def test_sandbox_has_no_network():
-    # `/proc/net/dev` is namespaced; `/sys/class/net` would show the host's.
-    r = sandboxed("cat /proc/net/dev")
-    assert r.returncode == 0, r.stderr
-    ifaces = [ln.split(":")[0].strip() for ln in r.stdout.splitlines()[2:]]
-    assert ifaces == ["lo"], r.stdout
+    assert result.returncode == 0
+    assert [line.split(":")[0].strip() for line in result.stdout.splitlines()[2:]] == ["lo"]
+    workspace.finish(0, "never")
 
 
 def test_missing_sandbox_is_a_validator_error_not_a_rejection(
@@ -483,7 +465,7 @@ def test_template_passes_when_lake_packages_is_a_symlink(tmp_path: Path, submiss
         symlinks=True,
         ignore=shutil.ignore_patterns(".work", ".lake", "target", "tests", "__pycache__"),
     )
-    for rel in [".work", "slot/target", "measure/target"]:
+    for rel in [".work", "slot/target", "measure/target", "precheck/target"]:
         if (VALIDATOR / rel).exists():
             (dst / rel).symlink_to(VALIDATOR / rel, target_is_directory=True)
     # Only `packages` is shared; the contract and slot build fresh into this copy.

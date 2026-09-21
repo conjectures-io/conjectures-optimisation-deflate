@@ -1,5 +1,8 @@
 # conjectures-miniz-oxide-competition
 
+Verification now runs in private workspaces with separate static, Lean and benchmark
+stages. See [verification commands, supported Rust and database eligibility](docs/VERIFICATION.md).
+
 ## Quick Summary
 
 - A proof-gated DEFLATE competition. Miners submit a Rust LZ77 parser and a Lean proof that its token stream decodes back to the input; a six-stage verifier re-extracts the Rust with Charon and Aeneas, type-checks the proof against a pinned contract inside a sandbox, and scores accepted parsers by compressed bytes on a held-out corpus. Lower wins.
@@ -321,14 +324,14 @@ Corpora live in `validator/corpora.toml` (`just corpora` lists them); a held-out
 | stage | checks | stops |
 |---|---|---|
 | 0 intake | exactly two files, each under 512 KB | smuggled files |
-| 1 policy | Rust inside the translated subset; Lean that runs no code | `unsafe`, iterators, `#eval`, `elab` |
-| 2 pins | 40 contract, engine and gate files unchanged | editing what you are judged against |
+| 1 policy | syntax-aware Rust precheck; Lean source prefilter | unsafe code, conditional compilation, custom macros, direct I/O |
+| 2 static | pinned Charon IR and reviewed external operations | aliased/indirect capabilities and unsupported models |
 | 3 extract | Charon and Aeneas run by the validator | a self-supplied extraction |
 | 4 statement | `LZ77.Obligation slot.parse` type-checks, in bubblewrap, under time and memory caps | a weakened theorem, a runaway proof |
-| 5 axioms | only `propext`, `Classical.choice`, `Quot.sound`, read from a separate `lean` run; pins re-hashed | `sorry`, a forged report |
+| 5 axioms | only `propext`, `Classical.choice`, `Quot.sound`, read from a separate read-only `lean` run; extraction re-hashed | `sorry`, a forged report |
 | 6 score | each parser built as its own cdylib in a sandbox that may write only its own workspace, then measured in one that may write nothing: round trip through two inflaters, bytes, speed floor | wrong output, a slow win |
 
-Exit 0 accepted, 1 rejected, 2 the validator itself is broken.
+Exit 0 accepted, 1 rejected, 2 the validator itself is broken. Pin integrity is checked at setup/CI, not per submission. See [the verification guide](docs/VERIFICATION.md) for independent stage commands and the supported subset.
 
 ## Layout
 
