@@ -407,6 +407,43 @@ just bench-compare data/benchmark-runs/A.jsonl data/benchmark-runs/B.jsonl   # t
 
 With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; the incumbent, `miniz_oxide` and `libdeflate` are always measured. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Only the parse is timed, with a warmup round and round-robin over methods, and every round hashes the token stream so a non-deterministic parser is caught. Runs record the sha256 of every source and corpus file and are never overwritten.
 
+### Memory and CPU limits: systemd user setup
+
+On Linux with systemd, benchmarks use `systemd-run --user --scope` to apply memory and CPU limits, alongside bubblewrap isolation. This requires a running systemd user manager. If you see `Failed to connect to bus: No such file or directory`, check the user session:
+
+```bash
+loginctl show-user "$(id -un)" -p State -p Linger -p RuntimePath
+systemctl --user status
+```
+
+If the user is not logged in or lingering, enable lingering and start the user manager. Run these commands as the account that will run the benchmark, using `sudo` only as shown:
+
+```bash
+sudo loginctl enable-linger "$(id -un)"
+sudo systemctl start "user@$(id -u).service"
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+```
+
+[Lingering](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html#enable-linger%20USER%E2%80%A6) keeps the user manager available after logout and starts it at boot. The exports point this shell at that user's runtime directory and bus; they do not start the manager themselves.
+
+Verify that the requested limits can be applied, then benchmark:
+
+```bash
+# Choose CPU IDs available on your machine; this example uses logical CPUs 2–3.
+taskset -pc $$
+systemd-run --user --scope -p MemoryMax=2048M -p AllowedCPUs=2-3 true
+
+VERIFY_BENCH_BUILD_MEMORY_MB=4096 \
+VERIFY_BENCH_MEMORY_MB=2048 \
+VERIFY_BENCH_CPUS=2-3 \
+just bench miner/examples/lazy/parse.rs
+```
+
+This allows 4 GiB during compilation and 2 GiB during measurement, with both restricted to logical CPUs 2–3. CPU restriction does not reserve those CPUs exclusively or impose a CPU-time quota. These settings can also go in `.env`; memory limits default to the values above, while CPU placement is unrestricted by default.
+
+If the systemd resource-limit probe fails, the local benchmark CLI warns that it is running without memory or CPU limits and retains bubblewrap isolation when available. A successful benchmark alone therefore does not confirm that limits were applied: the probe above must succeed, and the benchmark must not report that fallback. Validator benchmark runs reject a failed resource-limit probe.
+
 ## Documents
 
 | | |

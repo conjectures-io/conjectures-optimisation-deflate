@@ -29,6 +29,8 @@ from typing import cast
 
 from loguru import logger
 
+from sandbox import bwrap
+
 from . import corpora, report
 from .driver import Config, Keep, Measurement, check, run, sweep
 from .errors import BenchError, Misconfigured
@@ -121,6 +123,14 @@ def configure(o: Options) -> Config:
         keep=Keep.ALWAYS if o.keep else config.keep,
         bars=config.bars and o.bars,
     )
+    if config.enabled:
+        try:
+            for memory_mb in {config.build_memory_mb, config.memory_mb}:
+                bwrap.check_resources(bwrap.Sandbox(memory_mb=memory_mb, cpus=config.cpus))
+        except bwrap.Unavailable as e:
+            logger.warning(f"[bench] {e}")
+            logger.warning("[bench] running without memory or CPU limits")
+            config = dataclasses.replace(config, memory_mb=0, build_memory_mb=0, cpus="")
     try:
         check(config)
     except Misconfigured as e:
