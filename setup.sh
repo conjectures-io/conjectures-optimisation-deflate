@@ -33,6 +33,24 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 missing=0
 
+# True when `$1 --version` reports at least $2. A pinned tool that is merely present
+# is not enough: apt ships just 1.21, which refuses a variadic parameter after a
+# defaulted one and so rejects this repo's justfile outright -- every recipe with it.
+# Checking presence alone reported "ok" while the pin went uninstalled.
+at_least() {
+    local got
+    got="$("$1" --version 2>/dev/null | tr -cd '0-9.\n ' | tr ' ' '\n' | grep -m1 '[0-9]\.')" || return 1
+    [ -n "$got" ] || return 1
+    [ "$(printf '%s\n%s\n' "$2" "$got" | sort -V | head -1)" = "$2" ]
+}
+
+# Warn when an older copy of $1 still wins on PATH after we installed the pinned one.
+shadowed() {
+    local resolved
+    resolved="$(command -v "$1" 2>/dev/null || true)"
+    [ "$resolved" != "$HOME/.local/bin/$1" ] && [ -n "$resolved" ]
+}
+
 # ---------------------------------------------------------------------------
 step "1/9  System packages"
 need=()
@@ -60,10 +78,15 @@ fi
 
 # ---------------------------------------------------------------------------
 step "2/9  just ($JUST_VERSION)"
-if command -v just >/dev/null; then
-    ok "just at $(command -v just)"
+if command -v just >/dev/null && at_least just "$JUST_VERSION"; then
+    ok "just $(just --version | awk '{print $2}') at $(command -v just)"
 elif [ "$CHECK" = 1 ]; then
-    bad "just not found"; missing=1
+    if command -v just >/dev/null; then
+        bad "just $(just --version | awk '{print $2}') at $(command -v just) is older than $JUST_VERSION"
+    else
+        bad "just not found"
+    fi
+    missing=1
 else
     miss "installing into ~/.local/bin"
     tmp="$(mktemp -d)"
@@ -74,14 +97,23 @@ else
     export PATH="$HOME/.local/bin:$PATH"
     ok "installed ~/.local/bin/just"
     case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) miss "add ~/.local/bin to your PATH" ;; esac
+    if shadowed just; then
+        bad "$(command -v just) still comes first on PATH; put ~/.local/bin ahead of it"
+        missing=1
+    fi
 fi
 
 # ---------------------------------------------------------------------------
 step "3/9  uv ($UV_VERSION)"
-if command -v uv >/dev/null; then
-    ok "uv at $(command -v uv)"
+if command -v uv >/dev/null && at_least uv "$UV_VERSION"; then
+    ok "uv $(uv --version | awk '{print $2}') at $(command -v uv)"
 elif [ "$CHECK" = 1 ]; then
-    bad "uv not found"; missing=1
+    if command -v uv >/dev/null; then
+        bad "uv $(uv --version | awk '{print $2}') at $(command -v uv) is older than $UV_VERSION"
+    else
+        bad "uv not found"
+    fi
+    missing=1
 else
     miss "installing into ~/.local/bin"
     tmp="$(mktemp -d)"
@@ -92,6 +124,10 @@ else
     export PATH="$HOME/.local/bin:$PATH"
     ok "installed ~/.local/bin/uv"
     case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) miss "add ~/.local/bin to your PATH" ;; esac
+    if shadowed uv; then
+        bad "$(command -v uv) still comes first on PATH; put ~/.local/bin ahead of it"
+        missing=1
+    fi
 fi
 
 # ---------------------------------------------------------------------------
