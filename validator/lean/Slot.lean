@@ -3,3 +3,4 @@
 -- submission, so an extraction supplied by a miner is never trusted.
 import Slot.Types
 import Slot.Funs
+import Slot.Constants

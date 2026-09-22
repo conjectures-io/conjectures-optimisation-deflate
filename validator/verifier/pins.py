@@ -26,6 +26,7 @@ PINNED = [
     "lean/Lz77/Spec.lean",
     "lean/Lz77/Lemmas.lean",
     "lean/Lz77/Interface.lean",
+    "lean/Lz77/Search.lean",
     "lean/Lz77.lean",
     "lean/Verify/Obligation.lean",
     "lean/Verify.lean",

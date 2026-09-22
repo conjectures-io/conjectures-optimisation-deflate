@@ -86,7 +86,7 @@ LEAN_POLICY = [
 MAX_FILE_BYTES = 512 * 1024
 
 # Stage 3 output, hashed again after the proof builds.
-EXTRACTED = ["lean/Slot/Types.lean", "lean/Slot/Funs.lean"]
+EXTRACTED = ["lean/Slot/Types.lean", "lean/Slot/Funs.lean", "lean/Slot/Constants.lean"]
 
 # Memory is a cgroup, not an rlimit: RLIMIT_AS/DATA kill Lean's allocator at thread creation.
 SANDBOX = os.environ.get("VERIFY_SANDBOX", "bwrap")
