@@ -195,6 +195,10 @@ verify-lean RUST PROOF:
 extract DIR:
     {{python}} {{val}}/verifier/verify.py {{DIR}}/parse.rs --stage extract --keep always
 
+# The goals and hypotheses at LINE of DIR/Parse.lean, against the real extraction; --stop cuts there.
+probe DIR LINE *ARGS:
+    {{python}} {{val}}/verifier/probe.py {{absolute_path(DIR)}} {{LINE}} {{ARGS}}
+
 # Check a proof in its own workspace.
 prove DIR:
     {{python}} {{val}}/verifier/verify.py {{DIR}}/parse.rs --stage lean --proof {{DIR}}/Parse.lean --keep always
@@ -345,3 +349,5 @@ smoke: build
     just check miner/examples/lazy --results /tmp/smoke-lazy.json
     just check miner/examples/mo-lazy --results /tmp/smoke-mo-lazy.json
     just check miner/examples/optimal --results /tmp/smoke-optimal.json
+    just check miner/examples/no-lz77 --results /tmp/smoke-no-lz77.json
+    just check miner/examples/optimal-iter --results /tmp/smoke-optimal-iter.json
