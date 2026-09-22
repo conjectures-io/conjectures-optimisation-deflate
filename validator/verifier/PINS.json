@@ -49,6 +49,6 @@
   "verifier/identity.py": "4e4e38031ae0bb0a2955ac6c57b40f260ec99accd8ba8aef4534eac091b522f2",
   "verifier/make-corpus.py": "a52fb7a3712a7890fe1697dc9fc8b4232a09f39c0b8eb11d6832ea32f03f2933",
   "verifier/resolved.py": "bfb7e0b6eb16db9dcc273d428385c48f9820d2b4213b1b2997d85988b647dc27",
-  "verifier/verify.py": "d1e33b959aeb0f2a0fbf10d830a3313055c07c3959fcb4eb787007a43a5e9e42",
+  "verifier/verify.py": "2dc3f913c145f3529d94424d8873a61b14d606731231a39d9e30c4da828b6227",
   "verifier/workspace.py": "17b044fd3f60551d509b1a1df13880436f1c1b44519581a50193f989a5098dc5"
 }
