@@ -262,3 +262,25 @@ def test_token_determinism_projection(store, tmp_path, deterministic):
             ).where(BenchmarkCompressionResult.method == "candidate")
         ).one()
         assert tuple(row) == (deterministic, deterministic)
+
+
+def test_imported_verification_claims_cannot_certify_submission(store, tmp_path):
+    sid, _ = store.submissions.add("untrusted-import", "f" * 64)
+    raw = evidence()
+    raw[0].update(
+        {
+            "submission_id": sid,
+            "source_sha256": "b" * 64,
+            "verifier_fingerprint": "a" * 64,
+            "static_verified_at": "2026-09-22T00:00:00Z",
+            "lean_verified_at": "2026-09-22T00:00:00Z",
+            "measured_source_sha256": "b" * 64,
+        }
+    )
+    storage.import_file(store.engine, save(tmp_path, raw))
+    row = store.submissions.get(sid)
+    assert row.source_sha256 is None
+    assert row.verifier_fingerprint is None
+    assert row.static_verified_at is None
+    assert row.lean_verified_at is None
+    assert row.measured_source_sha256 is None

@@ -366,7 +366,7 @@ def stage_build(limits: str) -> None:
     lean = run(["lake", "env", "lean", "--version"], cwd=lean_root, timeout=30, proof=False)
     if lean.returncode:
         misconfigured("Lean toolchain preflight failed: " + (lean.stdout + lean.stderr).strip())
-    # Build the trusted libraries outside the sandbox, then the proof and gate inside it.
+    # Build trusted libraries in the compiler sandbox, then restrict writes for the proof and gate.
     r = run(["lake", "build", *TRUSTED_LIBS], cwd=lean_root, proof=False)
     out = r.stdout + r.stderr
     if r.returncode != 0:

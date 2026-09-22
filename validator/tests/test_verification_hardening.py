@@ -16,7 +16,7 @@ from test_gate import TEMPLATE, VALIDATOR, needs_toolchain
 from db.verification import StaleAttempt
 from sandbox import bwrap
 from verifier import resolved, verify
-from verifier.cleanup import cleanup
+from verifier.cleanup import LEGACY, archive_legacy, cleanup
 from verifier.identity import fingerprint
 from verifier.workspace import Workspace
 
@@ -468,7 +468,12 @@ def test_db_commands_verify_once_then_benchmark_twice(store, database_url, tmp_p
     assert lean.returncode == 0, lean.stdout + lean.stderr
     verified_at = store.submissions.get(sid).lean_verified_at
     assert verified_at is not None
-    for _ in range(2):
+    for index in range(2):
+        # Corpus identity is deliberately not part of the Rust/proof cache key.
+        selected = tmp_path / f"corpus-{index}"
+        selected.mkdir()
+        (selected / "input").write_bytes(bytes(range(256)) * (512 + index))
+        env["VERIFY_CORPUS"] = str(selected)
         result = stage("full")
         assert result.returncode == 0, result.stdout + result.stderr
         assert "reusing matching static and Lean verification" in result.stdout
@@ -531,7 +536,9 @@ def test_claim_tokens_prevent_stale_writes_even_when_timestamps_match(store):
 
 @needs_toolchain
 @pytest.mark.slow
-@pytest.mark.parametrize("mutation", ["truncated", "version", "errors", "opaque", "unknown"])
+@pytest.mark.parametrize(
+    "mutation", ["truncated", "version", "errors", "opaque", "unknown", "partial_methods"]
+)
 def test_malformed_or_unreviewed_ir_fails_closed(tmp_path, mutation):
     import json
 
@@ -546,6 +553,8 @@ def test_malformed_or_unreviewed_ir_fails_closed(tmp_path, mutation):
             data["charon_version"] = "new-unreviewed-version"
         elif mutation == "errors":
             data["has_errors"] = True
+        elif mutation == "partial_methods":
+            data["translated"]["options"]["translate_all_methods"] = False
         elif mutation == "opaque":
             data["translated"]["fun_decls"][0]["body"] = "Opaque"
         else:
@@ -592,7 +601,6 @@ def test_static_db_command_is_independent_of_lean_source_policy(store, database_
     assert store.submissions.get(sid).lean_verified_at is None
 
 
-
 @needs_toolchain
 @pytest.mark.slow
 @pytest.mark.parametrize("mutable", [False, True])
@@ -608,19 +616,30 @@ def test_reviewed_heap_storage_is_supported(tmp_path, mutable):
     result, path = compile_source(tmp_path, source)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "alloc::vec::{impl}::push" in resolved.check(path)
-    translated = subprocess.run([str(VALIDATOR / "verifier/extract.sh"),
-        str(tmp_path / "parse.rs"), str(path.parent), "translate"],
-        capture_output=True, text=True, timeout=90)
+    translated = subprocess.run(
+        [
+            str(VALIDATOR / "verifier/extract.sh"),
+            str(tmp_path / "parse.rs"),
+            str(path.parent),
+            "translate",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
     assert translated.returncode == 0, translated.stdout + translated.stderr
     assert "alloc.vec.Vec.push" in (path.parent / "Slot/Funs.lean").read_text()
 
 
 @needs_toolchain
 @pytest.mark.slow
-@pytest.mark.parametrize("effect", [
-    'let _ = std::fs::write("/tmp/must-not-execute", "data");',
-    '*self.out = 999;',  # Pure mutation on drop is also erased by this Aeneas preset.
-])
+@pytest.mark.parametrize(
+    "effect",
+    [
+        'let _ = std::fs::write("/tmp/must-not-execute", "data");',
+        "*self.out = 999;",  # Pure mutation on drop is also erased by this Aeneas preset.
+    ],
+)
 def test_vec_does_not_hide_custom_drop_behavior(tmp_path, effect):
     source = (
         "struct D<'a> { out: &'a mut u32 } "
@@ -630,5 +649,147 @@ def test_vec_does_not_hide_custom_drop_behavior(tmp_path, effect):
     )
     result, path = compile_source(tmp_path, source)
     assert result.returncode == 0, result.stdout + result.stderr
+    with pytest.raises(resolved.Unsupported):
+        resolved.check(path)
+
+
+@needs_toolchain
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "declarations",
+    [
+        "trait Mix { fn mix(self)->u8; } impl Mix for u8 { fn mix(self)->u8 {self} }",
+        "trait Mix: Sized { fn mix(self)->u8 { 7 } fn unused(&self)->u8 { 9 } } impl Mix for u8 {}",
+        "trait Base { fn base(&self)->u8; } trait Mix: Base { fn mix(&self)->u8 { self.base() } } "
+        "impl Base for u8 { fn base(&self)->u8 {*self} } impl Mix for u8 {}",
+        "trait Mix: Sized { type Value; fn mix(self)->Self::Value; } "
+        "impl Mix for u8 { type Value=u8; fn mix(self)->u8 {self} }",
+    ],
+)
+def test_pure_generic_traits_translate(tmp_path, declarations):
+    bound = "Mix<Value=u8>" if "type Value" in declarations else "Mix"
+    source = (
+        declarations
+        + f"fn helper<T:{bound}>(x:T)->u8 {{x.mix()}}"
+        + GOOD.replace("input[i] as u32", "helper(input[i]) as u32")
+    )
+    assert verify.scan_rust(source) == []
+    result, path = compile_source(tmp_path, source)
+    assert result.returncode == 0, result.stdout + result.stderr
+    resolved.check(path)
+    result = subprocess.run(
+        [
+            str(VALIDATOR / "verifier/extract.sh"),
+            str(tmp_path / "parse.rs"),
+            str(path.parent),
+            "translate",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (path.parent / "Slot/Funs.lean").is_file()
+
+
+@needs_toolchain
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "declarations",
+    [
+        "trait Mix: Sized { fn mix(self)->u8 { std::process::exit(1) } } impl Mix for u8 {}",
+        "trait Mix: Sized { fn mix(self)->u8 { 0 } "
+        'fn unused(&self) { println!("forged"); } } impl Mix for u8 {}',
+        "trait Mix { fn mix(self)->u8; } impl Mix for u8 { fn mix(self)->u8 { "
+        'use std::fs::read as r; let _ = r("secret"); self } }',
+    ],
+)
+def test_trait_methods_cannot_hide_effects(tmp_path, declarations):
+    source = (
+        declarations
+        + "fn helper<T:Mix>(x:T)->u8 {x.mix()}"
+        + GOOD.replace("input[i] as u32", "helper(input[i]) as u32")
+    )
+    result, path = compile_source(tmp_path, source)
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Exercise the resolved boundary, with the syntax filter deliberately bypassed.
+    with pytest.raises(
+        resolved.Unsupported,
+        match="unapproved external operation/model|unreviewed trait/destructor: core::",
+    ):
+        resolved.check(path)
+
+
+def test_legacy_cleanup_preserves_templates_and_archives_proof(tmp_path):
+    for relative in LEGACY:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative)
+    template = tmp_path / "validator/slot/generated/parse.rs"
+    template.parent.mkdir(parents=True)
+    template.write_text("required template")
+    assert len(archive_legacy(tmp_path)) == len(LEGACY)
+    assert all((tmp_path / relative).is_file() for relative in LEGACY)
+    archive_legacy(tmp_path, apply=True)
+    assert template.read_text() == "required template"
+    archives = list((tmp_path / "data/verification-workspace").glob("legacy-*"))
+    assert len(archives) == 1
+    for relative in LEGACY:
+        assert not (tmp_path / relative).exists()
+        assert (archives[0] / relative).read_text() == relative
+    assert cleanup(tmp_path / "data/verification-workspace", 0, apply=True) == []
+
+
+def test_legacy_cleanup_does_not_follow_parent_symlinks(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "slot.llbc").write_text("preserve")
+    (tmp_path / "validator").mkdir()
+    (tmp_path / "validator/lean").symlink_to(outside, target_is_directory=True)
+    assert archive_legacy(tmp_path, apply=True) == []
+    assert (outside / "slot.llbc").read_text() == "preserve"
+
+
+@needs_toolchain
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "mutation", ["missing_body", "missing_default", "missing_impl", "unknown_dictionary"]
+)
+def test_generic_dispatch_requires_complete_inspected_targets(tmp_path, mutation):
+    import json
+
+    source = (
+        "trait Mix: Sized { fn mix(self)->u8 { 1 } } impl Mix for u8 {} "
+        "fn helper<T:Mix>(x:T)->u8 {x.mix()} "
+        + GOOD.replace("input[i] as u32", "helper(input[i]) as u32")
+    )
+    result, path = compile_source(tmp_path, source)
+    assert result.returncode == 0, result.stdout + result.stderr
+    resolved.check(path)
+    data = json.loads(path.read_text())
+    crate = data["translated"]
+    trait = next(t for t in crate["trait_decls"] if t and t["item_meta"]["is_local"])
+    default = trait["methods"][0]["skip_binder"]["default"]
+    if mutation == "missing_body":
+        function = next(f for f in crate["fun_decls"] if f and f["def_id"] == default["id"])
+        function["body"] = "Opaque"
+    elif mutation == "missing_default":
+        default["id"] = 999999
+    elif mutation == "missing_impl":
+        crate["trait_impls"][0]["methods"] = []
+    else:
+
+        def mutate(value):
+            if isinstance(value, list):
+                for child in value:
+                    mutate(child)
+            elif isinstance(value, dict):
+                if "trait_decl_ref" in value and "Clause" in value["kind"]:
+                    value["kind"] = {"UnknownDispatch": 0}
+                for child in value.values():
+                    mutate(child)
+
+        mutate(crate)
+    path.write_text(json.dumps(data))
     with pytest.raises(resolved.Unsupported):
         resolved.check(path)

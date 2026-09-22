@@ -59,6 +59,8 @@ contains user-systemd setup instructions. Timeouts terminate process groups.
 ```sh
 just verification-clean --days 7          # preview finished workspaces
 just verification-clean --days 7 --apply  # remove those workspaces
+just verification-clean --legacy         # preview exact retired output files
+just verification-clean --legacy --apply # archive them (stop old-version workers first)
 ```
 
 Cleanup uses advisory locks to skip active workspaces; it can reclaim an abandoned
@@ -66,6 +68,10 @@ workspace after its owning process dies. Unknown and symlinked directories are k
 under `validator/lean/Slot`, `validator/lean/Proof/Parse.lean`, `validator/lean/slot.llbc`
 and `validator/.work/axioms.lean` are no longer gate outputs. The slot's generated
 Rust remains a trusted template input for building the standalone slot crate.
+Legacy cleanup moves only the listed files into `data/verification-workspace/legacy-*`,
+preserving unpublished proofs. Archives are not removed by ordinary workspace cleanup;
+review them before deleting them manually. Dependency caches, benchmark data and
+unknown files are never legacy-cleanup targets.
 
 ## Static policy and supported Rust
 
@@ -79,18 +85,29 @@ Write the selected implementation directly and expand pure macros. `inline`,
 
 The next check inspects the pinned Charon 0.1.245 LLBC. Every admitted local
 function needs an inspectable body. External operations must appear in an explicit
-reviewed list, currently slice length and scalar arithmetic/bit operations.
-Array indexing/repetition and ordinary scalar/array/local-structure computations
-are supported. Unknown statement/call forms, opaque local items, indirect calls,
-trait dispatch/destructors and unreviewed external models are rejected. Unsupported
-pure code gets a model/subset diagnostic; this is not an accusation of cheating.
+reviewed list: scalar arithmetic/bit operations, slice length and indexing, and
+Vec construction (including `with_capacity`), push, length, indexing and deref. Array indexing/repetition,
+ordinary scalar/array/local-structure computations, and local generic traits
+(including default methods and associated types) are supported. Charon extracts
+all provided methods, even unused defaults; concrete method dictionaries and
+referenced bodies are checked before generic calls are admitted.
 
-This first reviewed operation set covers the shipped parsers. It is narrower than
-all pure Rust Aeneas can express: extending it safely requires reviewing models and
-callback/drop behavior, plus positive and adversarial regression tests. Do not
-interpret it as a claim that traits, vectors or other rejected pure abstractions
-cannot be formalized. Preserving the existing formalizable optimization space is
-a compatibility objective, and this boundary must be reviewed before public rollout.
+Unknown statement/call forms, opaque local items, function-pointer/dynamic calls,
+unreviewed external models and custom `Drop` implementations remain unsupported.
+Custom destructors can change output even without I/O, and the pinned Aeneas
+preset does not faithfully preserve those effects. Standard storage deallocation
+and generic drops are admitted only within the closed type set, which excludes
+custom destructors, foreign resource types and user allocators. Unsupported pure
+code receives an explicit model/subset diagnostic, not an accusation of cheating.
+
+The compatibility suite covers every shipped parser, heap-backed parsing, generic
+traits, defaults and associated types. It does not establish equivalence with every
+Rust program Aeneas can translate. For unsupported library conveniences, use
+inspected local functions or indexed loops; inline known callbacks. These checks
+place no new limits on search depth, match strategy, table sizes or compression
+choices, but we cannot promise that rewriting every unsupported abstraction has
+zero performance cost. Expanding the external model set requires model and
+callback/drop review plus positive and adversarial regression tests.
 
 Charon/Aeneas are trusted translators, not an I/O detector by themselves. In the
 pinned Aeneas backend, `std::io::stdio::_print` is explicitly modeled as `.ok ()`:

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Translate the submitted Rust into Lean with charon and aeneas: verifier/extract.sh [path/to/parse.rs]
+# Translate Rust in an explicitly supplied private output directory.
 # The verifier runs this itself on every submission; an extraction that needs `axiom`s for foreign `core` items is rejected.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=config.sh
 . "$root/verifier/config.sh"
-src="${1:-$root/slot/generated/parse.rs}"
+src="${1:?usage: extract.sh SOURCE OUTPUT_DIRECTORY}"
 out="${2:?usage: extract.sh SOURCE OUTPUT_DIRECTORY}"
 mkdir -p "$out"
 mode="${3:-all}"
@@ -24,7 +24,7 @@ if [ "$mode" != "translate" ]; then
 cd "$out"
 # Truncate before compiling: a failed compiler must never reuse a prior model.
 : > "$out/slot.llbc"
-PATH="$CHARON_DIR:$PATH" charon rustc --preset=aeneas \
+PATH="$CHARON_DIR:$PATH" charon rustc --preset=aeneas --translate-all-methods \
     --dest-file "$out/slot.llbc" \
     -- --out-dir /tmp -C debug-assertions=no -C overflow-checks=yes --crate-name=slot --crate-type=lib --edition=2021 "$src" 2>&1 || exit 1
 [ -s "$out/slot.llbc" ] || { echo "missing Charon output" >&2; exit 1; }
@@ -48,4 +48,4 @@ test -s .extract/Types.lean && test -s .extract/Funs.lean
 mkdir -p Slot
 cp .extract/Types.lean Slot/Types.lean
 cp .extract/Funs.lean  Slot/Funs.lean
-echo "extracted: lean/Slot/Types.lean lean/Slot/Funs.lean"
+echo "extracted: $out/Slot/Types.lean $out/Slot/Funs.lean"

@@ -44,10 +44,10 @@
   "slot/Cargo.toml": "f5b2d1690c66eb62d55d3e71d2ae441cf03b8fc375ed99319097bb58571b641e",
   "slot/src/lib.rs": "21e807a0fb3aac8af6cf8d633237c11ad4e5fd560607477fc546de10cc0f2588",
   "verifier/config.sh": "0315b0fc7fd827fbbc05a5c1a4b5fc5f8cbc37449d8396a6870c78b48a6a6313",
-  "verifier/extract.sh": "e9b6eb70f1c08a08e637d8da4e83ce6232d0f71cd8254910646b96a42cc6bcf9",
+  "verifier/extract.sh": "fda192a4589465e523b9a627a1f1408276cca1bcc78af5d74c0b38a416edeca0",
   "verifier/identity.py": "4e4e38031ae0bb0a2955ac6c57b40f260ec99accd8ba8aef4534eac091b522f2",
   "verifier/make-corpus.py": "a52fb7a3712a7890fe1697dc9fc8b4232a09f39c0b8eb11d6832ea32f03f2933",
-  "verifier/resolved.py": "ba1f4a65f0b6b307e2ba44879de63086d91749b96c78e571739bd697e1663167",
-  "verifier/verify.py": "3a59bd3ef233f93aeb6b3d6a08ac9cdd85d248cde22a14547b2926f1d49c5260",
+  "verifier/resolved.py": "bfb7e0b6eb16db9dcc273d428385c48f9820d2b4213b1b2997d85988b647dc27",
+  "verifier/verify.py": "63bf1573cb37d3d96244d3c9e9b69f45fb253e2f31c9d1b3e2844eb6b84f39a8",
   "verifier/workspace.py": "17b044fd3f60551d509b1a1df13880436f1c1b44519581a50193f989a5098dc5"
 }
