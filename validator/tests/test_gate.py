@@ -28,6 +28,8 @@ HASH_CHAINS = REPO / "miner/examples/hash-chains"
 LAZY = REPO / "miner/examples/lazy"
 OPTIMAL = REPO / "miner/examples/optimal"
 MO_LAZY = REPO / "miner/examples/mo-lazy"
+NO_LZ77 = REPO / "miner/examples/no-lz77"
+OPTIMAL_ITER = REPO / "miner/examples/optimal-iter"
 
 sys.path.insert(0, str(VALIDATOR / "verifier"))
 import verify  # noqa: E402 - the verifier is a script, not a package
@@ -134,8 +136,8 @@ def test_intake_rejects_an_oversized_proof(tree: Path, submission: Path):
 
 @pytest.mark.parametrize(
     "d",
-    [TEMPLATE, HASH_CHAINS, LAZY, MO_LAZY, OPTIMAL],
-    ids=["template", "hash-chains", "lazy", "mo-lazy", "optimal"],
+    [TEMPLATE, HASH_CHAINS, LAZY, MO_LAZY, OPTIMAL, NO_LZ77, OPTIMAL_ITER],
+    ids=["template", "hash-chains", "lazy", "mo-lazy", "optimal", "no-lz77", "optimal-iter"],
 )
 def test_policy_accepts_the_reference_submissions(d: Path):
     # The reference proofs mention several rules in prose; none may trip the scanner.

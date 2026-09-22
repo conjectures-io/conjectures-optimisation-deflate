@@ -70,3 +70,5 @@ jobs:
           test "$(jq .methods.submission.output_bytes /tmp/smoke-lazy.json)" = 2153387
           test "$(jq .methods.submission.output_bytes /tmp/smoke-mo-lazy.json)" = 2118446
           test "$(jq .methods.submission.output_bytes /tmp/smoke-optimal.json)" = 2115138
+          test "$(jq .methods.submission.output_bytes /tmp/smoke-no-lz77.json)" = 5147015
+          test "$(jq .methods.submission.output_bytes /tmp/smoke-optimal-iter.json)" = 2102388
