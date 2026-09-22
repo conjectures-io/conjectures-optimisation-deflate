@@ -28,15 +28,17 @@ and nothing about what it computes; the loop that maintains the chains has postc
 So a better search costs one rewritten lemma, and even a change to the emission stayed
 under 120 lines:
 
-| | `parse.rs` | `Parse.lean` | bytes | vs incumbent |
-|---|---|---|---|---|
-| `miner/template` (greedy, hash head) - the first incumbent | 66 | 204 | 2,605,048 | 1.210x |
-| `miner/examples/hash-chains` (16 probes) | 90 | 236 | 2,239,367 | 1.040x |
-| `miner/examples/lazy` (lazy, 32 probes) - **the incumbent** | 118 | 323 | 2,153,387 | 1.000x |
-| `miner/examples/mo-lazy` (miniz level-9 strategy) | 254 | 497 | 2,118,446 | 0.984x |
-| `miner/examples/optimal` (optimal parse, 24 probes) | 198 | 442 | 2,115,138 | 0.982x |
-| miniz_oxide level 9 | | | 2,126,479 | 0.987x |
-| **libdeflate level 12** | | | **2,013,342** | **0.935x** |
+| | `parse.rs` | `Parse.lean` | bytes | vs incumbent | time |
+|---|---|---|---|---|---|
+| `miner/examples/no-lz77` (literals only) | 20 | 51 | 5,147,015 | 2.390x | 0.01x |
+| `miner/template` (greedy, hash head) - the first incumbent | 66 | 152 | 2,605,048 | 1.210x | 0.15x |
+| `miner/examples/hash-chains` (16 probes), `hc-d4`, `hc-d64` | 90 | 193 | 2,239,367 / 2,354,578 / 2,197,601 | 1.040x / 1.093x / 1.021x | |
+| `miner/examples/lazy` (lazy, 32 probes) - **the incumbent** | 118 | 262 | 2,153,387 | 1.000x | 1.0x |
+| `miner/examples/mo-lazy` (miniz level-9 strategy) | 254 | 370 | 2,118,446 | 0.984x | 2.5x |
+| `miner/examples/optimal` (optimal parse, 24 probes) | 198 | 344 | 2,115,138 | 0.982x | 6.5x |
+| `miner/examples/optimal-iter` (optimal parse, one cost iteration) | 339 | 613 | 2,102,388 | 0.976x | 7.5x |
+| miniz_oxide level 9 | | | 2,126,479 | 0.987x | |
+| **libdeflate level 12** | | | **2,013,342** | **0.935x** | |
 
 The incumbent moved once already: lazy was promoted over the template, and with it
 the speed floor (8x of the incumbent) grew sevenfold in absolute terms, which is what
@@ -46,6 +48,8 @@ rest is optimal parsing and block splitting, all inside the provable subset, bec
 SIMD cannot change which match is chosen.
 
 ## Miner
+
+The complete guide is [`miner/MANUAL.md`](miner/MANUAL.md); this section is the short form.
 
 ```bash
 cp -r miner/template my-submission          # a passing submission to start from
@@ -58,7 +62,7 @@ python miner/submit.py leaderboard --url ...                            # every 
 ```
 
 A submission is exactly two files, `parse.rs` and `Parse.lean`, signed with the hotkey over
-their hash, your address and the current time; the five references above are complete,
+their hash, your address and the current time; the nine references above are complete,
 passing examples to start from. Submissions are verified as they arrive and the same files
 twice return the same id.
 
@@ -347,12 +351,13 @@ deploy/
   db/                    first-boot extensions, GUCs, the read-only monitor role; tuned postgresql.conf
   migrate/               Alembic: the schema's deploy path, and the image that applies it
 miner/
+  MANUAL.md              the one document a miner reads: setup, rules, contract, proof rules, worked example, submit
   submit.py              submit, status, leaderboard
   template/              the simplest passing submission, with its proof
-  examples/              hash-chains, lazy (the incumbent), optimal: proven improvements
+  examples/              no-lz77, hash-chains, hc-d4, hc-d64, lazy (the incumbent), mo-lazy, optimal, optimal-iter: all proven
 validator/
   verifier/              verify.py (the gate), init.sh (toolchain), config.sh (pins), extract.sh
-  lean/Lz77/             the contract: token spec, the two lemmas a proof uses, the obligation
+  lean/Lz77/             the contract: token spec, the two lemmas a proof uses, the search library every proof shares, the obligation
   lean/Verify/           the gate's three lines
   measure/               the engine: trusted DEFLATE encoder, round trip, timing; candidate/ is the crate template every parser is built from
   incumbent/parse.rs     what every submission is measured against
@@ -454,6 +459,7 @@ aggregation schema, timing queries, and migration rollback commands.
 
 | | |
 |---|---|
+| [miner/MANUAL.md](miner/MANUAL.md) | mining, start to finish: setup, the two files, the seven Rust rules, the contract, the ten proof rules, a worked example, submit |
 | [docs/SCORING.md](docs/SCORING.md) | how emission is scored: the 60/40 rule, worked on the real frontier |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | running a validator: the four processes, the store, the wallet, what to check |
 | [CORPUS-SOURCES.md](CORPUS-SOURCES.md) | every benchmark source, its licence, and what it feeds |
