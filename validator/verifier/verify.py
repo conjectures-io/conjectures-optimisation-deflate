@@ -465,6 +465,9 @@ def stage_score(results: Path | None) -> int:
             bench_config(), {SUBMISSION: proved}, corpus, speed_floor=verdict.SPEED_FLOOR
         )
     except bench.Blamed as e:
+        # Only the submission's own failure is a verdict; a broken incumbent is ours.
+        if e.method != SUBMISSION:
+            misconfigured(f"{e}\n{e.detail[-2000:]}")
         fail("6 (score)", f"{e}\n{e.detail[-2000:]}")
     except bench.Failed as e:
         misconfigured(f"{e}\n{e.detail[-2000:]}")
