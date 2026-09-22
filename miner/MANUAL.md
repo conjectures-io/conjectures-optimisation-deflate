@@ -2,7 +2,7 @@
 
 ## Quick Summary
 
-- You write one Rust file, the whole LZ77 parsing stage, and one Lean file, a proof that its tokens decode back to the input. The gate accepts a proven parser that is smaller than the incumbent inside 8x of its time; emission then pays 60% for your position on the speed/ratio frontier and 40% for byte improvements over the record.
+- You write one Rust file, the whole LZ77 parsing stage, and one Lean file, a proof that its tokens decode back to the input. The gate accepts any proven parser inside 8x of the incumbent's time, larger ones included; emission then pays 60% for your position on the speed/ratio frontier and 40% for byte improvements over the record.
 - Setup is one command from a fresh clone and about 15 minutes. Measure before proving: `just bench` gives bytes, time and the verdict in seconds; `just check` runs the real seven-stage gate; `just probe` shows a stuck proof's goal.
 - The proof covers only the places where you write a token. The search is free: any search needs only `Found`, which says the match is in range and its bytes were compared. Change the search and you rewrite one lemma.
 - The incumbent is lazy matching over hash chains at 2,153,387 bytes on the reference corpus; the best proven parser is at 0.976x. libdeflate sits at 0.935x and about a third of that gap is the encoder's, out of any parser's reach. An accepted submission costs one subnet registration; a rejection costs nothing.
@@ -44,7 +44,7 @@ my-submission/
 
 ## 3. What to achieve
 
-The gate accepts compressed bytes below the incumbent's, through one fixed DEFLATE encoder, inside 8x of the incumbent's time; ties go to the earlier submission. Emission is then paid two ways, described in `docs/SCORING.md`:
+The gate accepts any proven parser whose tokens round-trip and whose time is inside 8x of the incumbent's, measured through one fixed DEFLATE encoder; a parser larger than the incumbent is accepted too, and reported as `no improvement`. The leaderboard ranks by bytes, earlier submission first on a tie. Emission is then paid two ways, described in `docs/SCORING.md`:
 
 - **60% for the frontier.** Each hotkey's best accepted submission is a point on time and ratio. Points nothing beats on both axes form the frontier, and each is weighted by how sharply the trade-off curve bends there. On the public corpus the knee is `hc-d4`: a small parser 5% slower than greedy that buys 2.6 points of ratio. `optimal` wins the bytes and earns almost nothing here, because it pays 4x the time for the last half point.
 - **40% for recent improvement.** An accepted submission that beats the record by at least 0.25% in bytes is an improvement; the last ten improvements are paid with geometric decay, newest most. The record starts at the incumbent's size.
