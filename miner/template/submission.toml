@@ -8,4 +8,4 @@ description = "Greedy matching against a single-slot hash table. The first incum
 [claims]
 score = 1.210
 parse_time_vs_incumbent = 0.15
-proof_lines = 204
+proof_lines = 152

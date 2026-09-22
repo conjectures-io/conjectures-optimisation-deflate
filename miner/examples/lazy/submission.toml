@@ -5,4 +5,4 @@ description = "Lazy matching over 32-deep hash chains. The incumbent since 2026-
 [claims]
 score = 1.000
 parse_time_vs_incumbent = 1.0
-proof_lines = 323
+proof_lines = 262

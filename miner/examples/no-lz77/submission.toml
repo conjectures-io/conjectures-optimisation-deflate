@@ -1,0 +1,8 @@
+name = "no-lz77"
+author = "operator"
+description = "Every byte a literal, never a match. The measurement floor of the LZ77 stage, and the smallest complete proof: one loop, one token-writing site, the invariant and nothing else."
+
+[claims]
+score = 2.390
+parse_time_vs_incumbent = 0.01
+proof_lines = 51

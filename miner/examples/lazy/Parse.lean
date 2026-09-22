@@ -13,71 +13,31 @@ open Aeneas Aeneas.Std Result ControlFlow
 set_option maxRecDepth 8192
 set_option maxHeartbeats 1000000
 
-open LZ77 (toks bytes bytes_length bytes_getElem! toks_update bytes_congr)
+open LZ77 (toks bytes bytes_length bytes_getElem! toks_update bytes_congr
+  Matches Found Pending emitted emitted_ge emitted_lt pending_of_found emit_lit emit_match)
 
 /-! ## The hash: in range, and nothing else -/
 
 @[local step]
 theorem hash3_spec (a b c : Std.U8) :
     slot.hash3 a b c ⦃ fun h => h.val < 32768 ⦄ := by
-  rw [slot.hash3]
-  step*
+  prove_hash3
 
 /-! ## The match-length loop: the one load-bearing function -/
-
-/-- `Matches input a b n`: the `n` bytes at `a` and at `b` agree. -/
-def Matches (input : Slice Std.U8) (a b n : Nat) : Prop :=
-  ∀ k, k < n → input.val[b + k]! = input.val[a + k]!
 
 theorem match_len_loop_spec (input : Slice Std.U8) (a b cap l0 : Std.Usize)
     (ha : a.val + cap.val ≤ input.length) (hb : b.val + cap.val ≤ input.length)
     (hl0 : l0.val ≤ cap.val) (h0 : Matches input a.val b.val l0.val) :
     slot.match_len_loop input a b cap l0 ⦃ fun l =>
       l.val ≤ cap.val ∧ Matches input a.val b.val l.val ⦄ := by
-  rw [slot.match_len_loop]
-  apply Std.loop.spec_decr_nat
-    (measure := fun l => cap.val - l.val)
-    (inv := fun l => l.val ≤ cap.val ∧ Matches input a.val b.val l.val)
-  · rintro l ⟨hle, hinv⟩
-    simp only [slot.match_len_loop.body]
-    split
-    case isTrue hlt =>
-      have hltn : l.val < cap.val := by scalar_tac
-      have hbi : b.val + l.val < input.length := by omega
-      have hai : a.val + l.val < input.length := by omega
-      have hmax : input.length ≤ Std.Usize.max := Std.Slice.length_ineq input
-      apply Std.WP.spec_bind (Std.Usize.add_spec (x := b) (y := l) (by scalar_tac))
-      intro i hi
-      apply Std.WP.spec_bind (Std.Slice.index_usize_spec input i (by scalar_tac))
-      intro x1 hx1
-      apply Std.WP.spec_bind (Std.Usize.add_spec (x := a) (y := l) (by scalar_tac))
-      intro i2 hi2
-      apply Std.WP.spec_bind (Std.Slice.index_usize_spec input i2 (by scalar_tac))
-      intro x3 hx3
-      split
-      case isTrue heq =>
-        apply Std.WP.spec_bind (Std.Usize.add_spec (x := l) (y := 1#usize) (by scalar_tac))
-        intro l1 hl1
-        simp only [Std.WP.spec_ok]
-        refine ⟨⟨by scalar_tac, ?_⟩, by scalar_tac⟩
-        intro k hk
-        rcases Nat.lt_or_ge k l.val with h | h
-        · exact hinv k h
-        · have hkl : k = l.val := by scalar_tac
-          rw [hkl, ← hi, ← hi2, getElem!_pos _ _ (by scalar_tac),
-              getElem!_pos _ _ (by scalar_tac), ← hx1, ← hx3]
-          exact heq
-      case isFalse => exact ⟨hle, hinv⟩
-    case isFalse => exact ⟨hle, hinv⟩
-  · exact ⟨hl0, h0⟩
+  prove_match_len_loop
 
 @[local step]
 theorem match_len_spec (input : Slice Std.U8) (a b cap : Std.Usize)
     (ha : a.val + cap.val ≤ input.length) (hb : b.val + cap.val ≤ input.length) :
     slot.match_len input a b cap ⦃ fun l =>
-      l.val ≤ cap.val ∧ Matches input a.val b.val l.val ⦄ :=
-  match_len_loop_spec input a b cap 0#usize ha hb (by scalar_tac) (by
-    intro k hk; simp at hk)
+      l.val ≤ cap.val ∧ Matches input a.val b.val l.val ⦄ := by
+  prove_match_len
 
 /-! ## The hash-insert loop: terminates, stays in bounds, proves nothing else -/
 
@@ -98,14 +58,6 @@ theorem parse_loop0_loop0_spec (input : Slice Std.U8)
     step*
   · exact hlim
 
-/-- Either nothing was found, or the `(distance, length)` is in range and its
-    bytes were compared. Everything a search has to establish, and nothing else. -/
-def Found (input : Slice Std.U8) (n pos best_len best_dist : Std.Usize) : Prop :=
-  best_len.val < 3 ∨
-    (3 ≤ best_len.val ∧ best_len.val ≤ 258 ∧ pos.val + best_len.val ≤ n.val ∧
-      1 ≤ best_dist.val ∧ best_dist.val ≤ 32768 ∧ best_dist.val ≤ pos.val ∧
-      Matches input (pos.val - best_dist.val) pos.val best_len.val)
-
 /-! ## The search: `Found` is the postcondition and the invariant; `cur` is never mentioned -/
 
 theorem find_match_loop_spec (input : Slice Std.U8) (prev : Slice Std.U32)
@@ -115,15 +67,14 @@ theorem find_match_loop_spec (input : Slice Std.U8) (prev : Slice Std.U32)
     (h0 : Found input n pos bl0 bd0) :
     slot.find_match_loop input prev pos cap bl0 bd0 cur0 probes0
       ⦃ fun r => Found input n pos r.1 r.2 ⦄ := by
-  have hMP : slot.MAX_PROBES = 32#usize := by unfold slot.MAX_PROBES; rfl
   rw [slot.find_match_loop]
   apply Std.loop.spec_decr_nat
-    (measure := fun s => 32 - s.2.2.2.val)
+    (measure := fun s => slot.MAX_PROBES.val - s.2.2.2.val)
     (inv := fun s => Found input n pos s.1 s.2.1)
   · rintro ⟨bl, bd, cur, probes⟩ hinv
     simp only at hinv
     have hmax : input.length ≤ Std.Usize.max := Std.Slice.length_ineq input
-    simp only [slot.find_match_loop.body, hMP]
+    simp only [slot.find_match_loop.body]
     step*
     apply Std.WP.spec_bind (Pₘ := fun r => Found input n pos r.1 r.2.1)
     · split
@@ -163,34 +114,6 @@ theorem find_match_spec (input : Slice Std.U8) (prev : Slice Std.U32)
       ⦃ fun r => Found input n pos r.1 r.2 ⦄ :=
   find_match_loop_spec input prev n pos cap 0#usize 0#usize start 0#usize
     hn hprev hcap hcap258 (Or.inl (by scalar_tac))
-
-/-! ## The lazy state -/
-
-/-- Nothing pending, or `(len, dist)` is `Found` at `pos - 1`. -/
-def Pending (input : Slice Std.U8) (n pos len dist : Std.Usize) : Prop :=
-  len.val < 3 ∨
-    (1 ≤ pos.val ∧ 3 ≤ len.val ∧ len.val ≤ 258 ∧ (pos.val - 1) + len.val ≤ n.val ∧
-      1 ≤ dist.val ∧ dist.val ≤ 32768 ∧ dist.val ≤ pos.val - 1 ∧
-      Matches input (pos.val - 1 - dist.val) (pos.val - 1) len.val)
-
-/-- The input prefix the tokens written so far decode to. -/
-def emitted (pos len : Nat) : Nat := if 3 ≤ len then pos - 1 else pos
-
-theorem emitted_ge {pos len : Nat} (h : 3 ≤ len) : emitted pos len = pos - 1 := by
-  simp [emitted, h]
-
-theorem emitted_lt {pos len : Nat} (h : len < 3) : emitted pos len = pos := by
-  simp [emitted, Nat.not_le.mpr h]
-
-/-- A match `Found` at `pos` is `Pending` at `pos + 1`. -/
-theorem pending_of_found (input : Slice Std.U8) (n pos pos1 len dist : Std.Usize)
-    (h1 : pos1.val = pos.val + 1) (hf : Found input n pos len dist) :
-    Pending input n pos1 len dist := by
-  rcases hf with h | ⟨hl3, hlmax, hend, hd1, hdmax, hdpos, hm⟩
-  · exact Or.inl h
-  · refine Or.inr ⟨by omega, hl3, hlmax, by omega, hd1, hdmax, by omega, ?_⟩
-    rw [show pos1.val - 1 = pos.val by omega]
-    exact hm
 
 /-! ## The parse loop: tokens so far decode to `emitted`, and a pending match is `Pending` -/
 

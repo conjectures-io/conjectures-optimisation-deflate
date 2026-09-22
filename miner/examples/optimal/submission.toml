@@ -5,4 +5,4 @@ description = "Optimal parse per 32 KB block over 24-deep hash chains: candidate
 [claims]
 score = 0.982
 parse_time_vs_incumbent = 6.6
-proof_lines = 442
+proof_lines = 344

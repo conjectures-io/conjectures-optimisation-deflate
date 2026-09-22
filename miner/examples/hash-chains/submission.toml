@@ -5,4 +5,4 @@ description = "16-deep hash chains. Same greedy decision, more candidates."
 [claims]
 score = 1.040
 parse_time_vs_incumbent = 0.47
-proof_lines = 236
+proof_lines = 193

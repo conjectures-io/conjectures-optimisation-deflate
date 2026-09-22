@@ -19,7 +19,8 @@ open Aeneas Aeneas.Std Result ControlFlow
 set_option maxRecDepth 8192
 set_option maxHeartbeats 1000000
 
-open LZ77 (toks bytes bytes_length bytes_getElem! toks_update bytes_congr)
+open LZ77 (toks bytes bytes_length bytes_getElem! toks_update bytes_congr
+  Matches Found Pending emitted emitted_ge emitted_lt pending_of_found emit_lit emit_match)
 
 /-! ## The hash
 
@@ -30,8 +31,7 @@ property that lets a miner replace the whole search with anything they like. -/
 @[local step]
 theorem hash3_spec (a b c : Std.U8) :
     slot.hash3 a b c ⦃ fun h => h.val < 32768 ⦄ := by
-  rw [slot.hash3]
-  step*
+  prove_hash3
 
 /-! ## The match-length loop
 
@@ -39,59 +39,19 @@ The one function whose *result* the proof depends on. Its postcondition is
 precisely the hypothesis `LZ77.valid_match` wants, which is why the rest of the
 submission never mentions `copyN`. -/
 
-/-- `Matches input a b n`: the `n` bytes at `a` and at `b` agree. -/
-def Matches (input : Slice Std.U8) (a b n : Nat) : Prop :=
-  ∀ k, k < n → input.val[b + k]! = input.val[a + k]!
-
 theorem match_len_loop_spec (input : Slice Std.U8) (a b cap l0 : Std.Usize)
     (ha : a.val + cap.val ≤ input.length) (hb : b.val + cap.val ≤ input.length)
     (hl0 : l0.val ≤ cap.val) (h0 : Matches input a.val b.val l0.val) :
     slot.match_len_loop input a b cap l0 ⦃ fun l =>
       l.val ≤ cap.val ∧ Matches input a.val b.val l.val ⦄ := by
-  rw [slot.match_len_loop]
-  apply Std.loop.spec_decr_nat
-    (measure := fun l => cap.val - l.val)
-    (inv := fun l => l.val ≤ cap.val ∧ Matches input a.val b.val l.val)
-  · rintro l ⟨hle, hinv⟩
-    simp only [slot.match_len_loop.body]
-    split
-    case isTrue hlt =>
-      have hltn : l.val < cap.val := by scalar_tac
-      have hbi : b.val + l.val < input.length := by omega
-      have hai : a.val + l.val < input.length := by omega
-      have hmax : input.length ≤ Std.Usize.max := Std.Slice.length_ineq input
-      apply Std.WP.spec_bind (Std.Usize.add_spec (x := b) (y := l) (by scalar_tac))
-      intro i hi
-      apply Std.WP.spec_bind (Std.Slice.index_usize_spec input i (by scalar_tac))
-      intro x1 hx1
-      apply Std.WP.spec_bind (Std.Usize.add_spec (x := a) (y := l) (by scalar_tac))
-      intro i2 hi2
-      apply Std.WP.spec_bind (Std.Slice.index_usize_spec input i2 (by scalar_tac))
-      intro x3 hx3
-      split
-      case isTrue heq =>
-        apply Std.WP.spec_bind (Std.Usize.add_spec (x := l) (y := 1#usize) (by scalar_tac))
-        intro l1 hl1
-        simp only [Std.WP.spec_ok]
-        refine ⟨⟨by scalar_tac, ?_⟩, by scalar_tac⟩
-        intro k hk
-        rcases Nat.lt_or_ge k l.val with h | h
-        · exact hinv k h
-        · have hkl : k = l.val := by scalar_tac
-          rw [hkl, ← hi, ← hi2, getElem!_pos _ _ (by scalar_tac),
-              getElem!_pos _ _ (by scalar_tac), ← hx1, ← hx3]
-          exact heq
-      case isFalse => exact ⟨hle, hinv⟩
-    case isFalse => exact ⟨hle, hinv⟩
-  · exact ⟨hl0, h0⟩
+  prove_match_len_loop
 
 @[local step]
 theorem match_len_spec (input : Slice Std.U8) (a b cap : Std.Usize)
     (ha : a.val + cap.val ≤ input.length) (hb : b.val + cap.val ≤ input.length) :
     slot.match_len input a b cap ⦃ fun l =>
-      l.val ≤ cap.val ∧ Matches input a.val b.val l.val ⦄ :=
-  match_len_loop_spec input a b cap 0#usize ha hb (by scalar_tac) (by
-    intro k hk; simp at hk)
+      l.val ≤ cap.val ∧ Matches input a.val b.val l.val ⦄ := by
+  prove_match_len
 
 /-! ## The hash-insert loop
 
@@ -117,16 +77,6 @@ theorem parse_loop0_loop0_spec (input : Slice Std.U8)
     step*
   · exact hlim
 
-/-- What the search must establish before a match may be emitted: either it found
-    nothing, or the `(distance, length)` it reports is in range *and its bytes have
-    been compared*. Everything a different search strategy has to prove is here,
-    and nothing else. -/
-def Found (input : Slice Std.U8) (n pos best_len best_dist : Std.Usize) : Prop :=
-  best_len.val < 3 ∨
-    (3 ≤ best_len.val ∧ best_len.val ≤ 258 ∧ pos.val + best_len.val ≤ n.val ∧
-      1 ≤ best_dist.val ∧ best_dist.val ≤ 32768 ∧ best_dist.val ≤ pos.val ∧
-      Matches input (pos.val - best_dist.val) pos.val best_len.val)
-
 /-! ## The search
 
 `find_match` walks a hash chain. Its whole postcondition is `Found`, and `Found`
@@ -149,7 +99,7 @@ theorem find_match_loop_spec (input : Slice Std.U8) (prev : Slice Std.U32)
       ⦃ fun r => Found input n pos r.1 r.2 ⦄ := by
   rw [slot.find_match_loop]
   apply Std.loop.spec_decr_nat
-    (measure := fun s => 16 - s.2.2.2.val)
+    (measure := fun s => slot.MAX_PROBES.val - s.2.2.2.val)
     (inv := fun s => Found input n pos s.1 s.2.1)
   · rintro ⟨bl, bd, cur, probes⟩ hinv
     simp only at hinv

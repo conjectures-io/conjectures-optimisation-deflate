@@ -1,0 +1,8 @@
+name = "optimal-iter"
+author = "operator"
+description = "Optimal parse with one Huffman-aware cost iteration: the first path's symbol counts become per-symbol bit costs and the dynamic program runs again under them. The emission is unchanged and re-verified."
+
+[claims]
+score = 0.976
+parse_time_vs_incumbent = 7.5
+proof_lines = 613
