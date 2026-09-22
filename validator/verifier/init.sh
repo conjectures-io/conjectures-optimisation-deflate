@@ -160,14 +160,15 @@ step "5/6  Build"
 if [ "$CHECK" = 1 ]; then
     present test -d "$root/lean/.lake/build/lib" \
         && ok "contract built" || { miss "contract not built"; missing=1; }
+    present test -x "$root/precheck/target/release/submission-precheck" \
+        && ok "syntax checker built" || { miss "syntax checker not built"; missing=1; }
     present test -x "$root/measure/target/release/measure" \
         && ok "engine built" || { miss "measurement engine not built"; missing=1; }
 else
     (cd "$root/lean" && lake build Lz77) >/dev/null
     ok "contract (lean/Lz77)"
-    # slot/generated/parse.rs is gitignored (verify.py/justfile overwrite it per
-    # submission before every real build) so a fresh clone has nothing there yet
-    # -- seed it with the template before this sanity build.
+    (cd "$root/precheck" && cargo build --release --locked -q)
+    # The standalone slot uses a trusted template; verification has private inputs.
     mkdir -p "$root/slot/generated"
     cp "$repo/miner/template/parse.rs" "$root/slot/generated/parse.rs"
     (cd "$root/slot" && cargo build --release -q)

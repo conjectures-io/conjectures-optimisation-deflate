@@ -206,6 +206,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+if command -v cargo >/dev/null 2>&1; then
+    if [ "$CHECK" = 0 ]; then
+        cargo build --release --locked --manifest-path "$root/validator/precheck/Cargo.toml" || exit 2
+    elif [ ! -x "$root/validator/precheck/target/release/submission-precheck" ]; then
+        miss "syntax checker missing; run ./setup.sh"
+        missing=1
+    fi
+else
+    miss "cargo missing; install Rust to build the syntax checker"
+fi
+
 step "8/9  Slot (validator/slot/src/parse.rs is a symlink to generated/, gitignored)"
 if [ -s "$root/validator/slot/generated/parse.rs" ]; then
     ok "validator/slot/generated/parse.rs present"

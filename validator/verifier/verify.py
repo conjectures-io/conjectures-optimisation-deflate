@@ -24,25 +24,37 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime as dt
 import hashlib
 import json
 import os
 import re
-import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import time
+import tomllib
 from pathlib import Path
 from typing import NoReturn, cast
 
 from loguru import logger
+from sqlalchemy.exc import SQLAlchemyError
 
 ROOT = Path(__file__).resolve().parent.parent
-LEAN = ROOT / "lean"
+lean_root = ROOT / "lean"
 
 sys.path.insert(0, str(ROOT))
 import bench  # noqa: E402 - after sys.path so the sibling package resolves
+import db  # noqa: E402
 from bench import corpora, report, verdict  # noqa: E402
+from sandbox import bwrap  # noqa: E402
+from verifier import resolved  # noqa: E402
+from verifier.identity import fingerprint  # noqa: E402
+from verifier.workspace import Workspace  # noqa: E402
+
+work_root = ROOT
+active_workspace: Workspace | None = None
 
 # The two files a submission supplies, and where they land.
 SUBMISSION_FILES = {
@@ -54,33 +66,6 @@ SUBMISSION_FILES = {
 SUBMISSION = "submission"
 
 ALLOWED_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
-
-# Prover-friendly Rust, (regex, why it is rejected).
-POLICY = [
-    (r"\bunsafe\b", "`unsafe` is outside the translated subset"),
-    (
-        r"'[a-zA-Z_][a-zA-Z_0-9]*\s*:\s*(?:while|loop|for)\b",
-        "labelled loops: Aeneas cannot translate labelled break/continue",
-    ),
-    (r"\b(?:break|continue)\s+'", "labelled break/continue"),
-    (r"\bfor\b\s+\w+\s+\bin\b", "`for` loops go through Iterator, which is opaque"),
-    (
-        r"\.iter\(\)|\.into_iter\(\)|\.chunks\(|\.windows\(|\.fold\(|\.map\(|\.filter\(",
-        "iterator adapters are opaque; use indices",
-    ),
-    (r"\bdyn\b|\bimpl\s+(?:Fn|Iterator)", "trait objects and impl-trait are opaque"),
-    (r"\buse\s+crate::", "the slot is compiled as its own crate root"),
-    (
-        r"\bstd::arch|core::arch|_mm_|__m128|__m256|target_feature",
-        "SIMD is outside the subset (and cannot improve ratio anyway)",
-    ),
-    (r"\bextern\b|\basm!|\binclude!", "no foreign code"),
-    (r"\bstatic\s+mut\b", "mutable statics"),
-    (
-        r"\bmod\b\s+\w+|\binclude_str!|\binclude_bytes!",
-        "the slot is one file; no modules and no embedded data",
-    ),
-]
 
 # Lean commands that run code at elaboration time; a tactic proof needs none. Rule 7.
 LEAN_POLICY = [
@@ -105,6 +90,7 @@ EXTRACTED = ["lean/Slot/Types.lean", "lean/Slot/Funs.lean"]
 
 # Memory is a cgroup, not an rlimit: RLIMIT_AS/DATA kill Lean's allocator at thread creation.
 SANDBOX = os.environ.get("VERIFY_SANDBOX", "bwrap")
+TOOL_TIMEOUT = int(os.environ.get("VERIFY_TOOL_TIMEOUT", "900"))
 LEAN_TIMEOUT = int(os.environ.get("VERIFY_LEAN_TIMEOUT", "900"))
 LEAN_MEMORY_MB = int(os.environ.get("VERIFY_LEAN_MEMORY_MB", "16384"))
 
@@ -125,6 +111,8 @@ def sha(p: Path) -> str:
 
 def fail(stage: str, msg: str) -> NoReturn:
     # Reject the submission: the verdict line on stdout, exit 1.
+    if active_workspace is not None:
+        active_workspace.record(stage, "rejected", msg)
     logger.info(f"[gate] rejected at stage {stage}")
     print(f"\nREJECTED at stage {stage}\n  {msg}")
     sys.exit(1)
@@ -132,121 +120,114 @@ def fail(stage: str, msg: str) -> NoReturn:
 
 def misconfigured(msg: str) -> NoReturn:
     # Stop because the validator is broken, never blaming the submission: exit 2.
+    if active_workspace is not None:
+        active_workspace.record("infrastructure", "error", msg)
     logger.warning(f"[gate] validator misconfigured: {msg.splitlines()[0]}")
     print(f"\nVALIDATOR ERROR\n  {msg}")
     sys.exit(2)
 
 
-def run(
-    cmd: list[str], timeout: float | None = None, cwd: Path | None = None
-) -> subprocess.CompletedProcess[str]:
-    # Run a command with config.sh's environment; a timeout becomes exit 124, not an exception.
-    env = dict(os.environ)
+def tool_environment() -> dict[str, str]:
+    # Configuration is operator-owned; never pass database/API credentials to tools.
     cfg = subprocess.run(
-        ["bash", "-c", f'. "{ROOT}/verifier/config.sh" && env'],
+        ["bash", "-c", 'source "$1" && env -0', "config", str(ROOT / "verifier/config.sh")],
         capture_output=True,
-        text=True,
+        check=True,
     )
-    for line in cfg.stdout.splitlines():
-        if "=" in line:
-            k, v = line.split("=", 1)
-            env[k] = v
-    t0 = time.monotonic()
-    try:
-        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout, cwd=cwd)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        r = subprocess.CompletedProcess(cmd, 124, out, f"timed out after {timeout}s")
-    logger.debug(
-        f"[gate] {Path(str(cmd[0])).name} exit={r.returncode} in {time.monotonic() - t0:.1f}s"
-    )
-    return r
+    values = dict(entry.split("=", 1) for entry in cfg.stdout.decode().split("\0") if "=" in entry)
+    allowed = {
+        "PATH",
+        "HOME",
+        "ELAN_HOME",
+        "RUSTUP_HOME",
+        "CARGO_HOME",
+        "AENEAS_WORK",
+        "CHARON_DIR",
+        "CHARON_TOOLCHAIN",
+        "LEAN_TOOLCHAIN",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+    }
+    env = {key: value for key, value in values.items() if key in allowed} | {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TMPDIR": "/tmp",
+    }
+    for key in ("AENEAS_WORK", "CHARON_DIR", "ELAN_HOME", "CARGO_HOME", "RUSTUP_HOME"):
+        if key in env:
+            env[key] = str(Path(env[key]).resolve())
+    return env
 
 
-def sandbox_prefix() -> list[str]:
-    # bubblewrap args confining the proof: everything read-only but Lake's build dir, no network.
-    if SANDBOX == "off":
-        return []
-    lake = (LEAN / ".lake").resolve()
-    args = [
-        "bwrap",
-        "--ro-bind",
-        "/",
-        "/",
-        "--dev",
-        "/dev",
-        "--proc",
-        "/proc",
-        "--tmpfs",
-        "/tmp",
-        "--unshare-all",
-        "--die-with-parent",
-        "--ro-bind",
-        str(ROOT),
-        str(ROOT),
+def sandbox_spec(*, proof: bool = True, output: str = "Proof") -> bwrap.Sandbox:
+    env = tool_environment()
+    home = Path(env["HOME"])
+    dependencies = [
+        ROOT / "verifier",
+        work_root,
+        ROOT / "lean/.lake/packages",
+        Path(env["AENEAS_WORK"]),
+        Path(env["ELAN_HOME"]),
+        Path(env.get("RUSTUP_HOME", str(home / ".rustup"))),
+        Path(env.get("CARGO_HOME", str(home / ".cargo"))) / "bin",
     ]
-    if lake.is_dir():
-        args += ["--bind", str(lake), str(lake)]
-        pkgs = (lake / "packages").resolve()
-        if pkgs.is_dir():
-            args += ["--ro-bind", str(pkgs), str(pkgs)]
-        build = (lake / "build").resolve()
-        for sub in ("lib/lean", "ir"):
-            for lib in TRUSTED_LIBS:
-                for p in sorted((build / sub).glob(f"{lib}*")):
-                    args += ["--ro-bind", str(p), str(p)]
-    args += ["--chdir", str(LEAN), "--"]
-    if LEAN_MEMORY_MB > 0 and shutil.which("systemd-run"):
-        args = [
-            "systemd-run",
-            "--user",
-            "--scope",
-            "--quiet",
-            "-p",
-            f"MemoryMax={LEAN_MEMORY_MB}M",
-        ] + args
-    return args
+    frozen: list[Path] = [lean_root / ".lake/packages"]
+    if proof:
+        build = lean_root / ".lake/build/lib/lean"
+        # Submitted elaboration can write only its own module outputs. It cannot
+        # forge the obligation or modify a previously checked dependency.
+        writable = (build / output,) if output else ()
+        for path in writable:
+            path.mkdir(parents=True, exist_ok=True)
+    else:
+        writable = (lean_root / ".lake", lean_root / "Slot", lean_root / ".extract")
+        # Extraction has its own writable output directory; inputs remain read-only.
+        if not (lean_root / "slot.llbc").exists():
+            (lean_root / "slot.llbc").touch()
+        writable += (lean_root / "slot.llbc",)
+    return bwrap.Sandbox(
+        enabled=SANDBOX != "off",
+        ro_binds=tuple(p for p in dependencies if p.exists()),
+        rw_binds=writable,
+        memory_mb=LEAN_MEMORY_MB,
+        minimal=True,
+        frozen_binds=tuple(frozen),
+    )
+
+
+def run(
+    cmd: list[str],
+    timeout: float | None = None,
+    cwd: Path | None = None,
+    *,
+    proof: bool = True,
+    output: str = "Proof",
+) -> bwrap.Result:
+    result = bwrap.run(
+        sandbox_spec(proof=proof, output=output),
+        cmd,
+        cwd=cwd or work_root,
+        timeout=timeout or (LEAN_TIMEOUT if proof else TOOL_TIMEOUT),
+        env=tool_environment(),
+    )
+    if active_workspace is not None:
+        logs = active_workspace.path / "logs"
+        (logs / f"{len(list(logs.iterdir())):03d}-{Path(cmd[0]).name}.log").write_text(
+            result.stdout + result.stderr
+        )
+    return result
 
 
 def check_sandbox() -> str:
-    # Refuse to run as a validator without a working sandbox; return the limits in force.
     if SANDBOX == "off":
         logger.warning("[gate] running UNSANDBOXED (VERIFY_SANDBOX=off)")
         return "UNSANDBOXED, VERIFY_SANDBOX=off"
-    if not shutil.which("bwrap"):
-        misconfigured(
-            "bubblewrap is not installed and VERIFY_SANDBOX is not `off`.\n"
-            "  A validator must sandbox the proof: `sudo apt install bubblewrap`.\n"
-            "  A miner checking their own submission may set VERIFY_SANDBOX=off."
-        )
-    probe = subprocess.run(
-        [
-            "bwrap",
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--unshare-all",
-            "--die-with-parent",
-            "true",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if probe.returncode != 0:
-        misconfigured(
-            "bubblewrap is installed but cannot create a sandbox here:\n  "
-            + probe.stderr.strip().replace("\n", "\n  ")
-            + "\n  On Ubuntu 24.04: "
-            + "`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`."
-        )
-    mem = f"{LEAN_MEMORY_MB} MB" if LEAN_MEMORY_MB > 0 and shutil.which("systemd-run") else "no cap"
-    if mem == "no cap":
-        logger.warning("[gate] systemd-run not found: the proof runs without a memory cap")
-    return f"bwrap, {LEAN_TIMEOUT}s, {mem}"
+    try:
+        bwrap.check(True)
+        bwrap.check_resources(bwrap.Sandbox(memory_mb=LEAN_MEMORY_MB))
+    except bwrap.Unavailable as exc:
+        misconfigured(str(exc))
+    return f"bwrap, {LEAN_TIMEOUT}s, {LEAN_MEMORY_MB} MB"
 
 
 # ── The stages ────────────────────────────────────────────────────────────
@@ -272,8 +253,11 @@ def stage_intake(sub: Path) -> None:
     if extra:
         fail("0 (intake)", f"a submission is two files; found also: {', '.join(extra)}")
     for name, dest in SUBMISSION_FILES.items():
-        (ROOT / dest).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(sub / name, ROOT / dest)
+        assert active_workspace is not None
+        data = (sub / name).read_bytes()
+        if len(data) > MAX_FILE_BYTES:
+            fail("0 (intake)", f"{name} exceeds the size limit")
+        active_workspace.snapshot(name, data, dest)
         logger.debug(f"[gate] {name} {sha(sub / name)[:16]} -> {dest}")
     print(f"0 intake      ok — {sub.name}: parse.rs, Parse.lean")
 
@@ -289,10 +273,23 @@ def scan(text: str, rules: list[tuple[str, str]]) -> list[str]:
 
 
 def scan_rust(src: str) -> list[str]:
-    # Rust policy with comments stripped, so a rule named in a doc comment is not a violation.
-    stripped = re.sub(r"//[^\n]*", "", src)
-    stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.S)
-    return scan(stripped, POLICY)
+    checker = ROOT / "precheck/target/release/submission-precheck"
+    if not checker.is_file():
+        misconfigured(
+            "missing syntax checker: build validator/precheck with cargo build --release --locked"
+        )
+    with tempfile.TemporaryDirectory(prefix="syntax-") as tmp:
+        path = Path(tmp) / "parse.rs"
+        path.write_text(src)
+        result = subprocess.run(
+            [str(checker), str(path)], capture_output=True, text=True, timeout=30
+        )
+    if result.returncode not in (0, 1):
+        misconfigured("syntax checker failed: " + result.stderr)
+    diagnostics = cast(dict[str, list[dict[str, str | int]]], json.loads(result.stdout))[
+        "diagnostics"
+    ]
+    return [f"line ~{entry['line']}: {entry['message']}" for entry in diagnostics]
 
 
 def scan_lean(src: str) -> list[str]:
@@ -300,23 +297,62 @@ def scan_lean(src: str) -> list[str]:
     return scan(src, LEAN_POLICY)
 
 
-def stage_policy() -> None:
+def stage_policy(*, check_proof: bool = True) -> None:
     # Reject Rust outside the translated subset and Lean that runs code.
-    bad = scan_rust((ROOT / "slot/generated/parse.rs").read_text())
-    bad += [f"Parse.lean {b}" for b in scan_lean((ROOT / "lean/Proof/Parse.lean").read_text())]
+    bad = scan_rust((work_root / "slot/generated/parse.rs").read_text())
+    if check_proof:
+        bad += [
+            f"Parse.lean {b}" for b in scan_lean((work_root / "lean/Proof/Parse.lean").read_text())
+        ]
     if bad:
         fail("1 (policy)", "\n  ".join(bad))
-    print("1 policy      ok — the Rust is inside the subset; the proof runs no code")
+    print("1 policy      ok — source prefilters passed")
+
+
+def stage_static() -> None:
+    compiler = run(
+        ["rustup", "run", tool_environment()["CHARON_TOOLCHAIN"], "rustc", "--version"],
+        timeout=30,
+        proof=False,
+    )
+    if compiler.returncode:
+        misconfigured("Rust toolchain preflight failed: " + compiler.stderr.strip())
+    r = run(
+        [
+            str(ROOT / "verifier/extract.sh"),
+            str(work_root / "slot/generated/parse.rs"),
+            str(lean_root),
+            "compile",
+        ],
+        proof=False,
+    )
+    if r.returncode == 2:
+        misconfigured((r.stderr or r.stdout).strip()[-2000:])
+    if r.returncode:
+        fail("2 (static)", (r.stdout + r.stderr).strip()[-2000:])
+    try:
+        operations = resolved.check(lean_root / "slot.llbc")
+    except resolved.Unsupported as exc:
+        fail("2 (static)", str(exc))
+    print(f"2 static      ok — resolved operations: {', '.join(operations)}")
 
 
 def stage_extract() -> dict[str, str]:
     # Run charon+aeneas ourselves; an extraction supplied by the miner is never trusted.
-    r = run([str(ROOT / "verifier/extract.sh")])
+    r = run(
+        [
+            str(ROOT / "verifier/extract.sh"),
+            str(work_root / "slot/generated/parse.rs"),
+            str(lean_root),
+            "translate",
+        ],
+        proof=False,
+    )
     if r.returncode == 2:
         misconfigured((r.stderr or r.stdout).strip()[:2000])
     if r.returncode != 0:
         fail("3 (extract)", (r.stderr or r.stdout).strip()[:2000])
-    hashes = {p: sha(ROOT / p) for p in EXTRACTED}
+    hashes = {p: sha(work_root / p) for p in EXTRACTED}
     logger.debug(
         f"[gate] extracted {', '.join(f'{Path(p).name} {h[:16]}' for p, h in hashes.items())}"
     )
@@ -325,17 +361,50 @@ def stage_extract() -> dict[str, str]:
 
 
 def stage_build(limits: str) -> None:
-    # Build the trusted libraries outside the sandbox, then the proof and gate inside it.
-    r = run(["lake", "build", *TRUSTED_LIBS], cwd=LEAN)
+    if not (lean_root / ".lake/packages/aeneas").exists():
+        misconfigured("Lean dependency cache is missing; run just init")
+    lean = run(["lake", "env", "lean", "--version"], cwd=lean_root, timeout=30, proof=False)
+    if lean.returncode:
+        misconfigured("Lean toolchain preflight failed: " + (lean.stdout + lean.stderr).strip())
+    # Build trusted libraries in the compiler sandbox, then restrict writes for the proof and gate.
+    r = run(["lake", "build", *TRUSTED_LIBS], cwd=lean_root, proof=False)
     out = r.stdout + r.stderr
     if r.returncode != 0:
-        if "unknown package" in out or "no such file" in out.lower():
+        if any(
+            message in out.lower()
+            for message in (
+                "unknown package",
+                "no such file",
+                "read-only file system",
+                "permission denied",
+            )
+        ):
             misconfigured(out.strip()[-2000:])
         errs = [ln for ln in out.splitlines() if ln.startswith("error")]
         fail("3 (extract)", "the extracted slot does not build:\n  " + "\n  ".join(errs[:20]))
-    prefix = sandbox_prefix()
-    logger.debug(f"[gate] sandbox: {' '.join(prefix) if prefix else 'off'}")
-    r = run(prefix + ["lake", "build", "Verify"], cwd=LEAN, timeout=LEAN_TIMEOUT)
+    r = run(
+        ["lake", "env", "lean", "-o", ".lake/build/lib/lean/Proof/Parse.olean", "Proof/Parse.lean"],
+        cwd=lean_root,
+        timeout=LEAN_TIMEOUT,
+    )
+    out = r.stdout + r.stderr
+    if r.returncode == 124:
+        fail("4 (statement)", f"the proof did not finish elaborating in {LEAN_TIMEOUT}s")
+    if r.returncode != 0:
+        fail("4 (statement)", out.strip()[-2000:])
+    r = run(
+        [
+            "lake",
+            "env",
+            "lean",
+            "-o",
+            ".lake/build/lib/lean/Verify/Obligation.olean",
+            "Verify/Obligation.lean",
+        ],
+        cwd=lean_root,
+        timeout=LEAN_TIMEOUT,
+        output="Verify",
+    )
     out = r.stdout + r.stderr
     if r.returncode == 124:
         fail("4 (statement)", f"the proof did not finish elaborating in {LEAN_TIMEOUT}s")
@@ -347,10 +416,10 @@ def stage_build(limits: str) -> None:
 
 def stage_axioms(extracted: dict[str, str]) -> None:
     # Read the axioms from a dedicated lean run, then re-hash the pins and the extraction.
-    query = ROOT / ".work/axioms.lean"
+    query = work_root / "axioms.lean"
     query.parent.mkdir(exist_ok=True)
     query.write_text(AXIOM_QUERY)
-    r = run(sandbox_prefix() + ["lake", "env", "lean", str(query)], cwd=LEAN, timeout=LEAN_TIMEOUT)
+    r = run(["lake", "env", "lean", str(query)], cwd=lean_root, timeout=LEAN_TIMEOUT, output="")
     logger.debug(f"[gate] axiom query stdout: {r.stdout.strip()!r}")
     reports = [m for m in map(AXIOM_REPORT.match, r.stdout.splitlines()) if m]
     if r.returncode != 0 or len(reports) != 1:
@@ -362,7 +431,7 @@ def stage_axioms(extracted: dict[str, str]) -> None:
     extra = names - ALLOWED_AXIOMS
     if extra:
         fail("5 (axioms)", f"the proof rests on {sorted(extra)}")
-    changed = [p for p in EXTRACTED if sha(ROOT / p) != extracted[p]]
+    changed = [p for p in EXTRACTED if sha(work_root / p) != extracted[p]]
     if changed:
         fail(
             "5 (axioms)",
@@ -386,7 +455,11 @@ def stage_score(results: Path | None) -> int:
         misconfigured(f"corpus {corpus.path} is empty; run `verifier/make-corpus.py`")
     print("6 score       running…\n")
 
-    proved = ROOT / SUBMISSION_FILES["parse.rs"]
+    proved = work_root / SUBMISSION_FILES["parse.rs"]
+    assert active_workspace is not None
+    expected = active_workspace.hashes["parse.rs"]
+    if sha(proved) != expected:
+        fail("6 (score)", "source changed after intake")
     try:
         measured = bench.run(
             bench_config(), {SUBMISSION: proved}, corpus, speed_floor=verdict.SPEED_FLOOR
@@ -401,7 +474,7 @@ def stage_score(results: Path | None) -> int:
     run = measured.only()
     # What was measured must be what was extracted and proved. They are one file
     # on disk, so this can only fail if something rewrote it mid-gate.
-    if (run.meta.methods[SUBMISSION].source_sha256 or "") != sha(proved):
+    if (run.meta.methods[SUBMISSION].source_sha256 or "") != expected:
         fail("6 (score)", "the parse.rs that was measured is not the one that was proved")
 
     print(report.table(measured, verdict.SPEED_FLOOR))
@@ -415,36 +488,152 @@ def stage_score(results: Path | None) -> int:
     return 0 if v.accepted else 1
 
 
+def terminate(_signum: int, _frame: object) -> NoReturn:
+    raise SystemExit(2)
+
+
 def main() -> None:
+    signal.signal(signal.SIGTERM, terminate)
     # Parse arguments and run the stages in order; the order is the design.
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
-    ap.add_argument("submission", help="directory with parse.rs and Parse.lean")
+    ap.add_argument(
+        "submission", nargs="?", default="", help="directory with parse.rs and Parse.lean"
+    )
+    ap.add_argument("--submission-id", type=int)
+    ap.add_argument("--claim")
+    ap.add_argument("--claim-token")
+    ap.add_argument("--stage", choices=("full", "static", "lean", "extract"), default="full")
+    ap.add_argument("--proof", type=Path)
+    ap.add_argument("--keep", choices=("auto", "always", "never"), default="auto")
     ap.add_argument("--no-score", action="store_true", help="stop after the proof gate")
     ap.add_argument("--results", type=Path, help="write the score as JSON here")
     args = ap.parse_args()
     submission = cast(str, args.submission)
-    no_score = cast(bool, args.no_score)
+    stage = cast(str, args.stage)
+    no_score = cast(bool, args.no_score) or stage != "full"
     results = cast("Path | None", args.results)
 
+    store: db.Store | None = None
+    sub_id = cast(int | None, args.submission_id)
+    claim = cast(str | None, args.claim)
+    if sub_id is not None:
+        if SANDBOX == "off":
+            misconfigured("DB verification requires the sandbox")
+        from service.settings import load
+
+        try:
+            store = db.connect()
+            store.ping()
+        except SQLAlchemyError as exc:
+            misconfigured(f"database preflight failed: {type(exc).__name__}")
+        submission = str(load().submission_dir(sub_id))
+    elif not submission:
+        ap.error("a source/submission path or --submission-id is required")
     t0 = time.monotonic()
     limits = check_sandbox()
+    native = cast(
+        dict[str, dict[str, str]], tomllib.loads((ROOT / "rust-toolchain.toml").read_text())
+    )["toolchain"]["channel"]
+    if tool_environment()["CHARON_TOOLCHAIN"] != native:
+        misconfigured("extraction and native Rust toolchains must match")
+    overrides = [
+        key
+        for key, value in os.environ.items()
+        if value
+        and (
+            key in {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTUP_TOOLCHAIN"}
+            or key.startswith("CARGO_PROFILE_RELEASE_")
+        )
+    ]
+    if overrides:
+        misconfigured(
+            "verification requires the pinned compilation recipe; unset " + ", ".join(overrides)
+        )
     if not no_score:
         try:
             bench_limits = bench.check(bench_config())
         except bench.Misconfigured as e:
             misconfigured(str(e))
         logger.debug(f"[gate] benchmark sandbox: {bench_limits}")
-    print(f"verifying {submission}\n")
-    stage_intake(Path(submission).resolve())
-    stage_policy()
-    extracted = stage_extract()
-    stage_build(limits)
-    stage_axioms(extracted)
-    logger.info(f"[gate] proof accepted in {time.monotonic() - t0:.1f}s ({limits})")
-    if no_score:
-        print("\nproof accepted (scoring skipped)")
-        return
-    sys.exit(stage_score(results))
+    global active_workspace, work_root, lean_root
+    active_workspace = Workspace(ROOT)
+    work_root = active_workspace.path
+    lean_root = work_root / "lean"
+    code = 2
+    token = ""
+    cached = False
+    verification_id = ""
+    try:
+        print(f"verifying {submission}\nworkspace: {work_root}\n")
+        if stage == "full" or sub_id is not None:
+            stage_intake(Path(submission).resolve())
+        else:
+            with tempfile.TemporaryDirectory(prefix="verification-input-") as tmp:
+                inputs = Path(tmp)
+                (inputs / "parse.rs").write_bytes(Path(submission).read_bytes())
+                proof = cast(Path | None, args.proof)
+                if stage == "lean" and proof is None:
+                    misconfigured("--stage lean requires --proof FILE")
+                (inputs / "Parse.lean").write_bytes(proof.read_bytes() if proof else b"")
+                stage_intake(inputs)
+        if store is not None and sub_id is not None:
+            verification_id = fingerprint()
+            token, cached = store.verification.begin(
+                sub_id,
+                (work_root / "slot/generated/parse.rs").read_bytes(),
+                (lean_root / "Proof/Parse.lean").read_bytes(),
+                verification_id,
+                lean_only=stage == "lean",
+                reuse=stage == "full",
+                expected_claim=dt.datetime.fromisoformat(claim) if claim else None,
+                expected_attempt=cast(str | None, args.claim_token),
+            )
+        if not cached:
+            stage_policy(check_proof=stage != "static")
+            stage_static()
+            active_workspace.record("static", "passed")
+            if store is not None and sub_id is not None and stage != "lean":
+                if fingerprint() != verification_id:
+                    misconfigured("trusted verification inputs changed during static analysis")
+                store.verification.publish(sub_id, token, "static")
+            if stage != "static":
+                extracted = stage_extract()
+                if stage != "extract":
+                    stage_build(limits)
+                    stage_axioms(extracted)
+                    active_workspace.record("lean", "passed")
+                    if store is not None and sub_id is not None:
+                        if fingerprint() != verification_id:
+                            misconfigured(
+                                "trusted verification inputs changed during Lean checking"
+                            )
+                        store.verification.publish(sub_id, token, "lean")
+        else:
+            print("reusing matching static and Lean verification")
+        logger.info(f"[gate] verification accepted in {time.monotonic() - t0:.1f}s ({limits})")
+        if no_score:
+            print(
+                "\nproof accepted (scoring skipped)"
+                if stage in ("full", "lean")
+                else f"\n{stage} verification accepted (scoring skipped)"
+            )
+            code = 0
+        else:
+            if store is not None and fingerprint() != verification_id:
+                misconfigured("trusted verification inputs changed before native compilation")
+            code = stage_score(results)
+            if code == 0 and store is not None and sub_id is not None:
+                store.verification.publish(sub_id, token, "measured")
+    except (OSError, SQLAlchemyError, ValueError, db.verification.StaleAttempt) as exc:
+        misconfigured(str(exc))
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 2
+        raise
+    finally:
+        active_workspace.finish(code, cast(str, args.keep))
+        if store is not None:
+            store.close()
+    sys.exit(code)
 
 
 if __name__ == "__main__":

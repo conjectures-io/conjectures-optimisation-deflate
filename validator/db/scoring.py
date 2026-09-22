@@ -51,7 +51,13 @@ def _scorable(stmt):
     # Only accepted submissions carrying every number the frontier needs. A row missing
     # one of them predates the columns or came from a harness that did not print it;
     # scoring it would put a fabricated point on the frontier.
+    from verifier.identity import required_fingerprint
+
     return stmt.where(
+        models.Submission.static_verified_at.is_not(None),
+        models.Submission.lean_verified_at.is_not(None),
+        models.Submission.verifier_fingerprint == required_fingerprint(),
+        models.Submission.measured_source_sha256 == models.Submission.source_sha256,
         models.Submission.state == SubmissionState.ACCEPTED.value,
         models.Submission.bytes.is_not(None),
         models.Submission.raw_bytes.is_not(None),

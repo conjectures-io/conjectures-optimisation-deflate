@@ -8,12 +8,14 @@ __pycache__/
 .venv/
 .env
 
-# The slot: overwritten per-submission by verify.py/justfile before every real
-# build, so the committed content is never what's actually checked -- see
-# validator/slot/generated/'s and validator/lean/Slot/'s own layout.
+# The standalone slot template and legacy local verification outputs.
+# New verification outputs live in data/verification-workspace/.
 validator/slot/generated/parse.rs
 validator/lean/Slot/Funs.lean
 validator/lean/Slot/Types.lean
-# Same story: a submission's Parse.lean, staged here by the same
-# SUBMISSION_FILES copy in verify.py -- never a stable committed value.
+# Legacy proof staging path, no longer written by the gate.
 validator/lean/Proof/Parse.lean
+
+# Trusted syntax checker build output.
+validator/precheck/target/
+data/verification-workspace/

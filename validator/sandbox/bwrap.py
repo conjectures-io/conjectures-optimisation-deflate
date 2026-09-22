@@ -7,7 +7,9 @@ Sandbox should expose ("environment writing") is entirely the caller's job.
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -29,6 +31,8 @@ class Sandbox:
     rw_binds: tuple[Path, ...] = ()
     memory_mb: int = 0
     cpus: str = ""
+    minimal: bool = False
+    frozen_binds: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -72,17 +76,41 @@ def check_resources(sandbox: Sandbox) -> None:
         raise Unavailable("systemd resource limits are unavailable: " + probe.stderr.strip())
 
 
-def run(sandbox: Sandbox, cmd: list[str], *, cwd: Path | None, timeout: float) -> Result:
-    # Confine `cmd` per `sandbox` and run it; the sandbox is the whole story.
-    argv = _argv(sandbox) + cmd
+def run(
+    sandbox: Sandbox,
+    cmd: list[str],
+    *,
+    cwd: Path | None,
+    timeout: float,
+    env: dict[str, str] | None = None,
+) -> Result:
+    """Run in a private process group; timeout/cancellation also stops descendants."""
+    command = argv(sandbox) + cmd
     t0 = time.monotonic()
-    try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        return Result(124, out, f"timed out after {timeout:.0f}s", time.monotonic() - t0)
-    logger.debug(f"[bwrap] {Path(cmd[0]).name} exit={r.returncode} in {time.monotonic() - t0:.1f}s")
-    return Result(r.returncode, r.stdout, r.stderr, time.monotonic() - t0)
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException as exc:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+            if not isinstance(exc, subprocess.TimeoutExpired):
+                raise
+            return Result(124, stdout, f"timed out after {timeout:.0f}s", time.monotonic() - t0)
+    logger.debug(
+        f"[bwrap] {Path(cmd[0]).name} exit={process.returncode} in {time.monotonic() - t0:.1f}s"
+    )
+    return Result(process.returncode, stdout, stderr, time.monotonic() - t0)
 
 
 def _probe_argv() -> list[str]:
@@ -101,7 +129,7 @@ def _probe_argv() -> list[str]:
     ]
 
 
-def _argv(sandbox: Sandbox) -> list[str]:
+def argv(sandbox: Sandbox) -> list[str]:
     if not sandbox.enabled:
         return []
     args = [
@@ -118,6 +146,23 @@ def _argv(sandbox: Sandbox) -> list[str]:
         "--unshare-all",
         "--die-with-parent",
     ]
+    if sandbox.minimal:
+        args = [
+            "bwrap",
+            "--tmpfs",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
+            "--unshare-all",
+            "--die-with-parent",
+        ]
+        for name in ("/usr", "/bin", "/lib", "/lib64", "/etc/ld.so.cache"):
+            if Path(name).exists():
+                args += ["--ro-bind", name, name]
     # bwrap refuses to bind onto a destination reached through a symlink (e.g. a
     # target/ shared across test runs); resolve so source and destination match.
     for p in sandbox.ro_binds:
@@ -126,8 +171,13 @@ def _argv(sandbox: Sandbox) -> list[str]:
             args += ["--ro-bind", str(p), str(p)]
     for p in sandbox.rw_binds:
         p = p.resolve()
-        p.mkdir(parents=True, exist_ok=True)
+        if not p.exists():
+            p.mkdir(parents=True, exist_ok=True)
         args += ["--bind", str(p), str(p)]
+    for p in sandbox.frozen_binds:
+        p = p.resolve()
+        if p.exists():
+            args += ["--ro-bind", str(p), str(p)]
     args += ["--"]
     return _resource_wrap(sandbox, args)
 
@@ -138,6 +188,8 @@ def _resource_wrap(sandbox: Sandbox, args: list[str]) -> list[str]:
         props += ["-p", f"MemoryMax={sandbox.memory_mb}M"]
     if sandbox.cpus:
         props += ["-p", f"AllowedCPUs={sandbox.cpus}"]
-    if not props or not shutil.which("systemd-run"):
+    if not props:
         return args
+    if not shutil.which("systemd-run"):
+        raise Unavailable("systemd-run is required for the requested resource limits")
     return ["systemd-run", "--user", "--scope", "--quiet", *props] + args

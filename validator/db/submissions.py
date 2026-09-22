@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import uuid
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, func, select, update
@@ -88,11 +89,20 @@ class SubmissionsDb:
             row.state = SubmissionState.VERIFYING.value
             row.worker_id = worker_id
             row.claimed_at = clock.now()
+            row.verification_attempt = uuid.uuid4().hex
             session.flush()
             session.expunge(row)
             return row
 
-    def finish(self, sub_id: int, state: SubmissionState, **fields: object) -> str:
+    def finish(
+        self,
+        sub_id: int,
+        state: SubmissionState,
+        *,
+        expected_claim: dt.datetime | None = None,
+        expected_attempt: str | None = None,
+        **fields: object,
+    ) -> str:
         """Record the gate's outcome, and -- only on acceptance -- spend a registration.
 
         The claim runs in this transaction, so a submission is charged exactly when it is
@@ -107,6 +117,10 @@ class SubmissionsDb:
             row = session.get(models.Submission, sub_id, with_for_update=True)
             if row is None:
                 raise LookupError(f"no submission {sub_id}")
+            if (expected_claim is not None and row.claimed_at != expected_claim) or (
+                expected_attempt is not None and row.verification_attempt != expected_attempt
+            ):
+                raise RuntimeError("stale worker claim")
             for key, value in fields.items():
                 setattr(row, key, value)
             row.finished_at = clock.now()
@@ -126,14 +140,33 @@ class SubmissionsDb:
             row.state = state.value
             return state.value
 
-    def requeue(self, sub_id: int) -> None:
+    def requeue(
+        self,
+        sub_id: int,
+        *,
+        expected_claim: dt.datetime | None = None,
+        expected_attempt: str | None = None,
+    ) -> None:
         # Put a submission back at the head of the queue without charging it: the gate
         # hit a validator-side error, which is not the miner's fault.
         with session_scope(self._sessions) as session:
             session.execute(
                 update(models.Submission)
-                .where(models.Submission.id == sub_id)
-                .values(state=SubmissionState.QUEUED.value, worker_id=None, claimed_at=None)
+                .where(
+                    models.Submission.id == sub_id,
+                    models.Submission.claimed_at == expected_claim
+                    if expected_claim is not None
+                    else True,
+                    models.Submission.verification_attempt == expected_attempt
+                    if expected_attempt is not None
+                    else True,
+                )
+                .values(
+                    verification_attempt=None,
+                    state=SubmissionState.QUEUED.value,
+                    worker_id=None,
+                    claimed_at=None,
+                )
             )
 
     def requeue_stale(self, older_than_seconds: float) -> int:
@@ -151,7 +184,12 @@ class SubmissionsDb:
                     models.Submission.state == SubmissionState.VERIFYING.value,
                     models.Submission.claimed_at < cutoff,
                 )
-                .values(state=SubmissionState.QUEUED.value, worker_id=None, claimed_at=None)
+                .values(
+                    verification_attempt=None,
+                    state=SubmissionState.QUEUED.value,
+                    worker_id=None,
+                    claimed_at=None,
+                )
             )
             return int(cast("CursorResult[Any]", result).rowcount or 0)
 
