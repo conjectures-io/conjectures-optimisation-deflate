@@ -37,6 +37,10 @@ doctor:
 corpus *ROOTS:
     {{python}} {{val}}/verifier/make-corpus.py {{ROOTS}}
 
+# Fetch stage 1 and stage 2 corpora; accepts --stage 1 or --stage 2.
+corpus-pull *ARGS:
+    bash {{root}}/scripts/pull-corpus.sh {{ARGS}}
+
 # Download the Silesia reference corpus into data/benchmark/. --subset|--full|both (default).
 corpus-download *ARGS:
     {{root}}/scripts/download-silesia.sh {{ARGS}}
