@@ -22,14 +22,16 @@ ADMITTED = {"passed", "not_required"}
 
 
 def ordered_candidates(points):
-    unknown = {p.baseline_key for p in points if p.baseline_key} - set(BASELINE_ORDER)
+    unknown = {
+        p.baseline_key for p in points if p.baseline_key and not p.baseline_key.startswith("local:")
+    } - set(BASELINE_ORDER)
     if unknown:
         raise ValueError(f"baselines absent from admission manifest: {sorted(unknown)}")
     return sorted(
         points,
         key=lambda p: (
             (0, BASELINE_ORDER.index(p.baseline_key), p.submitted_at, p.submission_id)
-            if p.baseline_key
+            if p.baseline_key in BASELINE_ORDER
             else (1, 0, p.submitted_at, p.submission_id)
         ),
     )

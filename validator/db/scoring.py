@@ -81,6 +81,7 @@ def _scorable(stmt, *, preview=False):
     from verifier.identity import required_fingerprint
 
     return stmt.where(
+        models.Submission.hotkey.is_not(None) | models.Submission.baseline_key.is_not(None),
         models.Submission.static_verified_at.is_not(None),
         models.Submission.lean_verified_at.is_not(None),
         models.Submission.verifier_fingerprint.is_not(None)
