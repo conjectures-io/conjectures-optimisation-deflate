@@ -56,13 +56,15 @@ cp -r miner/template my-submission          # a passing submission to start from
 just bench my-submission                    # ratio and time only, seconds - measure before proving
 just check my-submission                    # the six-stage gate, then the score
 
-python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url http://<validator>:9200
+python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url https://<api>
 python miner/submit.py status <id> --url ...                            # the stage report, bytes, time ratio, minutes later
 python miner/submit.py leaderboard --url ...                            # every hotkey's best accepted submission, ranked
 ```
 
-A submission is exactly two files, `parse.rs` and `Parse.lean`, signed with the hotkey over
-their hash, your address and the current time; the nine references above are complete,
+Submissions go to the conjectures platform API (`--url` is its origin), which serves this
+competition at `/v1/competitions/miniz-oxide`. A submission is exactly two files, `parse.rs`
+and `Parse.lean`, signed with the hotkey over the competition, their hash, your address and
+the current time; the nine references above are complete,
 passing examples to start from. Submissions are verified as they arrive and the same files
 twice return the same id.
 
@@ -360,7 +362,8 @@ deploy/
   migrate/               Alembic: the schema's deploy path, and the image that applies it
 miner/
   MANUAL.md              the one document a miner reads: setup, rules, contract, proof rules, worked example, submit
-  submit.py              submit, status, leaderboard
+  submit.py              submit, status, leaderboard -- against the conjectures platform API
+  sig.py                 the platform's signing contract, pinned by tests/test_miner_sig.py
   template/              the simplest passing submission, with its proof
   examples/              no-lz77, hash-chains, hc-d4, hc-d64, lazy (the incumbent), mo-lazy, optimal, optimal-iter: all proven
 validator/
