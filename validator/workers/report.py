@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> None:
         payload = {
             "config": dataclasses.asdict(config),
             "sources": provenance,
+            "timing_repetition_totals": timings,
             "points": output,
             "context": rows[0].context if rows else None,
             "registration_eligibility_known": result.eligibility_known,
@@ -126,13 +127,28 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def timing_observations(runs):
-    """Keep paired measured observations only; never pool warmups into plots."""
-    return [
-        {"lz77_s": rep.time_s, "total_s": rep.total_s}
+    """Sum the nth measured repetition over every selected file and corpus.
+
+    These are aligned repetition totals, not independently executed corpus passes:
+    the engine measures all repetitions of each file before moving to the next.
+    """
+    files = [
+        [rep for rep in file.methods[method].reps if rep.phase == "measured"]
         for run, method in runs
         for file in run.files
-        for rep in file.methods[method].reps
-        if rep.phase == "measured" and rep.total_s is not None
+    ]
+    if not files:
+        return []
+    if not files[0] or any(len(reps) != len(files[0]) for reps in files):
+        raise ValueError("timing plots require equal nonzero repetition counts for every file")
+    if any(rep.total_s is None for reps in files for rep in reps):
+        raise ValueError("timing plots require complete total compression measurements")
+    return [
+        {
+            "lz77_s": sum(rep.time_s for rep in repetition),
+            "total_s": sum(rep.total_s for rep in repetition),
+        }
+        for repetition in zip(*files, strict=True)
     ]
 
 
@@ -224,8 +240,6 @@ def plot(result, directory, provenance=None, timings=None):
             )
             ax.set_aspect("equal", adjustable="box")
         else:
-            if ordered and all(s.time_s > 0 for s in ordered):
-                ax.set_xscale("log")
             ax.margins(x=0.15, y=0.15)
             ax.set(
                 xlabel="Sum of per-file median compression seconds",
@@ -277,15 +291,31 @@ def plot(result, directory, provenance=None, timings=None):
     )
     save(fig, "pareto-uncertainty.png")
 
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6), layout="constrained")
-    for ax, field, title in zip(
-        axes, ("total_s", "lz77_s"), ("Total compression", "LZ77 stage"), strict=True
+    import statistics
+
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10), layout="constrained")
+    for column, (field, title) in enumerate(
+        (("total_s", "Total compression"), ("lz77_s", "LZ77 stage"))
     ):
         for index, s in enumerate(ordered):
             values = [sample[field] for sample in timings.get(str(s.submission_id), [])]
-            if values:
+            if not values:
+                continue
+            median = statistics.median(values)
+            std = statistics.stdev(values) if len(values) > 1 else None
+            for row in (0, 1):
+                ax = axes[row, column]
+                plotted = (
+                    values
+                    if row == 0
+                    else [100 * (v / median - 1) for v in values]
+                    if median > 0
+                    else []
+                )
+                if not plotted:
+                    continue
                 boxes = ax.boxplot(
-                    [values],
+                    [plotted],
                     positions=[index],
                     widths=0.6,
                     patch_artist=True,
@@ -297,15 +327,45 @@ def plot(result, directory, provenance=None, timings=None):
                     },
                 )
                 boxes["boxes"][0].set_facecolor(colors[s.submission_id])
-        ax.set_xticks(range(len(ordered)), labels, rotation=60, ha="right")
-        ax.set(title=title, ylabel="Seconds per file / measured repetition")
-        ax.grid(axis="y", alpha=0.2)
-        if not any(timings.values()):
-            ax.text(0.5, 0.5, "No measured timing samples", transform=ax.transAxes, ha="center")
-    fig.suptitle("Measured per-file timings (warmups excluded)")
+                ax.scatter(
+                    [index] * len(plotted),
+                    plotted,
+                    s=12,
+                    color=colors[s.submission_id],
+                    edgecolors="black",
+                    linewidths=0.3,
+                    zorder=3,
+                )
+            std_label = f"{std:.3g}s" if std is not None else "n/a"
+            axes[0, column].annotate(
+                f"n={len(values)}; SD={std_label}",
+                (index, max(values)),
+                xytext=(0, 10),
+                textcoords="offset points",
+                ha="center",
+                fontsize=7,
+            )
+        for row in (0, 1):
+            ax = axes[row, column]
+            ax.set_xticks(range(len(ordered)), labels, rotation=60, ha="right")
+            ax.set(
+                title=title if row == 0 else f"{title}: relative variability",
+                ylabel="Seconds over fixed corpus files"
+                if row == 0
+                else "Deviation from algorithm median (%)",
+            )
+            ax.margins(y=0.2)
+            ax.grid(axis="y", alpha=0.2)
+            if row == 1:
+                ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
+            if not any(timings.values()):
+                ax.text(0.5, 0.5, "No measured timing samples", transform=ax.transAxes, ha="center")
+    fig.suptitle("Timing repeatability on fixed data (warmups excluded)")
     fig.supxlabel(
-        "Boxes: quartiles and median; whiskers: 1.5×IQR. "
-        "Spread includes file size/content differences, not just noise.",
+        "Each dot sums the same repetition index across all selected files/corpora. "
+        "Boxes: quartiles; whiskers: 1.5×IQR.\n"
+        "Repetitions are file-local, not independent whole-corpus runs; "
+        "between-invocation variability is not measured here.",
         fontsize=9,
     )
     save(fig, "compression-times.png")

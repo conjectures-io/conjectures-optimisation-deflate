@@ -286,7 +286,7 @@ weight-setter:
 
 # What the scorer would pay right now: reads the store, touches neither chain nor wallet.
 weights-preview *ARGS:
-    cd {{val}} && {{python}} -m workers.report {{ARGS}}
+    cd {{val}} && {{python}} -m workers.report --out-dir "{{root}}/data/benchmark-reports/current" {{ARGS}}
 
 # --- Operator ---------------------------------------------------------------
 

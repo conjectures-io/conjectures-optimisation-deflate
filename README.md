@@ -528,7 +528,9 @@ The incremental seeder detects the changed protocol and creates fresh runs; `--o
 is unnecessary. Earlier runs, aggregations and score snapshots remain available.
 The historical timing tables earlier in this README describe LZ77-only measurements.
 
-`just weights-preview --out-dir "$PWD/data/benchmark-reports/current"` writes four figures:
+`just weights-preview` saves `scores.json` and four figures to
+`data/benchmark-reports/current/` by default (overwriting the previous preview).
+Use `--out-dir PATH` to choose another directory. The figures are:
 
 - `pareto.png`: total compression time versus size, submission allocations (hatched
   portions burn), and a square normalized frontier. Normalization uses the frontier's
@@ -536,9 +538,13 @@ The historical timing tables earlier in this README describe LZ77-only measureme
   maps to zero. Dominated points appear only in the original-coordinate panel.
 - `pareto-uncertainty.png`: horizontal 95% bootstrap intervals for aggregate total
   compression time. These cover recorded repetition variability, not host drift.
-- `compression-times.png`: total and LZ77 timing box plots of measured per-file
-  repetitions, excluding warmups. Spread includes differences between corpus files;
-  these boxes are not uncertainty intervals for the aggregate score.
+- `compression-times.png`: total and LZ77 timing repeatability on fixed data, in seconds
+  and as percentage deviations from each algorithm's median. Each observation sums
+  the nth measured repetition across all selected files/corpora; warmups are excluded.
+  Points, sample standard deviations and box plots show repetition variability. These
+  are aligned file-local repetitions, not independently executed whole-corpus runs,
+  and do not measure variability between separate benchmark invocations. Raw totals
+  are exported as `timing_repetition_totals` in `scores.json`.
 - `compression-vs-lz77.png`: one point per algorithm comparing aggregate total and
   LZ77 time (each a sum of per-file medians).
 

@@ -69,6 +69,7 @@ def test_plot_panels_colors_and_intervals(tmp_path, monkeypatch):
     }
     plot(NS(scores=points), tmp_path, provenance, timings)
     assert len(figures) == 4
+    assert all(ax.get_xscale() == "linear" for fig in figures.values() for ax in fig.axes)
     raw, bars, normalized = figures["pareto.png"].axes
     assert normalized.get_xlim() == normalized.get_ylim() == (0, 1)
     box = normalized.get_window_extent()
@@ -84,3 +85,28 @@ def test_plot_panels_colors_and_intervals(tmp_path, monkeypatch):
     assert len(figures["pareto-uncertainty.png"].axes[0].collections) == 8
     assert len(figures["compression-vs-lz77.png"].axes[0].collections) == 4
     plot(NS(scores=[]), tmp_path)
+
+
+def test_repetition_totals_hold_file_mix_constant():
+    import pytest
+
+    def file(values):
+        return NS(
+            methods={
+                "candidate": NS(
+                    reps=[NS(phase="measured", time_s=v, total_s=2 * v) for v in values]
+                )
+            }
+        )
+
+    # Very different file sizes must not produce a wide box when timings are stable.
+    run = NS(files=[file([1, 1, 1]), file([100, 100, 100])])
+    assert timing_observations([(run, "candidate")]) == [{"lz77_s": 101, "total_s": 202}] * 3
+    extra = NS(files=[file([3, 4, 5])])
+    assert timing_observations([(run, "candidate"), (extra, "candidate")]) == [
+        {"lz77_s": 104, "total_s": 208},
+        {"lz77_s": 105, "total_s": 210},
+        {"lz77_s": 106, "total_s": 212},
+    ]
+    with pytest.raises(ValueError, match="equal nonzero"):
+        timing_observations([(NS(files=[file([1]), file([2, 3])]), "candidate")])

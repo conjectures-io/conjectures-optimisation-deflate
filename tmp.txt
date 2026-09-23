@@ -1,0 +1,46 @@
+Implemented two checks before Lean verification, rather than relying on source regexes or assuming successful translation excludes I/O.
+
+1. Parse and inspect Rust syntax using syn.
+A small Rust checker rejects unsupported constructs structurally: unsafe code, foreign functions, custom macros, conditional compilation, external modules, statics and compiler overrides. Direct I/O calls receive readable diagnostics. Because this uses a parser, comments, raw strings and unusual formatting don’t confuse it.
+2. Inspect Charon’s resolved intermediate representation.
+Charon compiles the source and extracts LLBC. Our checker then requires every reachable operation to belong to a reviewed subset: - Local functions must have inspectable bodies.
+- External functions and types must be explicitly allowed.
+- Ordinary arithmetic, slices, arrays and selected Vec operations are supported.
+- Local generic traits, defaults and associated types are supported, with implementation dictionaries and method bodies checked.
+- Unknown calls, function pointers, dynamic dispatch and unreviewed external models are rejected.
+
+This second layer means renaming an import or hiding an I/O call behind a helper doesn’t bypass the check: we inspect the resolved operation, not just its spelling.
+
+- We implemented two checks before Lean verification, rather than relying on source regexes or assuming successful translation excludes I/O.
+1. Parse and inspect Rust syntax using syn.
+A small Rust checker rejects unsupported constructs structurally: unsafe code, foreign functions, custom macros, conditional compilation, external modules, statics and compiler overrides. Direct I/O calls receive readable diagnostics. Because this uses a parser, comments, raw strings and unusual formatting don’t confuse it.
+2. Inspect Charon’s resolved intermediate representation.
+Charon compiles the source and extracts LLBC. Our checker then requires every reachable operation to belong to a reviewed subset:
+- Local functions must have inspectable bodies.
+- External functions and types must be explicitly allowed.
+- Ordinary arithmetic, slices, arrays and selected Vec operations are supported.
+- Local generic traits, defaults and associated types are supported, with implementation dictionaries and method bodies checked.
+- Unknown calls, function pointers, dynamic dispatch and unreviewed external models are rejected.
+
+This second layer means renaming an import or hiding an I/O call behind a helper doesn’t bypass the check: we inspect the resolved operation, not just its spelling.
+
+Also reject custom Drop implementations because the pinned extraction configuration can omit destructor effects—even effects that change results without doing I/O.
+
+After those checks, the pipeline continues:
+
+Rust syntax check
+→ Charon extraction
+→ resolved-code policy check
+→ Aeneas translation into Lean
+→ submitted proof + operator-owned obligation + axiom check
+→ benchmark
+
+A key discovery was that Aeneas models some printing as a no-op. Successful Rust→Lean translation therefore isn’t itself an I/O prohibition; the resolved-code policy supplies that protection.
+
+You can run prevalidation independently:
+```
+just preverify path/to/parse.rs
+just preverify-db SUBMISSION_ID
+```
+
+The implementation lives in validator/precheck/ and validator/verifier/resolved.py. The validator service enforces the stage order and reuses verification only when the source, proof and verifier fingerprint match. Standalone benchmark commands remain independent.
