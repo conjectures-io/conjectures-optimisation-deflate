@@ -104,3 +104,27 @@ def test_local_baseline_participates_and_burns(store):
     assert result.scores[0].on_frontier
     assert result.scores[0].burn_reason == "baseline"
     assert result.scores[0].payable_weight == 0
+
+
+def test_status_reports_live_pending_instead_of_old_acceptance(store):
+    from test_weight_setter import accept
+
+    sid = accept(store, "miner", 2100000, 1.0)
+    with store.sessions.begin() as session:
+        session.add(
+            models.Submission(
+                hotkey=None,
+                baseline_key="template",
+                baseline_active=True,
+                digest="a" * 64,
+                state="queued",
+            )
+        )
+    payload = submission.status(store, sid)
+    assert payload["admission"]["details"]["outcome"] == "pending"
+    assert payload["admission"]["details"]["reason_code"] == "awaiting-predecessor"
+    rendered = submission.summary(payload)
+    assert "gate passed" in rendered
+    assert "pending — awaiting current baseline evidence" in rendered
+    # Status is read-only: it does not erase the prior recorded decision.
+    assert payload["admission"]["recorded_details"] is not None
