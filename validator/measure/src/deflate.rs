@@ -1,4 +1,4 @@
-//! Tokens to DEFLATE bytes (RFC 1951 3.2), trusted and identical for baseline and submission, so the score measures only the parse.
+//! Tokens to DEFLATE bytes (RFC 1951 3.2), trusted and identical for baseline and submission, with its full execution cost included in compression timing.
 
 use crate::token;
 

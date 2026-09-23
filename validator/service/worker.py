@@ -43,7 +43,14 @@ SWEEP_EVERY = 30
 # of it: a row carrying bytes but no timing would put a half-measured point on the
 # frontier, and db.scoring filters those out anyway, so recording one only hides the
 # problem until someone asks why a submission never scored.
-MEASURED = ("raw_bytes", "bytes", "incumbent_bytes", "parse_seconds", "incumbent_seconds")
+MEASURED = (
+    "raw_bytes",
+    "bytes",
+    "incumbent_bytes",
+    "parse_seconds",
+    "compression_seconds",
+    "incumbent_seconds",
+)
 
 
 def scored(results: Path) -> dict[str, int | float]:
@@ -72,7 +79,8 @@ def scored(results: Path) -> dict[str, int | float]:
         "bytes": number(me, "output_bytes"),
         "incumbent_bytes": number(incumbent, "output_bytes"),
         "parse_seconds": number(me, "parse_s"),
-        "incumbent_seconds": number(incumbent, "parse_s"),
+        "incumbent_seconds": number(incumbent, "total_s"),
+        "compression_seconds": number(me, "total_s"),
     }
     if any(out[key] is None for key in MEASURED):
         logger.warning(f"[worker] {results} is missing {[k for k in MEASURED if out[k] is None]}")
@@ -134,7 +142,8 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
     the submission goes back on the queue uncharged and the loop stops so an operator
     sees it, rather than grinding the same misconfiguration through every submission.
     """
-    logger.info(f"[worker] verifying submission {sub.id} ({sub.hotkey[:8]}…)")
+    label = sub.hotkey or sub.baseline_key or "unknown"
+    logger.info(f"[worker] verifying submission {sub.id} ({label[:8]}…)")
     with tempfile.TemporaryDirectory(prefix=f"score-{sub.id}-") as tmp:
         results = Path(tmp) / "results.json"
         result = run_gate(

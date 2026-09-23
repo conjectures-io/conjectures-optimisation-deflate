@@ -19,8 +19,11 @@ def rec(
     external: bool = False,
 ) -> MethodRec:
     # One method's record on one file: one warmup rep, then `times` as measured reps.
-    reps = [Rep(phase="warmup", order_index=0, time_s=9.9)]
-    reps += [Rep(phase="measured", order_index=i + 1, time_s=t) for i, t in enumerate(times)]
+    reps = [Rep(phase="warmup", order_index=0, time_s=9.9, encode_s=0.0, total_s=9.9)]
+    reps += [
+        Rep(phase="measured", order_index=i + 1, time_s=t, encode_s=0.0, total_s=t)
+        for i, t in enumerate(times)
+    ]
     return MethodRec(
         output_bytes=output_bytes,
         tokens_sha256=sha,
@@ -65,25 +68,26 @@ def run(scale: float = 1.0) -> tuple[Meta, list[FileRec]]:
     return meta, files
 
 
-def test_pooled_bytes_and_min_time_match_the_gate_arithmetic():
+def test_pooled_bytes_and_median_time_match_the_gate_arithmetic():
     _, files = run()
     pb = an.pooled_bytes(files)
-    pt = an.pooled_min_time(an.per_file_min_time(an.flatten(files)))
+    pt = an.pooled_median_time(an.per_file_median_time(an.flatten(files)))
     assert pb["incumbent"] == 1400 and pb["slow-better"] == 1340 and pb["fast-worse"] == 1550
-    assert pt["incumbent"] == 0.20 and pt["slow-better"] == 1.80  # warmup ignored, min per file
-    assert round(pt["slow-better"] / pt["incumbent"], 2) == 9.0  # over the 8x floor
+    assert round(pt["incumbent"], 2) == 0.21 and pt["slow-better"] == 1.85  # warmups excluded
+    assert round(pt["slow-better"] / pt["incumbent"], 2) == 8.81  # over the 8x floor
 
 
 def test_front_excludes_the_external_reference_and_dominated_methods():
     _, files = run()
     pb = an.pooled_bytes(files)
-    pt = an.pooled_min_time(an.per_file_min_time(an.flatten(files)))
+    pt = an.pooled_median_time(an.per_file_median_time(an.flatten(files)))
     assert an.pareto_front(pb, pt, {"libdeflate-12"}) == ["slow-better", "incumbent", "fast-worse"]
 
 
 def test_stability_flags_noise_and_nondeterminism():
     _, files = run()
     files[0]["methods"]["fast-worse"]["reps"][2]["time_s"] = 0.08
+    files[0]["methods"]["fast-worse"]["reps"][2]["total_s"] = 0.08
     files[1]["methods"]["slow-better"]["deterministic"] = False
     s = an.stability(files, an.per_file_spread(an.flatten(files)))
     assert round(s["fast-worse"][0], 6) == 1.6 and s["fast-worse"][1] == 1
@@ -96,13 +100,13 @@ def test_compare_accepts_the_same_run_and_rejects_changed_bytes_or_slow_drift():
     b[1][0]["methods"]["fast-worse"]["output_bytes"] = 601
     b[1][0]["methods"]["fast-worse"]["tokens_sha256"] = "u"
     assert any("different tokens" in p for p in compare(a, b))
-    assert any("pooled min parse time" in p for p in compare(a, run(scale=1.5)))
+    assert any("pooled median compression time" in p for p in compare(a, run(scale=1.5)))
 
 
 def test_report_names_the_verdict_the_gate_would_give():
     meta, files = run()
     text = an.report(meta, files, "/x/run.jsonl")
-    assert "| slow-better | 1,340 | 0.9571x | 9.00x | over the floor |" in text
-    assert "| fast-worse | 1,550 | 1.1071x | 0.50x | no improvement |" in text
-    assert "| libdeflate-12 | 1,250 | 0.8929x | 3.00x | reference |" in text
+    assert "| slow-better | 1,340 | 0.9571x | 8.81x | over the floor |" in text
+    assert "| fast-worse | 1,550 | 1.1071x | 0.48x | no improvement |" in text
+    assert "| libdeflate-12 | 1,250 | 0.8929x | 2.90x | reference |" in text
     assert "`slow-better`, `incumbent`, `fast-worse`" in text

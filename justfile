@@ -37,6 +37,10 @@ doctor:
 corpus *ROOTS:
     {{python}} {{val}}/verifier/make-corpus.py {{ROOTS}}
 
+# Fetch stage 1 and stage 2 corpora; accepts --stage 1 or --stage 2.
+corpus-pull *ARGS:
+    bash {{root}}/scripts/pull-corpus.sh {{ARGS}}
+
 # Download the Silesia reference corpus into data/benchmark/. --subset|--full|both (default).
 corpus-download *ARGS:
     {{root}}/scripts/download-silesia.sh {{ARGS}}
@@ -118,8 +122,8 @@ corpus-verify *ARGS:
 
 # --- Benchmark ---------------------------------------------------------------
 
-# miner/template and every miner/examples/* against the incumbent and the reference
-# bars, timed as the gate times, on the default corpus. Pass submission dirs to
+# miner/template and every miner/examples/* against the incumbent, timed as the
+# gate times, on the default corpus. External references: VERIFY_BENCH_BARS=1. Pass submission dirs to
 # narrow it, or --corpus NAME to move it.
 bench *ARGS: build
     {{bench}} {{ARGS}} --runs-dir {{root}}/data/benchmark-runs
@@ -128,7 +132,7 @@ bench *ARGS: build
 bench-report *RUN:
     {{python}} -m bench.analyze {{RUN}}
 
-# Two runs of the same code must agree on every byte and token; parse time within 15%.
+# Two runs of the same code must agree on every byte and token; total compression time within 15%.
 bench-compare A B:
     {{python}} -m bench.compare {{A}} {{B}}
 
@@ -282,7 +286,7 @@ weight-setter:
 
 # What the scorer would pay right now: reads the store, touches neither chain nor wallet.
 weights-preview *ARGS:
-    cd {{val}} && {{python}} -m workers.report {{ARGS}}
+    cd {{val}} && {{python}} -m workers.report --out-dir "{{root}}/data/benchmark-reports/current" {{ARGS}}
 
 # --- Operator ---------------------------------------------------------------
 
@@ -351,3 +355,11 @@ smoke: build
     just check miner/examples/optimal --results /tmp/smoke-optimal.json
     just check miner/examples/no-lz77 --results /tmp/smoke-no-lz77.json
     just check miner/examples/optimal-iter --results /tmp/smoke-optimal-iter.json
+
+# Aggregate stored runs; --corpus NAME:SHA256, --source HASH or --submission-id ID.
+bench-aggregate *ARGS:
+    {{python}} -m bench.aggregate {{ARGS}}
+
+# Incrementally verify and seed operator baselines; --overwrite forces new measurements.
+baseline-seed *ARGS: build
+    {{python}} -m bench.baselines {{ARGS}}

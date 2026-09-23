@@ -39,9 +39,7 @@ class ScoringConfig:
     recency alone pays whoever shipped last however marginal it was.
     """
 
-    # Which of the eight weight functions scores the frontier. The default is the one
-    # that, on the real frontier, finds the knee rather than inverting under a change of
-    # units -- see docs/SCORING.md.
+    # Frontier-relative local/global trade-off quality; see docs/SCORING.md.
     method: str = DEFAULT_METHOD
     # Emission split. They need not sum to 1: whatever is left over burns, which is how
     # an operator dials the whole competition down without changing anything else.

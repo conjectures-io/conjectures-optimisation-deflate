@@ -10,19 +10,23 @@ Two components, on every accepted submission the validator holds.
 What neither claims burns. So does the share of a hotkey that has since deregistered:
 redistributing it would quietly pay everyone else for someone else's work.
 
-`just weights-preview` prints exactly what the scorer would pay right now, from the
-store, touching neither the chain nor a wallet.
+`just weights-preview` reads the database without chain writes. Without a supplied
+metagraph, miner payouts are labeled provisional; use `--metagraph hotkeys.json` with a
+hotkey-to-UID map for eligibility-aware results.
 
 ## The 60%: the frontier
 
-One competitor is one hotkey, represented by their **best accepted submission** — fewest
-bytes, earliest submission breaking a tie, the same order the leaderboard ranks by. A
-miner cannot crowd the frontier by submitting many variants, and in any case each
-acceptance costs a registration.
+Each verified, accepted submission with a valid published aggregation is a point.
+All points are scored before checking payout eligibility. Baselines and deregistered
+hotkeys retain their positions. If a hotkey has several frontier points, only its
+oldest frontier submission is payable (lowest submission ID breaks timestamp ties).
+The other Pareto allocations burn; miner shares are never renormalized afterward.
+Exact coordinate duplicates retain the oldest point. This is defensive handling;
+registration requirements still apply at intake.
 
 Each competitor is a point on two axes, both "lower is better":
 
-- **time** — absolute parse seconds, as the harness measured them
+- **time** — total compression seconds (LZ77 + shared DEFLATE encoding)
 - **ratio** — compressed bytes as a percentage of raw, *not* absolute bytes, because the
   corpus changes between rounds and absolute bytes are not comparable across it
 
@@ -48,50 +52,49 @@ own docstring predicted:
   against the 100% ratio ceiling and nothing real is near it: even a literals-only parser
   reaches 63.5%.
 
-**elbow-sweetspot** is the default. It scores each point by how much better its incoming
-trade-off rate (ratio recovered per unit time, arriving from the previous frontier point)
-is than its outgoing one (continuing to the next). A point only scores where the curve
-genuinely bends — where arriving there paid off distinctly better than continuing past it
-did. The diagonal-sweep family agrees with it on the real frontier, which is the other
-reason to trust it.
+**local-global-improvement-space-log** is the default. For a point between faster/worse A and slower/better B,
+normalize its time and compression ratio within their rectangle to t and r. The default
+coefficient is `2 - t - r`: 1 on the straight trade-off, greater on the better side.
+The local coefficient uses immediate neighbours (endpoints get 1); the global coefficient
+uses the frontier extremes. Multiply both coefficients by the logarithmic improvement
+space factor, then normalize across frontier points and multiply by the Pareto share.
+For points sorted by increasing time, the factor is the mean of:
 
-On `corpus-stage1`:
+- `log(t_next / t_i) / log(t_max / t_min)`, zero for the slowest point;
+- `log(r_previous / r_i) / log(r_max / r_min)`, zero for the worst compression ratio.
 
-| point | time (s) | ratio (%) | on frontier? | weight |
-|---|---|---|---|---|
-| template | 0.2282 | 36.949 | yes | 0.2416 |
-| hc-d4 | 0.2406 | 34.348 | yes | **0.6991** |
-| hc-sparse | 0.2928 | 38.316 | no | 0.0000 |
-| hash-chains | 0.3156 | 33.128 | yes | 0.0428 |
-| hc-d64 | 0.4261 | 32.635 | yes | 0.0000 |
-| lazy | 0.5199 | 32.209 | yes | 0.0154 |
-| btree | 1.2668 | 32.489 | no | 0.0000 |
-| optimal | 2.2326 | 31.701 | yes | 0.0011 |
+This splits a fixed improvement budget on each axis. Equal proportional gains receive
+equal credit; a fixed absolute gain receives more credit at lower values. Local-global
+coefficients themselves remain linear. Both axes must be positive and finite. A singleton receives the entire Pareto share.
+Other methods, including elbow-sweetspot, remain selectable for comparisons.
 
-`hc-d4` is the knee: a 5% time increase over `template` buys 2.6 percentage points of
-ratio, and after it returns diminish. `optimal` wins the ratio outright and scores almost
-nothing, because it pays 4.3x the incumbent's time for the last half point. Both corpora
-agree on `hc-d4`, which is what makes it an answer rather than an artefact.
+Local-global does not use the external speed limit in its formula. Acceptance still
+requires time no greater than 8 times the paired incumbent. The Pareto time coordinate is now the arithmetic mean of per-file
+candidate/incumbent median total-time ratios within each corpus, then the equal-weight
+mean across corpora. Total time means paired LZ77 + encoding time, excluding warmups.
+A coordinate of 1 means incumbent performance; lower is better. Nonempty files count
+equally regardless of size. Empty files are excluded from both balanced metrics but
+remain in absolute telemetry. Positive per-file median times are required.
+The absolute sum of per-file medians remains telemetry and still supplies the existing
+8x acceptance check. The dimensionless Pareto coordinate has its own paired bootstrap
+interval (`balanced_time_ratio`); it is not the ratio of summed times.
+Recalculation reuses retained evidence; preview automatically applies the new formula. Stage medians are kept for telemetry, but their sum is not the scored statistic. The scored compression ratio is the arithmetic mean of per-file compressed/raw
+ratios within each corpus, then the equally weighted mean across corpora. Empty
+files are excluded from this ratio (an all-empty corpus is rejected), but their
+bytes and timings remain in telemetry. Total compressed/raw bytes is retained
+as byte-weighted telemetry. Recency improvements use the same balanced ratio. Compare only identical corpus-content sets and compatible
+measurement contexts, even when displaying percentages.
 
-Multiply those weights by 0.60 and that is the first component.
-
-### The boundary
-
-Every normalized method measures against the edge of the legal region — the worst a
-submission may be and still be accepted. That is **8x the incumbent's measured time**, the
-multiple the gate rejects past, derived per round from the incumbent's own time rather
-than assumed. Against the library's 120s fallback every real candidate (0.2–2.2s)
-collapses into the corner and the normalized methods degenerate into noise.
-
-Worth knowing as a miner: on the current corpus every candidate sits at ≤0.55 of that
-boundary. **The 8x speed floor is nowhere near binding.** There is room to spend time.
+Baseline allocations burn explicitly. With only baselines and no miner improvement,
+all emission burns. These controls do not by themselves solve near-duplicate frontier
+manipulation; novelty thresholds remain a separate policy decision.
 
 ## The 40%: recent improvement
 
 An accepted submission is an **improvement** when it beats the record by at least
 0.25%, relative.
 
-- The record starts at the **incumbent's size**, not at infinity. Beating nothing is not
+- The record starts at the smaller of the **incumbent and active baseline sizes**, not at infinity. Beating nothing is not
   an advance, and a first submission worse than the baseline every miner is given has not
   moved anything.
 - It then follows whichever is smaller, the best accepted submission so far or the
@@ -117,7 +120,7 @@ A hotkey holding several of the last ten accumulates their shares: shipping thre
 last ten advances is worth three slots, not one. Past ten, an improvement has been
 superseded often enough that rewarding it is the frontier's job, not recency's.
 
-If nothing has beaten the incumbent yet, this share burns. There is no recent progress to
+If nothing has beaten the reference record yet, this share burns. There is no recent progress to
 reward, and spreading it over the frontier would quietly turn 60/40 into something else.
 
 ## Cadence
@@ -140,3 +143,53 @@ paying a round with the wrong function.
 
 `just weights-preview --method diagonal-sweep-k1.0` shows what a different one would pay
 before you set it.
+
+## Database evidence and reproducibility
+
+The scorer consumes published aggregations, not local JSONL files or legacy summary-only
+submission rows. Old rows need compatible benchmark evidence and aggregation publication.
+`SCORING_CORPORA` can select a JSON map of corpus names to content hashes. Without it,
+all selected points must share one evaluation context; incompatible contexts stop scoring.
+
+Aggregations retain exact run IDs, source hash, calculator version, environment/build
+provenance and timing statistics. Per-file sample standard deviation describes repetition
+spread. A deterministic paired per-file bootstrap provides percentile 95% intervals for
+summed median times, their ratio, and the balanced per-file time-ratio coordinate. Intervals with fewer than ten measured rounds are
+flagged sparse; fewer than two means no interval. They do not capture systematic bias or
+between-run host drift and do not affect rewards.
+
+`just weights-preview --out-dir data/benchmark-reports/baselines` writes an operator-only
+aggregate report and plot. `--aggregation-id ID` may be repeated to inspect selected
+stored evidence for previously verified, accepted submission identities. Reports include exact
+inputs and scoring configuration; historical weight-set snapshots remain unchanged.
+
+Current aggregation version is `compression-relative-time-v5`, using schema-v4 measurements.
+Encoding runs on every repetition, and hashing/decompression checks remain outside
+both stage timers. Per-file LZ77, encoding and total timing statistics are retained;
+bootstrap intervals apply to total compression time, the total-time ratio, and the
+balanced per-file time ratio used on the Pareto axis. Historical snapshot `time_s`
+columns retain absolute seconds; the relative coordinate is derived from the linked
+aggregation evidence and is exported explicitly as `normalized_time_ratio` in previews.
+Legacy LZ77-only aggregations cannot enter the current frontier; they require new
+measurements. No synthetic totals are backfilled from the old single encoding sample.
+
+Preview automatically recalculates from stored schema-v4 evidence with the current
+formula, including after an aggregation version change. It uses the runs linked to
+each submission's published aggregation (or explicit aggregation IDs), preserving
+the original records. It validates corpus/source identities, measurement compatibility
+and invalidation status. Successful historical static/Lean verification suffices
+for this operator-only report; `verification_current` records whether the stamp still
+matches. Neither verification nor benchmarks are executed by preview. The report
+records both the original and recalculated calculator versions.
+
+To update published evidence for live scoring after an aggregation version change,
+reaggregate retained schema-v4 runs with
+`just bench-aggregate --submission-id ID --corpus NAME:SHA256 --publish`
+(repeat --corpus for each corpus, optionally select --run-id). This does not
+rerun benchmarks. Old aggregations remain immutable and are excluded from live scoring.
+
+The current verifier fingerprint includes aggregation/scoring source files, so this
+update also requires refreshing static/Lean verification before publishing for live
+scoring. This restriction does not apply to the read-only preview.
+Incremental baseline seeding refreshes verification and reuses compatible benchmark
+evidence; it does not require rerunning compatible measurements.

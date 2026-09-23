@@ -115,8 +115,13 @@ SUMMARY: dict[str, object] = {
     "candidates": ["submission"],
     "raw_bytes": 8060939,
     "methods": {
-        "incumbent": {"output_bytes": 2153387, "parse_s": 0.520},
-        "submission": {"output_bytes": 2115138, "parse_s": 2.230, "slowdown": 4.29},
+        "incumbent": {"output_bytes": 2153387, "parse_s": 0.520, "total_s": 0.520},
+        "submission": {
+            "output_bytes": 2115138,
+            "parse_s": 2.230,
+            "total_s": 2.230,
+            "slowdown": 4.29,
+        },
     },
 }
 
@@ -128,6 +133,7 @@ def test_the_results_reader_takes_every_number_scoring_needs(tmp_path):
         "bytes": 2115138,
         "incumbent_seconds": 0.520,
         "parse_seconds": 2.230,
+        "compression_seconds": 2.230,
         "time_ratio": 4.29,
     }
 
@@ -145,7 +151,7 @@ def test_the_results_reader_does_not_care_what_the_candidate_is_called(tmp_path)
 def test_a_half_measured_run_records_nothing(tmp_path):
     # All of it or none: a row with bytes but no timing is a point the frontier cannot
     # place, and db.scoring filters it out anyway, so storing one only hides the fault.
-    for missing in ("parse_s", "output_bytes"):
+    for missing in ("parse_s", "total_s", "output_bytes"):
         partial = deepcopy(SUMMARY)
         del cast("dict[str, dict[str, object]]", partial["methods"])["submission"][missing]
         assert worker.scored(results_file(tmp_path, partial)) == {}

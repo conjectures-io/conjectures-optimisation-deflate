@@ -1,6 +1,6 @@
 """The 60% share: turn accepted submissions into a frontier, and weigh it.
 
-One competitor is one hotkey, represented by their best accepted submission. Everything
+One point is one verified submission; payout ownership is applied after weighting. Everything
 below is pure -- it takes the rows the store already read and returns numbers -- so the
 rule can be exercised without a database or a chain.
 """
@@ -32,16 +32,19 @@ class FrontierScore:
 
 
 def to_points(submissions: Sequence[ScoredSubmission]) -> dict[str, Point]:
-    # One point per hotkey. Both axes are "lower is better": seconds, and compressed
-    # bytes as a percentage of raw. The percentage rather than the bytes because the
-    # corpus changes between rounds and absolute bytes are not comparable across it.
+    # One point per submission. Current evidence uses balanced relative time and
+    # compression ratios; legacy standalone inputs retain absolute time coordinates.
     return {
-        s.hotkey: Point(name=s.hotkey, time_s=s.time_s, ratio_pct=s.ratio_pct) for s in submissions
+        s.point_id: Point(name=s.point_id, time_s=s.pareto_time, ratio_pct=s.ratio_pct)
+        for s in sorted(submissions, key=lambda s: (s.submitted_at, s.submission_id))
     }
 
 
 def boundaries_for(submissions: Sequence[ScoredSubmission], speed_floor: float) -> Boundaries:
-    """The enforced edge of the legal region, from the incumbent's measured time.
+    """Incumbent-relative reference for boundary-based comparison methods.
+
+    The relative time coordinate uses incumbent=1. The separate acceptance gate
+    still checks summed absolute times; this reference does not replace that check.
 
     Every accepted submission carries the incumbent's time as measured on the same run,
     so they should agree; they can differ when the operator promoted a new incumbent
@@ -50,6 +53,8 @@ def boundaries_for(submissions: Sequence[ScoredSubmission], speed_floor: float) 
     """
     if not submissions:
         return Boundaries()
+    if all(s.normalized_time_ratio is not None for s in submissions):
+        return Boundaries.from_incumbent(1.0, speed_floor)
     newest = max(submissions, key=lambda s: (s.submitted_at, s.submission_id))
     return Boundaries.from_incumbent(newest.incumbent_seconds, speed_floor)
 
@@ -66,7 +71,7 @@ def score_frontier(submissions: Sequence[ScoredSubmission], config: ScoringConfi
     bounds = boundaries_for(submissions, config.speed_floor)
     front = pareto_front(list(points.values()))
     raw = weigh(front, bounds, config.method)
-    weights = {hotkey: 0.0 for hotkey in points}
+    weights = {point_id: 0.0 for point_id in points}
     for hotkey, share in raw.items():
         weights[hotkey] = share * config.pareto_share
     return FrontierScore(

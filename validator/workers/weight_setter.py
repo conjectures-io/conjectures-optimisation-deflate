@@ -106,9 +106,9 @@ def plan_for(
 ) -> tuple[WeightPlan, scoring.Scoring | None]:
     if config.burn_mode:
         return scoring.to_vector({}, meta, burn_uid=config.burn_uid), None
-    result = scoring.score(
-        store.scoring.best_per_hotkey(), store.scoring.accepted_history(), scoring_config
-    )
+    points = store.scoring.scoring_inputs()
+    eligible = {hotkey for hotkey, uid in meta.uid_by_hotkey.items() if uid != config.burn_uid}
+    result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
     return scoring.to_vector(result.weights, meta, burn_uid=config.burn_uid), result
 
 

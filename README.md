@@ -316,8 +316,8 @@ submit at all.
 **Emission is 60% Pareto position, 40% recent improvement.** Sixty per cent follows the
 frontier, weighted by how much each point actually buys rather than by mere membership;
 forty follows the last ten improvements on the record, decaying, newest most. What neither
-claims burns. `just weights-preview` prints what the scorer would pay right now without
-touching the chain, `WEIGHT_DRY_RUN=1` runs the whole weight-setting path except the last
+claims burns. `just weights-preview` recalculates an operator preview using the current
+formula and stored benchmark evidence without touching the database or chain; `WEIGHT_DRY_RUN=1` runs the whole weight-setting path except the last
 call, and [docs/SCORING.md](docs/SCORING.md) is the argument for why the default weight
 function is the one it is.
 
@@ -413,7 +413,7 @@ just bench-report                                              # score, floor ve
 just bench-compare data/benchmark-runs/A.jsonl data/benchmark-runs/B.jsonl   # two runs of the same code must agree
 ```
 
-With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; the incumbent, `miniz_oxide` and `libdeflate` are always measured. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Only the parse is timed, with a warmup round and round-robin over methods, and every round hashes the token stream so a non-deterministic parser is caught. Runs record the sha256 of every source and corpus file and are never overwritten.
+With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; each candidate is measured with the incumbent only by default. Set `VERIFY_BENCH_BARS=1` to include the external `miniz_oxide` and `libdeflate` references for local comparison; `--no-bars` explicitly disables them. This default also applies to `just bench-db` and `just baseline-seed`. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Every warmup and measured round runs both LZ77 and the shared DEFLATE encoder. The harness records LZ77 time, encoding time, and their paired sum separately. Benchmark summaries and the speed floor use the sum of per-file median **total compression times**, excluding warmups. The Pareto speed axis uses per-file candidate/incumbent ratios of these median totals, averaged equally within each corpus and then equally across corpora. The median total is computed from each repetition’s stage sum, not by adding stage medians. File I/O, token hashing, and decompression checks are outside the timers; token hashes still detect nondeterminism every round. Runs record the sha256 of every source and corpus file and are never overwritten.
 
 ### Memory and CPU limits: systemd user setup
 
@@ -488,3 +488,97 @@ available for `bench-import`. Retrying returns the existing run ID. Multiple pat
 accepted; each file is committed independently. Old single-candidate v3 JSONL files are
 supported. Old merged multi-candidate reports are rejected because they discarded
 reference samples. Importing requires neither corpus/source files nor a Rust build.
+
+### Baseline frontier and database aggregation
+
+`just baseline-seed --corpus corpus-stage1 --corpus corpus-stage2` incrementally verifies
+and benchmarks the reference submissions into the database. Use `--overwrite` for fresh
+measurements, preserving history. `just weights-preview --out-dir data/benchmark-reports/baselines`
+plots the resulting frontier and baseline burn allocations. See [operations](docs/OPERATIONS.md)
+and [scoring](docs/SCORING.md) for aggregation inputs, timing uncertainty and payout eligibility.
+
+### Compression timing protocol (v4)
+
+`just bench` and `just bench-db` report `lz77`, `encode`, and `total` seconds.
+`just weights-preview` uses equal-corpus, equal-file mean candidate/incumbent
+total-time ratios for the Pareto speed axis; absolute times remain telemetry. The shared encoder's cost
+therefore counts toward a submission's speed, including savings from fewer tokens.
+External reference compressors report their full compression time with no stage split.
+The token output buffer is allocated before timing; allocation inside LZ77 and the
+encoder is included. This measures the compression computation, excluding harness I/O
+and correctness checks.
+
+Migration `0006` adds nullable `encode_s` and `total_s` to `benchmark_speed_samples`,
+and `compression_seconds` to submissions and aggregations. `time_s` retains its
+historical meaning: LZ77 for submissions, full compression for external references.
+`parse_seconds` remains LZ77 telemetry; new aggregations' `incumbent_seconds` is total
+compression time. Per-stage medians/stddev and total-time bootstrap uncertainty are
+retained in aggregation statistics.
+
+Old v3 measurements remain importable and inspectable, but their single encoding
+sample cannot reconstruct repeated full-compression measurements. They are excluded
+from current scoring. After updating, apply the migration and rebenchmark baselines:
+
+```bash
+just db-migrate
+just baseline-seed --corpus corpus-stage1 --corpus corpus-stage2
+just weights-preview --out-dir "$PWD/data/benchmark-reports/current"
+```
+
+The incremental seeder detects the changed protocol and creates fresh runs; `--overwrite`
+is unnecessary. Earlier runs, aggregations and score snapshots remain available.
+The historical timing tables earlier in this README describe LZ77-only measurements.
+
+`just weights-preview` automatically reapplies the current aggregation formula to
+the runs linked to each submission's latest published aggregation. Formula changes
+need no new benchmark or proof run for this preview. Historical verification is
+labelled in the report and does not establish current live-payout eligibility.
+Use repeated `--aggregation-id ID` to choose earlier evidence explicitly.
+
+`just weights-preview` saves `scores.json` and four figures to
+`data/benchmark-reports/current/` by default (overwriting the previous preview).
+Use `--out-dir PATH` to choose another directory. The figures are:
+
+- `pareto.png`: mean per-file time relative to the incumbent versus compression ratio,
+  submission allocations (hatched
+  portions burn), and a square normalized frontier. Normalization uses the frontier's
+  time and size extremes, matching the global part of `local-global`; a constant axis
+  maps to zero. Dominated points appear only in the original-coordinate panel.
+- `pareto-uncertainty.png`: horizontal 95% bootstrap intervals for aggregate total
+  compression time. These cover recorded repetition variability, not host drift.
+- `compression-times.png`: total and LZ77 timing repeatability on fixed data, in seconds
+  and as percentage deviations from each algorithm's median. Each observation sums
+  the nth measured repetition across all selected files/corpora; warmups are excluded.
+  Points, sample standard deviations and box plots show repetition variability. These
+  are aligned file-local repetitions, not independently executed whole-corpus runs,
+  and do not measure variability between separate benchmark invocations. Raw totals
+  are exported as `timing_repetition_totals` in `scores.json`.
+- `compression-vs-lz77.png`: one point per algorithm comparing aggregate total and
+  LZ77 time (each a sum of per-file medians).
+
+Algorithm colours are shared across all figures. Plots use the selected aggregations'
+DB evidence and require no local JSONL files.
+
+
+To compare experimental Pareto weights on synthetic frontiers, run:
+
+```bash
+.venv/bin/python scripts/pareto-weights.py
+```
+
+Reports are written to `data/spike/pareto/weights/`. `compare-*.png` compares all
+methods on the same points; `COPY-AUDIT.md` measures the combined reward of a
+point and its near-copies. Focused plots under `improvement-space-study/`
+compare local-global with the incremental improvement-space factor. Use
+`--method`, `--scenario` and `--out-dir` to narrow the experiment. The selected `local-global-improvement-space-log` method is now the live-scoring
+default; the remaining experimental methods are comparison-only.
+
+The spike also supports `improvement-space-log` and
+`local-global-improvement-space-log`. They measure each adjacent improvement as
+`log(worse / better)`, normalized by `log(worst / best)`, on both axes. Equal
+proportional improvements receive equal credit; equal absolute improvements
+receive more credit at lower values. Only the improvement factor changes in
+the combined variant; its local-global coefficients retain their linear definition.
+
+The default weight method is `local-global-improvement-space-log`. Set
+`SCORING_METHOD` to select a different registered method explicitly.

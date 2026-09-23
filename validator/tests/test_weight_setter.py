@@ -80,6 +80,7 @@ def accept(store, hotkey, byte_count, seconds, *, incumbent=2_153_387, digest=No
         bytes=byte_count,
         incumbent_bytes=incumbent,
         parse_seconds=seconds,
+        compression_seconds=seconds,
         incumbent_seconds=0.52,
         time_ratio=seconds / 0.52,
     )
@@ -94,6 +95,9 @@ def accept(store, hotkey, byte_count, seconds, *, incumbent=2_153_387, digest=No
         row.static_verified_at = store_pkg.now()
         row.lean_verified_at = store_pkg.now()
         row.measured_source_sha256 = row.source_sha256
+    from conftest import attach_aggregation
+
+    attach_aggregation(store, sub_id)
     return sub_id
 
 

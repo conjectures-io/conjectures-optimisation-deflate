@@ -201,12 +201,6 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         finally:
             engine.dispose()
-    gone = corpora.load(VALIDATOR).missing()
-    if gone:
-        logger.warning(
-            f"[bench] not fetched yet: {', '.join(gone)} -- "
-            "`just corpus-pull` and/or `just corpus-download`"
-        )
     try:
         m = run(
             configure(o), candidates(o.submissions), corpus(o.corpus), speed_floor=o.speed_floor

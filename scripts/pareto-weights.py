@@ -10,7 +10,14 @@
     .venv/bin/python scripts/pareto-weights.py                     synthetic scenarios
     .venv/bin/python scripts/pareto-weights.py --run <run.jsonl>   a real frontier
 
-The eight weight functions themselves now live in `validator/scoring/pareto.py`, because
+Unselected experimental methods are registered only in this script; the selected
+log improvement-space method uses the shared production implementation.
+Use --method to select comparisons, --scenario to select synthetic
+shapes, and --out-dir to choose an output directory. Synthetic runs also produce
+EXPERIMENT.md, duplicate-study.json, duplicate-sensitivity.png and side-by-side
+compare-*.png figures. Live scoring remains unchanged.
+
+The eight established weight functions themselves now live in `validator/scoring/pareto.py`, because
 the validator scores real rounds with them and a second copy would drift. What is left
 here is what a scoring spike is for: the synthetic scenarios they are judged on, the
 report tables, and the figures.
@@ -49,13 +56,14 @@ rather than faked. Normalization comes in two kinds, picked per method in `NORMA
                         has no external limit in its formula at all. Normalizing it
                         against a competition constant would just be noise.
 
-What running them on the real frontier found, and why the validator's default is
-elbow-sweetspot, is in docs/SCORING.md.
+Historical comparisons and the selected local-global-improvement-space-log default are described in
+docs/SCORING.md.
 """
 
 import argparse
 import glob
 import json
+import math
 import os
 import statistics
 import sys
@@ -72,6 +80,8 @@ from scoring.pareto import (  # noqa: E402
     METHODS,
     Boundaries,
     Point,
+    adjusted_local_global,
+    improvement_factors,
     pareto_front,
 )
 
@@ -89,6 +99,11 @@ NORMALIZERS = {
     "diagonal-sweep-k0.33": "boundary",
     "diagonal-sweep-k3.0": "boundary",
     "local-global": "frontier",
+    "local-global-total-gain": "frontier",
+    "improvement-space": "frontier",
+    "improvement-space-log": "frontier-log",
+    "local-global-improvement-space": "frontier",
+    "local-global-improvement-space-log": "frontier",
 }
 
 # Not provable submissions: a literals-only floor and a production compressor. They are
@@ -121,9 +136,311 @@ def normalizer_for(method, front, bounds):
     kind = NORMALIZERS[method]
     if kind is None:
         return None
+    if kind == "frontier-log":
+        return frontier_normalizer(front, logarithmic=True)
     if kind == "frontier":
         return frontier_normalizer(front)
     return bounds.normalize
+
+
+def improvement_space_weights(front, bounds=None, *, logarithmic=False):
+    del bounds
+    return improvement_factors(front, incremental=True, logarithmic=logarithmic)
+
+
+# Unselected experiments stay here; the selected log method comes from METHODS.
+SPIKE_METHODS = {
+    **METHODS,
+    "local-global-total-gain": adjusted_local_global,
+    "improvement-space": improvement_space_weights,
+    "improvement-space-log": lambda front, bounds: improvement_space_weights(
+        front, bounds, logarithmic=True
+    ),
+    "local-global-improvement-space": lambda front, bounds: adjusted_local_global(
+        front, bounds, incremental=True
+    ),
+}
+
+
+def add_near_copies(points, target, count, epsilon):
+    """True trade-offs, within epsilon of each original frontier-axis range.
+
+    Preserve the original extremes: endpoint copies move inward. Interior copies
+    straddle their source. Cap distance before either adjacent frontier point.
+    All copies are credited to the source's hypothetical owner in the attack study.
+    """
+    ordered = pareto_front(points)
+    index = next(i for i, p in enumerate(ordered) if p.name == target)
+    anchor = ordered[index]
+    if len(ordered) < 2 or count < 1 or not 0 < epsilon < 1:
+        raise ValueError("copies require a nontrivial frontier, count >= 1 and 0 < epsilon < 1")
+    dt = epsilon * (ordered[-1].time_s - ordered[0].time_s)
+    dr = epsilon * (ordered[0].ratio_pct - ordered[-1].ratio_pct)
+    for neighbor in ordered[max(0, index - 1) : index] + ordered[index + 1 : index + 2]:
+        dt = min(dt, 0.4 * abs(neighbor.time_s - anchor.time_s))
+        dr = min(dr, 0.4 * abs(neighbor.ratio_pct - anchor.ratio_pct))
+    copies = []
+    for i in range(count):
+        if index == 0:
+            offset = (i + 1) / count
+        elif index == len(ordered) - 1:
+            offset = -(i + 1) / count
+        else:
+            offset = (1 if i % 2 == 0 else -1) * (i // 2 + 1) / math.ceil(count / 2)
+        copies.append(
+            Point(
+                f"{target}-copy{i + 1}",
+                anchor.time_s + offset * dt,
+                anchor.ratio_pct - offset * dr,
+            )
+        )
+    return [*points, *copies], {target, *(p.name for p in copies)}
+
+
+def duplicate_study(methods, out_root, *, scenario="big-elbow"):
+    """Measure combined owner allocation, not just each copy's smaller bar."""
+    base = scenarios()[scenario]
+    targets = ["fast", "elbow", "crawl"]
+    counts = [1, 4, 16]
+    epsilons = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+    results = []
+    for target in targets:
+        for count in counts:
+            for epsilon in epsilons:
+                points, owner = add_near_copies(base, target, count, epsilon)
+                for method, weight_fn in methods.items():
+                    before = weight_fn(pareto_front(base), DEFAULT_BOUNDS).get(target, 0.0)
+                    weights = weight_fn(pareto_front(points), DEFAULT_BOUNDS)
+                    after = sum(weights.get(name, 0.0) for name in owner)
+                    results.append(
+                        {
+                            "method": method,
+                            "target": target,
+                            "copies": count,
+                            "epsilon": epsilon,
+                            "before": before,
+                            "after": after,
+                            "inflation": after / before if before else None,
+                        }
+                    )
+    with open(os.path.join(out_root, "duplicate-study.json"), "w") as fh:
+        json.dump(results, fh, indent=2, allow_nan=False)
+    fig, axes = plt.subplots(3, 3, figsize=(18, 13), sharex=True, layout="constrained")
+    for row, target in enumerate(targets):
+        for column, count in enumerate(counts):
+            ax = axes[row, column]
+            for i, method in enumerate(methods):
+                samples = [
+                    r
+                    for r in results
+                    if r["method"] == method and r["target"] == target and r["copies"] == count
+                ]
+                ax.plot(
+                    [r["epsilon"] for r in samples],
+                    [r["inflation"] for r in samples],
+                    ".-",
+                    color=color_for(i),
+                    label=method,
+                )
+            ax.axhline(1, color="black", linestyle=":", linewidth=1)
+            ax.set_xscale("log")
+            ax.invert_xaxis()
+            ax.set(
+                title=f"{target}: {count} added copies",
+                xlabel="Copy distance cap / original axis range (smaller →)",
+                ylabel="Combined owner share / original share",
+            )
+            ax.grid(alpha=0.2)
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncols=3, fontsize=8)
+    fig.suptitle(f"{scenario}: near-copy reward inflation; dotted line = no extra allocation")
+    fig.savefig(os.path.join(out_root, "duplicate-sensitivity.png"), dpi=140)
+    plt.close(fig)
+    lines = [
+        "# Improvement-space weighting experiment",
+        "",
+        "The production default is local-global-improvement-space-log; other methods are controls.",
+        "",
+        "All tests use deterministic synthetic points, without timing uncertainty.",
+        "Owner means the combined anchor + copy allocation, regardless of hotkey.",
+        "Copies remain non-dominated and do not move the original frontier extremes.",
+        "",
+        f"Test shape: {scenario}.",
+        "",
+        "The proposed factor is incremental improvement-space. Total gain is only a control.",
+        "",
+        "## Formulas",
+        "",
+        "- Total gain: Gt_i = (t_max - t_i) / sum_j(t_max - t_j); "
+        "Gr_i = (r_max - r_i) / sum_j(r_max - r_j); F_i = (Gt_i + Gr_i) / 2.",
+        "- Incremental space: Dt_i = (t_next - t_i) / (t_max - t_min); "
+        "Dr_i = (r_previous - r_i) / (r_max - r_min); F_i = (Dt_i + Dr_i) / 2. "
+        "Missing endpoint differences are zero.",
+        "- Log incremental space: Dt_i = log(t_next / t_i) / log(t_max / t_min); "
+        "Dr_i = log(r_previous / r_i) / log(r_max / r_min); F_i = (Dt_i + Dr_i) / 2. "
+        "This changes the gain factor on both axes; local-global coefficients stay linear.",
+        "- Adjusted local-global: normalize(local_i × global_i × F_i).",
+        "- improvement-space alone uses F_i directly, to isolate the added factor.",
+        "",
+        "Singletons receive 1. Empty frontiers receive no weight. No compression "
+        "threshold or external endpoint bonus is used. "
+        "Log variants require positive finite values.",
+        "",
+        "## Near-copy limit (distance cap 0.0001% of each original axis range)",
+        "",
+        "| method | target | copies | before | group after | multiplier |",
+        "|---|---|---:|---:|---:|---:|",
+    ]
+    for r in results:
+        if r["epsilon"] == epsilons[-1]:
+            multiplier = (
+                f"{r['inflation']:.3f}x" if r["inflation"] is not None else "n/a (zero before)"
+            )
+            lines.append(
+                f"| {r['method']} | {r['target']} | {r['copies']} | "
+                f"{r['before']:.4%} | {r['after']:.4%} | {multiplier} |"
+            )
+    lines += [
+        "",
+        "## Interpretation",
+        "",
+        "Total-gain factors measure position, not uniqueness: arbitrarily close points "
+        "receive almost identical factors. They cannot by themselves prevent duplication.",
+        "Incremental space divides two fixed improvement budgets. Copies of one point "
+        "approach the original combined allocation when this factor is used alone.",
+        "Multiplying by local-global loses that exact conservation: inserting neighbors "
+        "changes the local coefficients. Inspect the group multipliers, not only smaller "
+        "individual copy weights.",
+        "Space-based methods can favor a point adjacent to a large gap, including endpoints. "
+        "The dense-cluster and endpoint scenarios expose this trade-off.",
+        "Frontier-relative normalization remains sensitive to new extreme points; this "
+        "study holds the original extremes fixed and does not claim universal strategy resistance.",
+    ]
+    with open(os.path.join(out_root, "EXPERIMENT.md"), "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def copy_audit(methods, out_root):
+    """Try every frontier point in every original scenario, not only the good elbow."""
+    rows = []
+    for scenario, points in scenarios().items():
+        if scenario.startswith("near-tradeoffs"):
+            continue
+        front = pareto_front(points)
+        if len(front) < 2:
+            continue
+        for target in front:
+            for count in (1, 4, 16):
+                copied, owner = add_near_copies(points, target.name, count, 1e-6)
+                for name, fn in methods.items():
+                    before = fn(front, DEFAULT_BOUNDS).get(target.name, 0)
+                    after = sum(
+                        w
+                        for key, w in fn(pareto_front(copied), DEFAULT_BOUNDS).items()
+                        if key in owner
+                    )
+                    rows.append(
+                        {
+                            "scenario": scenario,
+                            "method": name,
+                            "target": target.name,
+                            "copies": count,
+                            "before": before,
+                            "after": after,
+                            "inflation": after / before if before else None,
+                        }
+                    )
+    with open(os.path.join(out_root, "copy-audit.json"), "w") as fh:
+        json.dump(rows, fh, indent=2, allow_nan=False)
+    lines = [
+        "# Copy audit across all original scenarios",
+        "",
+        "Each frontier point is tested with 1, 4 and 16 near-copies at a distance cap",
+        "of 0.0001% of each original axis range. Original extremes stay fixed.",
+        "These are sampled attacks, not a proof of strategy resistance.",
+        "",
+        "Multipliers below cover positive original allocations; zero-to-positive gains",
+        "are listed separately.",
+        "",
+        "| Method | Worst multiplier | Scenario | Point | Copies | Before | Group after |",
+        "|---|---:|---|---|---:|---:|---:|",
+    ]
+    for name in methods:
+        samples = [r for r in rows if r["method"] == name and r["inflation"] is not None]
+        worst = max(samples, key=lambda r: r["inflation"])
+        lines.append(
+            f"| {name} | {worst['inflation']:.4f}x | {worst['scenario']} | "
+            f"{worst['target']} | {worst['copies']} | "
+            f"{worst['before']:.4%} | {worst['after']:.4%} |"
+        )
+    newly_paid = [r for r in rows if r["before"] == 0 and r["after"] > 1e-12]
+    if newly_paid:
+        lines += ["", "## Zero-to-positive gains", ""]
+        for r in newly_paid:
+            lines.append(
+                f"- {r['method']}, {r['scenario']}/{r['target']}, {r['copies']} copies: "
+                f"0 → {r['after']:.6%}."
+            )
+    lines += [
+        "",
+        "The incremental factor alone conserves the combined allocation in the",
+        "limit of vanishing copy distance. Multiplying it by local-global does not:",
+        "even the direction of the distortion depends on the frontier shape.",
+        "The false-elbow case is a counterexample to treating the combined method",
+        "as duplicate-resistant. Wider spacing and new extremes need separate analysis.",
+    ]
+    with open(os.path.join(out_root, "COPY-AUDIT.md"), "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def focused_studies(methods, out_root):
+    selected = {
+        name: fn
+        for name, fn in methods.items()
+        if name
+        in {
+            "local-global",
+            "improvement-space",
+            "improvement-space-log",
+            "local-global-improvement-space",
+            "local-global-improvement-space-log",
+        }
+    }
+    if not selected:
+        return
+    for scenario in ("big-elbow", "false-elbow"):
+        directory = os.path.join(out_root, "improvement-space-study", scenario)
+        os.makedirs(directory, exist_ok=True)
+        duplicate_study(selected, directory, scenario=scenario)
+
+
+def comparison_plot(scenario, points, methods, bounds, out_root):
+    """Two Pareto panels above one full-width comparison of method weights."""
+    front = pareto_front(points)
+    ordered = sorted(points, key=lambda p: p.time_s)
+    colors = {p.name: color_for(i) for i, p in enumerate(ordered)}
+    fig, axes = plt.subplot_mosaic(
+        [["raw", "normalized"], ["weights", "weights"]],
+        figsize=(16, 12),
+        layout="constrained",
+    )
+    raw_ax, norm_ax, bar_ax = axes["raw"], axes["normalized"], axes["weights"]
+    plot_scatter(raw_ax, points, front, colors)
+    plot_scatter_normalized(norm_ax, front, front, colors, frontier_normalizer(front))
+    norm_ax.set(xlim=(0, 1), ylim=(0, 1), title="Frontier coordinates (comparison only)")
+    bottom = [0.0] * len(methods)
+    values = [fn(front, bounds) for fn in methods.values()]
+    for p in ordered:
+        heights = [w.get(p.name, 0.0) for w in values]
+        bar_ax.bar(list(methods), heights, bottom=bottom, color=colors[p.name], label=p.name)
+        bottom = [a + b for a, b in zip(bottom, heights, strict=True)]
+    bar_ax.set(ylabel="Share of frontier allocation", ylim=(0, 1), title="All methods")
+    bar_ax.tick_params(axis="x", labelsize=8)
+    plt.setp(bar_ax.get_xticklabels(), rotation=35, ha="right")
+    bar_ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1, 1))
+    fig.suptitle(scenario)
+    fig.savefig(os.path.join(out_root, f"compare-{scenario}.png"), dpi=140)
+    plt.close(fig)
 
 
 def main():
@@ -149,6 +466,9 @@ def main():
         action="store_true",
         help="keep no-lz77 and libdeflate-12, which nobody can submit",
     )
+    ap.add_argument("--method", action="append", choices=sorted(SPIKE_METHODS))
+    ap.add_argument("--scenario", action="append", help="select synthetic scenarios")
+    ap.add_argument("--out-dir", help="override the report directory")
     args = ap.parse_args()
 
     out_root = OUT
@@ -166,7 +486,23 @@ def main():
     else:
         all_points = scenarios()
 
-    for method, weight_fn in METHODS.items():
+    if args.scenario:
+        all_points = {k: v for k, v in all_points.items() if k in args.scenario}
+        if not all_points:
+            ap.error("no matching scenarios")
+    out_root = args.out_dir or out_root
+    os.makedirs(out_root, exist_ok=True)
+    methods = {name: SPIKE_METHODS[name] for name in (args.method or SPIKE_METHODS)}
+    for scenario, points in all_points.items():
+        bounds = (
+            boundaries_from_run(points, args.speed_floor) if args.run is not None else None
+        ) or DEFAULT_BOUNDS
+        comparison_plot(scenario, points, methods, bounds, out_root)
+    if args.run is None:
+        duplicate_study(methods, out_root)
+        copy_audit(methods, out_root)
+        focused_studies(methods, out_root)
+    for method, weight_fn in methods.items():
         method_dir = os.path.join(out_root, method)
         os.makedirs(method_dir, exist_ok=True)
         report = [f"# Pareto weight scoring -- {method}", ""]
@@ -194,6 +530,7 @@ def main():
                 scenario,
                 os.path.join(method_dir, f"{scenario}.png"),
                 normalizer_for(method, front, bounds),
+                method=method,
             )
         with open(os.path.join(method_dir, "REPORT.md"), "w") as fh:
             fh.write("\n".join(report))
@@ -219,7 +556,9 @@ def load_run(path, include_non_candidates=False):
         for method, m in rec["methods"].items():
             if method in NON_CANDIDATES and not include_non_candidates:
                 continue
-            times = [r["time_s"] for r in m["reps"] if r["phase"] == "measured"]
+            times = [r.get("total_s") for r in m["reps"] if r["phase"] == "measured"]
+            if not times or any(t is None for t in times):
+                raise ValueError("full compression timings missing; rebenchmark legacy runs")
             a = acc.setdefault(method, [0, 0, 0.0])
             a[0] += rec["raw_bytes"]
             a[1] += m["output_bytes"]
@@ -246,8 +585,13 @@ def scenarios():
         "dense-cluster": dense_cluster(),
         "even-staircase": even_staircase(),
         "big-elbow": big_elbow(),
+        "big-elbow-two-nearby": big_elbow_nearby(2),
+        "big-elbow-three-nearby": big_elbow_nearby(3),
         "false-elbow": false_elbow(),
         "near-duplicates": near_duplicates(),
+        "near-tradeoffs-middle": add_near_copies(big_elbow(), "elbow", 4, 1e-4)[0],
+        "near-tradeoffs-fast": add_near_copies(big_elbow(), "fast", 4, 1e-4)[0],
+        "near-tradeoffs-slow": add_near_copies(big_elbow(), "crawl", 4, 1e-4)[0],
     }
 
 
@@ -318,6 +662,21 @@ def big_elbow():
     ]
 
 
+def big_elbow_nearby(count):
+    """Small real trade-offs at the knee, all surviving Pareto filtering.
+
+    The pair retains the original plus a slightly smaller/slower alternative.
+    The triple adds a slightly faster/larger alternative on the other side.
+    Time changes by 12.5%; compressed/raw ratio changes by 1.25% relative.
+    This keeps the cluster local while separating its markers on the full plot.
+    """
+    points = big_elbow()
+    points.append(Point("elbow-smaller", 13.5, 23.7))
+    if count == 3:
+        points.append(Point("elbow-faster", 10.5, 24.3))
+    return sorted(points, key=lambda p: p.time_s)
+
+
 def false_elbow():
     # big_elbow's inversion: "elbow" only looks like a middle bend because
     # it's positioned between mid and crawl -- it's barely better than mid on
@@ -349,7 +708,7 @@ def near_duplicates():
     ]
 
 
-def frontier_normalizer(front):
+def frontier_normalizer(front, *, logarithmic=False):
     # For plotting only methods that compare a point to the frontier's own
     # extremes (e.g. local_global_weights), never to an external boundary:
     # 0 is the hypothetical "as fast as the fastest, as good as the best"
@@ -359,8 +718,12 @@ def frontier_normalizer(front):
     ordered = sorted(front, key=lambda p: p.time_s)
     lo_t, hi_t = ordered[0].time_s, ordered[-1].time_s
     lo_r, hi_r = ordered[-1].ratio_pct, ordered[0].ratio_pct
+    if logarithmic:
+        lo_t, hi_t, lo_r, hi_r = map(math.log, (lo_t, hi_t, lo_r, hi_r))
 
     def norm(time_s, ratio_pct):
+        if logarithmic:
+            time_s, ratio_pct = math.log(time_s), math.log(ratio_pct)
         nt = (time_s - lo_t) / (hi_t - lo_t) if hi_t > lo_t else 0.0
         nr = (ratio_pct - lo_r) / (hi_r - lo_r) if hi_r > lo_r else 0.0
         return nt, nr
@@ -385,12 +748,20 @@ def summary(scenario, points, front, weights):
     return "\n".join(lines)
 
 
+def point_label_offset(name):
+    return {
+        "elbow-faster": (-50, 18),
+        "elbow": (6, -20),
+        "elbow-smaller": (16, 8),
+    }.get(name, (6, 4))
+
+
 def color_for(i):
     palette = plt.get_cmap("tab20").colors
     return palette[i % len(palette)]
 
 
-def plot(points, front, weights, colors, title, path, norm_fn):
+def plot(points, front, weights, colors, title, path, norm_fn, *, method=None):
     # One figure per scenario, sharing the same per-point color throughout.
     # `norm_fn` is `(time_s, ratio_pct) -> (nt, nr)` for a method that
     # normalizes, or None for one that never does -- a method that only ever
@@ -398,10 +769,19 @@ def plot(points, front, weights, colors, title, path, norm_fn):
     # panel, so that panel is dropped entirely rather than showing a
     # normalization the method itself doesn't use.
     if norm_fn is None:
-        fig, (ax_scatter, ax_bars) = plt.subplots(1, 2, figsize=(13, 5))
+        fig, (ax_scatter, ax_bars) = plt.subplots(2, 1, figsize=(12, 10))
     else:
-        fig, (ax_scatter, ax_norm, ax_bars) = plt.subplots(1, 3, figsize=(19, 5))
+        fig, axes = plt.subplot_mosaic(
+            [["raw", "normalized"], ["weights", "weights"]], figsize=(14, 11)
+        )
+        ax_scatter, ax_norm, ax_bars = axes["raw"], axes["normalized"], axes["weights"]
         plot_scatter_normalized(ax_norm, points, front, colors, norm_fn)
+        if method in {"improvement-space-log", "local-global-improvement-space-log"}:
+            ax_norm.set_title(
+                "Linear local-global coordinates; gain factor uses log gaps"
+                if method == "local-global-improvement-space-log"
+                else "Log axes normalized to frontier extremes"
+            )
     plot_scatter(ax_scatter, points, front, colors)
     plot_bars(ax_bars, points, weights, colors)
     fig.suptitle(title)
@@ -424,7 +804,11 @@ def plot_scatter(ax, points, front, colors):
             linewidths=1.2,
         )
         ax.annotate(
-            p.name, (p.time_s, p.ratio_pct), textcoords="offset points", xytext=(6, 4), fontsize=8
+            p.name,
+            (p.time_s, p.ratio_pct),
+            textcoords="offset points",
+            xytext=point_label_offset(p.name),
+            fontsize=8,
         )
     ordered_front = sorted(front, key=lambda p: p.time_s)
     ax.plot(
@@ -438,6 +822,35 @@ def plot_scatter(ax, points, front, colors):
     ax.set_ylabel("ratio, % of raw (lower is better)")
     ax.set_title("points (filled ring = on frontier)")
     ax.grid(True, alpha=0.3)
+
+    nearby = sorted(
+        [p for p in points if p.name in {"elbow", "elbow-faster", "elbow-smaller"}],
+        key=lambda p: p.time_s,
+    )
+    if len(nearby) > 1:
+        inset = ax.inset_axes([0.52, 0.48, 0.43, 0.43])
+        inset.plot(
+            [p.time_s for p in nearby],
+            [p.ratio_pct for p in nearby],
+            "--",
+            color="gray",
+            linewidth=1,
+        )
+        for p in nearby:
+            inset.scatter(p.time_s, p.ratio_pct, color=colors[p.name], edgecolors="black")
+            inset.annotate(
+                p.name,
+                (p.time_s, p.ratio_pct),
+                xytext=(0, 8),
+                textcoords="offset points",
+                ha="center",
+                fontsize=7,
+            )
+        inset.margins(x=0.55, y=0.55)
+        inset.set_title("Elbow detail", fontsize=9)
+        inset.tick_params(labelsize=7)
+        inset.ticklabel_format(useOffset=False)
+        inset.grid(alpha=0.2)
 
 
 def plot_scatter_normalized(ax, points, front, colors, norm_fn):
@@ -459,7 +872,13 @@ def plot_scatter_normalized(ax, points, front, colors, norm_fn):
             edgecolors="black" if on_front else "none",
             linewidths=1.2,
         )
-        ax.annotate(p.name, (nt, nr), textcoords="offset points", xytext=(6, 4), fontsize=8)
+        ax.annotate(
+            p.name,
+            (nt, nr),
+            textcoords="offset points",
+            xytext=point_label_offset(p.name),
+            fontsize=8,
+        )
     ordered_front = sorted(front, key=lambda p: p.time_s)
     normalized_front = [norm_fn(p.time_s, p.ratio_pct) for p in ordered_front]
     ax.plot(
@@ -491,10 +910,6 @@ def plot_bars(ax, points, weights, colors):
     ax.set_ylim(bottom=0)
     ax.tick_params(axis="x", rotation=45)
     ax.grid(True, axis="y", alpha=0.3)
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":

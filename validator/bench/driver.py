@@ -15,6 +15,7 @@ that is an entry point's job. What a Sandbox is and how it is enforced stays
     VERIFY_BENCH_BUILD_MEMORY_MB=4096 cgroup cap while building; 0 disables
     VERIFY_BENCH_CPUS=                e.g. "2-3"; cgroup AllowedCPUs, unset disables
     VERIFY_BENCH_REPS=11              timed reps per file per method
+    VERIFY_BENCH_BARS=0               opt in to external reference compressors with 1
     VERIFY_BENCH_WARMUP=1             discarded reps before them
     VERIFY_BENCH_KEEP=auto            auto | always | never -- what to do with the workspace
     VERIFY_BENCH_WORKSPACE=<dir>      where run workspaces are made
@@ -114,7 +115,7 @@ class Config:
     keep: Keep = Keep.AUTO
     #: Measure `miniz_oxide` and `libdeflate` alongside. Context for a report,
     #: never part of a verdict, and they cost more than the parsers do.
-    bars: bool = True
+    bars: bool = False
 
     @classmethod
     def from_env(cls, validator: Path) -> Config:
@@ -131,7 +132,7 @@ class Config:
             reps=max(int(env("VERIFY_BENCH_REPS", "11")), 1),
             warmup=max(int(env("VERIFY_BENCH_WARMUP", "1")), 0),
             keep=Keep(env("VERIFY_BENCH_KEEP", "auto")),
-            bars=env("VERIFY_BENCH_BARS", "1") != "0",
+            bars=env("VERIFY_BENCH_BARS", "0") != "0",
         )
 
     @property
@@ -344,7 +345,9 @@ def _measure(
             workspace=workspace,
         )
     try:
-        return parse_results(r.stdout, corpus)
+        result = parse_results(r.stdout, corpus)
+        result.raw_records[0]["benchmark_provenance"] = provenance(config)
+        return result
     except Malformed as e:
         raise MeasureFailed(
             f"unreadable output measuring {candidate}: {e}",
@@ -396,3 +399,28 @@ def _cleanup(config: Config, workspace: Path, *, keep: bool) -> bool:
         return True
     shutil.rmtree(workspace, ignore_errors=True)
     return False
+
+
+def provenance(config: Config) -> dict[str, object]:
+    """Trusted harness/build/environment identity, retained in each raw artifact."""
+    machine = Path("/etc/machine-id")
+    templates = sorted(
+        p for p in config.template.rglob("*") if p.is_file() and "target" not in p.parts
+    )
+    digest = hashlib.sha256()
+    for path in templates:
+        digest.update(str(path.relative_to(config.template)).encode() + b"\0" + path.read_bytes())
+    return {
+        "version": 1,
+        "engine_sha256": hashlib.sha256(config.engine.read_bytes()).hexdigest(),
+        "template_sha256": digest.hexdigest(),
+        "host_sha256": hashlib.sha256(machine.read_bytes()).hexdigest()
+        if machine.exists()
+        else None,
+        "cpus": config.cpus,
+        "process_affinity": sorted(os.sched_getaffinity(0)),
+        "memory_mb": config.memory_mb,
+        "sandbox": config.enabled,
+        "build_profile": "release",
+        "external_references": config.bars,
+    }

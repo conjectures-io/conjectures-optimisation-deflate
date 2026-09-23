@@ -30,8 +30,8 @@ HELD_OUT = Corpus(name="held-out", path=Path("/corpus"), public=False, formats={
 
 
 def method(name: str, out_bytes: int, times: list[float], **over: object) -> MethodResult:
-    reps = [Rep(phase="warmup", order_index=0, time_s=9.9)]
-    reps += [Rep("measured", i + 1, t) for i, t in enumerate(times)]
+    reps = [Rep(phase="warmup", order_index=0, time_s=9.9, encode_s=0.0, total_s=9.9)]
+    reps += [Rep("measured", i + 1, t, encode_s=0.0, total_s=t) for i, t in enumerate(times)]
     fields: dict[str, object] = {
         "external": False,
         "output_bytes": out_bytes,
@@ -48,7 +48,7 @@ def method(name: str, out_bytes: int, times: list[float], **over: object) -> Met
 
 def run_of(candidate: str, methods: dict[str, MethodResult], files: int = 2) -> Run:
     meta = Meta(
-        schema_version=3,
+        schema_version=4,
         started_at_unix=0.0,
         corpus="open",
         corpus_dir="/corpus",
@@ -87,7 +87,7 @@ def simple(candidate: str, inc: int, cand: int, inc_t: float, cand_t: float) -> 
 
 def test_the_floor_rejects_and_says_by_how_much():
     v = verdict.judge(simple("c", 500, 400, 0.10, 0.90), "c")
-    assert not v.accepted and "9.00x slower" in v.reason and "floor is 8.0x" in v.reason
+    assert not v.accepted and "8.62x slower" in v.reason and "floor is 8.0x" in v.reason
 
 
 def test_a_correct_parser_inside_the_floor_is_accepted_even_when_larger():

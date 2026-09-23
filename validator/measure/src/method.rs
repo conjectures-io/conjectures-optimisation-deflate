@@ -77,8 +77,8 @@ impl Method {
         }
     }
 
-    /// `encode` asks for the compressed output as well; the timed part is the same either way.
-    pub fn run_once(&self, input: &[u8], toks: &mut [u32], encode: bool) -> Once {
+    /// Always compress fully. `retain_output` keeps the first stream for correctness checks.
+    pub fn run_once(&self, input: &[u8], toks: &mut [u32], retain_output: bool) -> Once {
         match &self.kind {
             Kind::Slot(p) => {
                 let t0 = Instant::now();
@@ -93,16 +93,15 @@ impl Method {
                         format!("parse reported {n} tokens into a buffer of {}", toks.len()),
                     );
                 }
-                let tokens_sha256 = sha256_tokens(&toks[..n]);
-                let (compressed, encode_s) = if encode {
-                    let t1 = Instant::now();
-                    match deflate::encode(&toks[..n], input.len()) {
-                        Ok(v) => (Some(v), Some(t1.elapsed().as_secs_f64())),
-                        Err(e) => return Once::failed(parse_s, format!("encode: {e}")),
-                    }
-                } else {
-                    (None, None)
+                let t1 = Instant::now();
+                let encoded = std::hint::black_box(deflate::encode(&toks[..n], input.len()));
+                let encode_s = Some(t1.elapsed().as_secs_f64());
+                let compressed = match encoded {
+                    Ok(v) => retain_output.then_some(v),
+                    Err(e) => return Once::failed(parse_s, format!("encode: {e}")),
                 };
+                // Hashing and round-trip validation are telemetry, outside both timers.
+                let tokens_sha256 = sha256_tokens(&toks[..n]);
                 Once {
                     parse_s,
                     tokens: Some(n as u64),
@@ -114,13 +113,13 @@ impl Method {
             }
             Kind::MinizOxide(level) => {
                 let t0 = Instant::now();
-                let out = miniz_oxide::deflate::compress_to_vec(input, *level);
+                let out = std::hint::black_box(miniz_oxide::deflate::compress_to_vec(input, *level));
                 let parse_s = t0.elapsed().as_secs_f64();
                 Once {
                     parse_s,
                     tokens: None,
                     tokens_sha256: None,
-                    compressed: encode.then_some(out),
+                    compressed: retain_output.then_some(out),
                     encode_s: None,
                     error: None,
                 }
@@ -142,7 +141,7 @@ impl Method {
                     parse_s,
                     tokens: None,
                     tokens_sha256: None,
-                    compressed: encode.then_some(buf),
+                    compressed: retain_output.then_some(buf),
                     encode_s: None,
                     error: None,
                 }

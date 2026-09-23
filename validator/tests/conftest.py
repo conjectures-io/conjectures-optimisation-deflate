@@ -146,15 +146,15 @@ if "REJECT" in rs:
 n = int(rs.split("BYTES=")[1].split()[0]) if "BYTES=" in rs else 2000000
 t = float(rs.split("SECONDS=")[1].split()[0]) if "SECONDS=" in rs else 0.100
 Path(sys.argv[sys.argv.index("--results") + 1]).write_text(json.dumps({
-    "schema_version": 3,
+    "schema_version": 4,
     "corpus": {"name": "corpus-initial", "public": True},
     "candidates": ["submission"],
     "raw_bytes": 8060939,
     "speed_floor": 8.0,
     "methods": {
         "incumbent": {"external": False, "output_bytes": 2153387, "parse_s": 0.025,
-                      "errors": []},
-        "submission": {"external": False, "output_bytes": n, "parse_s": t,
+                      "total_s": 0.025, "errors": []},
+        "submission": {"external": False, "output_bytes": n, "parse_s": t, "total_s": t,
                        "ratio": n / 2153387, "slowdown": t / 0.025,
                        "accepted": True, "improved": n < 2153387, "errors": []},
     },
@@ -205,6 +205,15 @@ def stub_verifier(tmp_path, monkeypatch, store):
                 store.verification.publish(sid, token, stage)
         return result
 
+    original_finish = store.submissions.finish
+
+    def finish(*args, **kwargs):
+        state = original_finish(*args, **kwargs)
+        if state == "accepted":
+            attach_aggregation(store, args[0])
+        return state
+
+    monkeypatch.setattr(store.submissions, "finish", finish)
     monkeypatch.setattr(worker_mod, "run_gate", run_gate)
     return path
 
@@ -261,3 +270,52 @@ def post_submission(client, kp, d: Path, *, signer=None, timestamp: int | None =
         },
         files={"parse.rs": ("parse.rs", rs), "Parse.lean": ("Parse.lean", lean)},
     )
+
+
+def attach_aggregation(store, sid):
+    """Test gate evidence mirrors the production DB publication path."""
+    import copy
+
+    from test_bench_storage import evidence
+
+    from bench.storage import sha256
+    from db.aggregation import aggregate, publish
+
+    with store.sessions.begin() as session:
+        sub = session.get(models.Submission, sid)
+        raw = copy.deepcopy(evidence())
+        raw[0]["methods"]["candidate"]["source_sha256"] = sub.source_sha256
+        raw[0]["measured_rounds"] = 2
+        raw[0]["benchmark_provenance"] = {
+            "engine_sha256": "1" * 64,
+            "template_sha256": "2" * 64,
+            "host_sha256": "3" * 64,
+        }
+        raw[1]["raw_bytes"] = sub.raw_bytes
+        for name, size, seconds in (
+            ("candidate", sub.bytes, sub.parse_seconds),
+            ("incumbent", sub.incumbent_bytes, sub.incumbent_seconds),
+        ):
+            raw[1]["methods"][name]["output_bytes"] = size
+            raw[1]["methods"][name]["reps"] = [
+                {
+                    "phase": "measured",
+                    "order_index": i,
+                    "time_s": seconds,
+                    "encode_s": 0.0,
+                    "total_s": seconds,
+                }
+                for i in range(2)
+            ]
+        row = models.BenchmarkRun(
+            source_sha256=sub.source_sha256,
+            candidate_method="candidate",
+            corpus="tiny",
+            corpus_sha256=sha256([("a.txt", "c" * 64, sub.raw_bytes)]),
+            status="complete",
+            raw_data=raw,
+        )
+        session.add(row)
+        session.flush()
+        result = aggregate(session, [row])
+        publish(session, sid, result.id)

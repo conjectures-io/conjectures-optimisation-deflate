@@ -118,7 +118,7 @@ def import_file(engine: sa.Engine, path: Path) -> int:
     manifest = sorted((f.file, f.sha256, f.raw_bytes) for f in run.files)
     started = datetime.fromtimestamp(run.meta.started_at_unix, timezone.utc)
     # Failed methods remain inspectable, but this run must not be selected as successful.
-    failed = any(run.failures(name) for name in (INCUMBENT, candidate))
+    failed = any(not f.methods[name].ok for f in run.files for name in (INCUMBENT, candidate))
     with engine.begin() as conn:
         run_id = conn.execute(
             insert(BenchmarkRun)
@@ -184,6 +184,8 @@ def insert_results(conn: sa.Connection, run_id: int, run: Run) -> None:
                     "phase": rep.phase,
                     "order_index": rep.order_index,
                     "time_s": rep.time_s,
+                    "encode_s": rep.encode_s,
+                    "total_s": rep.total_s,
                 }
                 for repetition, rep in enumerate(method.reps)
             )

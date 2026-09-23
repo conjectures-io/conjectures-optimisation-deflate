@@ -24,32 +24,31 @@ from .improvement import Improvement, score_improvements
 
 @dc.dataclass(frozen=True, slots=True)
 class HotkeyScore:
-    """One competitor's line in the audit: both components, and what they came to."""
+    """One algorithm point, its computed allocation and its payout disposition."""
 
-    hotkey: str
-    submission_id: int | None
-    time_s: float | None
-    ratio_pct: float | None
+    hotkey: str | None
+    submission_id: int
+    time_s: float
+    ratio_pct: float
     on_frontier: bool
     pareto_weight: float
     improvement_weight: float
+    aggregation_id: int | None = None
+    baseline_key: str | None = None
+    burn_reason: str | None = None
+    payable_weight: float = 0.0
+    normalized_time_ratio: float | None = None
 
     @property
     def combined_weight(self) -> float:
         return self.pareto_weight + self.improvement_weight
 
     def as_snapshot(self) -> dict:
-        # The shape db.scoring.record_weight_set stores.
-        return {
-            "hotkey": self.hotkey,
-            "submission_id": self.submission_id,
-            "time_s": self.time_s,
-            "ratio_pct": self.ratio_pct,
-            "on_frontier": self.on_frontier,
-            "pareto_weight": self.pareto_weight,
-            "improvement_weight": self.improvement_weight,
-            "combined_weight": self.combined_weight,
-        }
+        snapshot = dc.asdict(self)
+        # The dimensionless coordinate is recoverable from aggregation evidence.
+        # Keep the historical snapshot time_s column in actual seconds.
+        snapshot.pop("normalized_time_ratio")
+        return snapshot | {"combined_weight": self.combined_weight}
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -57,55 +56,99 @@ class Scoring:
     scores: tuple[HotkeyScore, ...]
     frontier: FrontierScore
     improvements: tuple[Improvement, ...]
+    eligibility_known: bool = False
 
     @property
     def weights(self) -> dict[str, float]:
-        return {s.hotkey: s.combined_weight for s in self.scores if s.combined_weight > 0}
+        weights: dict[str, float] = {}
+        for s in self.scores:
+            if s.hotkey is not None and s.payable_weight > 0:
+                weights[s.hotkey] = weights.get(s.hotkey, 0.0) + s.payable_weight
+        return weights
+
+    @property
+    def burn_weight(self) -> float:
+        return max(0.0, 1.0 - sum(self.weights.values()))
 
     def snapshots(self) -> list[dict]:
         return [s.as_snapshot() for s in self.scores]
 
     def summary(self) -> str:
-        top = sorted(self.scores, key=lambda s: -s.combined_weight)[:5]
-        paid = ", ".join(f"{s.hotkey[:8]}…={s.combined_weight:.3f}" for s in top)
         return (
-            f"frontier={len(self.frontier.frontier)} improvements={len(self.improvements)} "
-            f"top=[{paid}]"
+            f"frontier={len(self.frontier.frontier)} "
+            f"improvements={len(self.improvements)} burn={self.burn_weight:.3f}"
         )
 
 
 def score(
-    best_per_hotkey: Sequence[ScoredSubmission],
+    submissions: Sequence[ScoredSubmission],
     history: Sequence[ScoredSubmission],
     config: ScoringConfig,
+    *,
+    eligible_hotkeys: set[str] | None = None,
 ) -> Scoring:
-    """Both components over one round's accepted submissions.
+    """Score all valid points first; burn ineligible allocations without renormalizing.
 
-    `best_per_hotkey` is one row per competitor -- the frontier is over competitors, not
-    over submissions, or a miner could crowd it by submitting many variants.
-    `history` is every accepted submission in order, because an improvement is a fact
-    about a moment, and superseding it later does not mean it never happened.
+    With no metagraph, miner payments are provisional and explicitly labeled.
+    The oldest frontier submission per hotkey wins payout eligibility. Recency
+    events remain independent: duplicate frontier exclusion does not erase history.
     """
-    frontier = score_frontier(best_per_hotkey, config)
-    improvement_weights, improvements = score_improvements(history, config)
+    import json
 
-    by_hotkey = {s.hotkey: s for s in best_per_hotkey}
+    if len({s.normalized_time_ratio is not None for s in [*submissions, *history]}) > 1:
+        raise ValueError("cannot mix absolute and relative time coordinates")
+    contexts = {json.dumps(s.context, sort_keys=True) for s in [*submissions, *history]}
+    if len(contexts) > 1:
+        raise ValueError("cannot score incomparable evaluation contexts")
+    if len({s.submission_id for s in submissions}) != len(submissions):
+        raise ValueError("duplicate submission IDs")
+    frontier = score_frontier(submissions, config)
+    _, improvements = score_improvements(history, config)
+    from .improvement import decay_shares
+
+    improvement_by_id = {
+        event.submission_id: share * config.improvement_share
+        for event, share in zip(
+            improvements, decay_shares(len(improvements), config.improvement_decay), strict=True
+        )
+    }
+    chosen: dict[str, int] = {}
+    ordered = sorted(submissions, key=lambda s: (s.submitted_at, s.submission_id))
+    for s in ordered:
+        if s.hotkey is not None and s.point_id in frontier.frontier:
+            chosen.setdefault(s.hotkey, s.submission_id)
+    by_id = {s.submission_id: s for s in [*history, *submissions]}
     scores = []
-    for hotkey in sorted(set(by_hotkey) | set(improvement_weights)):
-        row = by_hotkey.get(hotkey)
-        point = frontier.points.get(hotkey)
+    for sid, s in sorted(by_id.items()):
+        pareto = frontier.weights.get(s.point_id, 0.0)
+        improvement = improvement_by_id.get(sid, 0.0)
+        reason = None
+        payable = pareto + improvement
+        if s.baseline_key is not None or s.hotkey is None:
+            reason, payable = "baseline", 0.0
+        elif eligible_hotkeys is not None and s.hotkey not in eligible_hotkeys:
+            reason, payable = "deregistered", 0.0
+        elif s.point_id in frontier.frontier and chosen.get(s.hotkey) != sid:
+            reason, payable = "duplicate-hotkey", improvement
+        elif eligible_hotkeys is None:
+            reason = "registration-unknown"
         scores.append(
             HotkeyScore(
-                hotkey=hotkey,
-                submission_id=row.submission_id if row else None,
-                time_s=point.time_s if point else None,
-                ratio_pct=point.ratio_pct if point else None,
-                on_frontier=frontier.on_frontier(hotkey),
-                pareto_weight=frontier.weights.get(hotkey, 0.0),
-                improvement_weight=improvement_weights.get(hotkey, 0.0),
+                s.hotkey,
+                sid,
+                s.time_s,
+                s.ratio_pct,
+                s.point_id in frontier.frontier,
+                pareto,
+                improvement,
+                s.aggregation_id,
+                s.baseline_key,
+                reason,
+                payable,
+                s.normalized_time_ratio,
             )
         )
-    return Scoring(scores=tuple(scores), frontier=frontier, improvements=tuple(improvements))
+    return Scoring(tuple(scores), frontier, tuple(improvements), eligible_hotkeys is not None)
 
 
 def to_vector(weights: dict[str, float], meta: MetagraphView, *, burn_uid: int = 0) -> WeightPlan:

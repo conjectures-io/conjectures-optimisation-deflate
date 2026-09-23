@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -82,7 +83,9 @@ class Submission(Base):
             "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_submission_aggregation"
         ),
     )
-    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    baseline_key: Mapped[str | None] = mapped_column(Text)
+    baseline_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # sha256(parse.rs || Parse.lean), hex -- what the miner signed, and the submission's
     # identity. The same files from the same hotkey are the same submission.
     digest: Mapped[str] = mapped_column(Text, nullable=False)
@@ -113,6 +116,7 @@ class Submission(Base):
     # it is what the speed floor is enforced on and what miners are shown.
     incumbent_seconds: Mapped[float | None] = mapped_column(Float)
     parse_seconds: Mapped[float | None] = mapped_column(Float)
+    compression_seconds: Mapped[float | None] = mapped_column(Float)
     time_ratio: Mapped[float | None] = mapped_column(Float)
 
     # --- queue bookkeeping ---------------------------------------------------
@@ -126,6 +130,19 @@ class Submission(Base):
 
     __table_args__ = (
         UniqueConstraint("hotkey", "digest", name="uq_submissions_hotkey_digest"),
+        UniqueConstraint("baseline_key", "digest", name="uq_submission_baseline_digest"),
+        CheckConstraint(
+            "(baseline_key IS NULL) = (hotkey IS NOT NULL)", name="ck_submission_owner"
+        ),
+        CheckConstraint(
+            "NOT baseline_active OR baseline_key IS NOT NULL", name="ck_submission_baseline_active"
+        ),
+        Index(
+            "uq_active_baseline",
+            "baseline_key",
+            unique=True,
+            postgresql_where=text("baseline_active"),
+        ),
         CheckConstraint(
             "lean_verified_at IS NULL OR static_verified_at IS NOT NULL",
             name="ck_submission_lean_requires_static",
@@ -229,8 +246,11 @@ class ScoreSnapshot(Base):
             "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_scoresnapshot_aggregation"
         ),
     )
-    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
-    # The submission the hotkey was scored on (their best accepted at the time).
+    hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    baseline_key: Mapped[str | None] = mapped_column(Text)
+    burn_reason: Mapped[str | None] = mapped_column(Text)
+    payable_weight: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    # Point identity independent of payout ownership.
     submission_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("submissions.id", ondelete="SET NULL")
     )
@@ -354,7 +374,7 @@ class BenchmarkCompressionResult(Base):
 
 
 class BenchmarkSpeedSample(Base):
-    """One parse-time repetition linked to its file/method compression result."""
+    """One repetition with LZ77, encoding and total timings; legacy totals are NULL."""
 
     __tablename__ = "benchmark_speed_samples"
 
@@ -365,6 +385,8 @@ class BenchmarkSpeedSample(Base):
     phase: Mapped[str] = mapped_column(Text, nullable=False)
     order_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
     time_s: Mapped[float] = mapped_column(Float, nullable=False)
+    encode_s: Mapped[float | None] = mapped_column(Float)
+    total_s: Mapped[float | None] = mapped_column(Float)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -385,6 +407,14 @@ class BenchmarkSpeedSample(Base):
         CheckConstraint(
             "time_s >= 0 AND time_s < 'Infinity'::float8", name="ck_benchmark_speed_samples_time"
         ),
+        CheckConstraint(
+            "encode_s >= 0 AND encode_s < 'Infinity'::float8",
+            name="ck_benchmark_speed_samples_encode",
+        ),
+        CheckConstraint(
+            "total_s >= time_s AND total_s < 'Infinity'::float8",
+            name="ck_benchmark_speed_samples_total",
+        ),
     )
 
 
@@ -396,6 +426,9 @@ class BenchmarkAggregation(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     calculator_version: Mapped[str] = mapped_column(Text, nullable=False)
+    input_key: Mapped[str | None] = mapped_column(Text, unique=True)
+    context: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    statistics: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -404,6 +437,7 @@ class BenchmarkAggregation(Base):
     bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     incumbent_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     parse_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    compression_seconds: Mapped[float | None] = mapped_column(Float)
 
     __table_args__ = (
         CheckConstraint(
@@ -417,6 +451,10 @@ class BenchmarkAggregation(Base):
             "incumbent_seconds > 0 AND incumbent_seconds < 'Infinity'::float8 "
             "AND parse_seconds >= 0 AND parse_seconds < 'Infinity'::float8",
             name="ck_benchmark_aggregations_time",
+        ),
+        CheckConstraint(
+            "compression_seconds >= 0 AND compression_seconds < 'Infinity'::float8",
+            name="ck_benchmark_aggregations_compression",
         ),
     )
 

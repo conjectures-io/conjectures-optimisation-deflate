@@ -90,11 +90,11 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
     # 3. Both submit. Alice compresses harder and slower; Bob is fast and a little worse,
     #    so both sit on the frontier and neither dominates the other.
     alice = post_submission(
-        client, ALICE, submission_files(tmp_path, "alice", "BYTES=2100000 SECONDS=2.000")
+        client, ALICE, submission_files(tmp_path, "alice", "BYTES=2100000 SECONDS=0.100")
     )
     clock["tick"](60)
     bob = post_submission(
-        client, BOB, submission_files(tmp_path, "bob", "BYTES=2140000 SECONDS=0.300")
+        client, BOB, submission_files(tmp_path, "bob", "BYTES=2140000 SECONDS=0.015")
     )
     assert (alice.status_code, bob.status_code) == (200, 200)
     assert drain() == 2
@@ -117,7 +117,7 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
     watcher.step(subnet, sink, NETUID, last)
     assert store.registrations.available_slots(ALICE.ss58_address) == 1
     better = post_submission(
-        client, ALICE, submission_files(tmp_path, "a3", "BYTES=2000000 SECONDS=2.100")
+        client, ALICE, submission_files(tmp_path, "a3", "BYTES=2000000 SECONDS=0.105")
     )
     assert better.status_code == 200
     assert drain() == 1
@@ -145,13 +145,11 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
     uids, weights = chain.submitted[0]
     assert uids == [0, 1, 2]
     assert sum(weights) == pytest.approx(1.0)
-    # Both are paid, and by different components -- which is the whole reason there are
-    # two. Alice holds both improvements (she beat the incumbent, then beat herself), so
-    # the entire improvement share is hers. Bob is the knee of the frontier: nearly as
-    # small as Alice at a seventh of the time, so the Pareto share is nearly all his.
-    assert weights[1] > 0 and weights[2] > 0
-    assert weights[1] == pytest.approx(0.40, abs=0.02)
-    assert weights[2] == pytest.approx(0.60, abs=0.02)
+    # All three points contribute geometry. Alice receives the oldest point plus
+    # both recency events; her newer frontier allocation burns.
+    assert weights[1] == pytest.approx(0.4330168744977828)
+    assert weights[2] == pytest.approx((1 - weights[1]) / 2)
+    assert weights[0] == pytest.approx(weights[2])
 
     # 9. And the vector is on the record with its per-hotkey reasoning.
     with store_pkg.session_scope(store.sessions) as session:
@@ -171,7 +169,11 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
         assert by_hotkey[ALICE.ss58_address].on_frontier is True
         assert by_hotkey[BOB.ss58_address].on_frontier is True
         assert by_hotkey[BOB.ss58_address].improvement_weight == pytest.approx(0.0)
-        assert by_hotkey[ALICE.ss58_address].improvement_weight == pytest.approx(0.4)
+        assert sum(
+            s.improvement_weight for s in snaps if s.hotkey == ALICE.ss58_address
+        ) == pytest.approx(0.4)
+        assert len(snaps) == 3
+        assert any(s.burn_reason == "duplicate-hotkey" for s in snaps)
         assert sum(s.combined_weight for s in snaps) == pytest.approx(1.0)
 
 
@@ -188,7 +190,7 @@ def test_a_rejected_submission_costs_nothing_and_scores_nothing(client, store, d
     assert store.scoring.best_per_hotkey() == []
 
     good = post_submission(
-        client, ALICE, submission_files(tmp_path, "good", "BYTES=2100000 SECONDS=1.000")
+        client, ALICE, submission_files(tmp_path, "good", "BYTES=2100000 SECONDS=0.050")
     )
     assert good.status_code == 200
     drain()

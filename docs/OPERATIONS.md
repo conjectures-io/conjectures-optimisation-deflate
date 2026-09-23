@@ -129,3 +129,47 @@ subnet costs nothing.
 
 Every API refusal carries a one-line reason and an `X-Request-Id`; the matching traceback
 is in the API log under the same id.
+
+## Seed and inspect the reference frontier
+
+Apply the additive migrations, then seed the downloaded corpora:
+
+```bash
+just db-migrate
+just baseline-seed --corpus corpus-stage1 --corpus corpus-stage2
+just weights-preview --out-dir data/benchmark-reports/baselines
+```
+
+Seeding includes `miner/template` and complete source/proof pairs in `miner/examples`.
+It verifies the exact stored revision before native benchmarking. Identical completed
+work is reused; interrupted work resumes. `--only lazy` restricts selection; `--overwrite`
+forces new measurements and aggregation while retaining prior evidence. Matching static
+and Lean verification is still reused. A changed verifier fingerprint requires rechecking.
+Only one revision per baseline name is active. Over-speed-limit examples retain evidence
+but are not activated. Baselines consume no miner registration and have no payable hotkey.
+Neither seeding nor preview submits weights to the chain.
+
+Aggregate independently with explicit corpus-content identities (available in benchmark_runs):
+
+```bash
+just bench-aggregate --submission-id 123 --corpus corpus-stage1:HASH --preview
+just bench-aggregate --submission-id 123 --corpus corpus-stage1:HASH --publish
+```
+
+Repeat `--corpus` for multiple corpora. Repeat `--run-id` to select exactly one existing
+run per corpus; otherwise the latest successful non-invalidated measured run is used.
+Legacy runs without measurement timestamps require explicit IDs. Legacy evidence without
+build/host provenance must be remeasured. Publication requires current successful static
+and Lean verification and the ordinary speed floor; it does not grant a miner registration.
+Use consistent host, CPU limits, repetitions, compiler and engine across the evaluation.
+Stage 2 reports are operator-only and must not be published with per-file private evidence.
+
+### Updating to total compression timing
+
+Apply `just db-migrate` (revision `0006`), then rerun baseline seeding on the same
+corpora and with the same CPU/resource settings used for subsequent submissions.
+The v4 engine measures both LZ77 and encoding every round. The incremental seeder
+replaces incompatible active measurements while retaining historical evidence.
+Until rebenchmarked and published, old LZ77-only points are excluded from scoring.
+Use `just weights-preview --out-dir "$PWD/data/benchmark-reports/current"` from the
+repository root to inspect the resulting total-time Pareto and stage telemetry.

@@ -65,12 +65,12 @@ def test_the_score_keeps_every_number_the_frontier_needs(client, store, drain, t
     # (seconds, bytes-as-a-percentage-of-raw) and cannot be built from the ratios alone.
     enrol(store, ALICE)
     rid = post_submission(
-        client, ALICE, submission_files(tmp_path, "alice", "BYTES=2300000 SECONDS=0.400")
+        client, ALICE, submission_files(tmp_path, "alice", "BYTES=2300000 SECONDS=0.100")
     ).json()["submission"]
     drain()
     row = store.submissions.get(rid)
     assert (row.raw_bytes, row.bytes, row.incumbent_bytes) == (8060939, 2300000, 2153387)
-    assert (row.incumbent_seconds, row.parse_seconds, row.time_ratio) == (0.025, 0.400, 16.0)
+    assert (row.incumbent_seconds, row.parse_seconds, row.time_ratio) == (0.025, 0.100, 4.0)
 
 
 def test_leaderboard_keeps_each_hotkeys_best_and_ties_go_to_the_earlier(
