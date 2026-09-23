@@ -265,24 +265,25 @@ db-import-sqlite DB="validator/.work/service.db" *ARGS="":
     {{python}} {{val}}/tools/import-sqlite.py {{DB}} {{ARGS}}
 
 # --- Submission service -----------------------------------------------------
+# Service commands accept --background (PM2 start) or --stop (PM2 stop).
 
 # Serve the API. The gate runs beside it as its own process -- see `just service-worker`.
-service:
-    cd {{val}} && {{python}} -m service.api
+service *ARGS:
+    {{python}} {{val}}/tools/service_start.py service {{ARGS}}
 
 # Drain the submission queue through the gate. Run one per machine with a toolchain.
-service-worker:
-    cd {{val}} && {{python}} -m service.worker
+service-worker *ARGS:
+    {{python}} {{val}}/tools/service_start.py service-worker {{ARGS}}
 
 # --- The chain --------------------------------------------------------------
 
 # Stream subnet registrations into the store. Without it nobody can submit.
-chain-watcher:
-    cd {{val}} && {{python}} -m workers.chain_watcher
+chain-watcher *ARGS:
+    {{python}} {{val}}/tools/service_start.py chain-watcher {{ARGS}}
 
 # Score the round and set weights, once an epoch. WEIGHT_DRY_RUN=1 records without setting.
-weight-setter:
-    cd {{val}} && {{python}} -m workers.weight_setter
+weight-setter *ARGS:
+    {{python}} {{val}}/tools/service_start.py weight-setter {{ARGS}}
 
 # What the scorer would pay right now: reads the store, touches neither chain nor wallet.
 weights-preview *ARGS:

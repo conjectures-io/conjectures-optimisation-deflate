@@ -57,3 +57,39 @@ After database startup and migrations, start `just service`, `just service-worke
 `just chain-watcher` and `just weight-setter` separately, or use the existing
 `pm2 start pm2/service.config.js` configuration. Combined just lifecycle commands
 remain planned. Run one chain watcher and one weight setter.
+
+## Optional background mode
+
+Each application command accepts `--background`:
+
+```bash
+just service-worker --background
+just chain-watcher --background
+just weight-setter --background
+# Optional local API:
+just service --background
+```
+
+Without the flag, commands stay in the foreground. Background mode requires PM2
+on PATH; otherwise the command fails with installation instructions. Install
+Node.js/npm and then `npm install -g pm2` (setup does not install PM2 yet).
+Services use `miniz-oxide-` prefixed names. Running PM2 entries produce a warning instead of a duplicate. A single stopped or
+errored entry is restarted in place using its saved PM2 configuration; multiple
+matching entries require operator cleanup. Old unprefixed entries from this checkout are
+also recognized. Inspect with `pm2 list`, follow `pm2 logs <name>`, and stop with
+`pm2 stop <name>`. Checks cover the current user's PM2 daemon, not independently
+started foreground processes or other users' daemons. Stop those before switching.
+Startup does not configure reboot persistence or start/migrate PostgreSQL.
+
+Stop an individual PM2 service through the same recipes:
+
+```bash
+just service-worker --stop
+just chain-watcher --stop
+just weight-setter --stop
+just service --stop
+```
+
+`--stop` and `--background` are mutually exclusive. A missing entry is a successful
+no-op. Stopping keeps its PM2 registration; resume with the same command and `--background`.
+This does not stop independently launched foreground processes or PostgreSQL.

@@ -6,7 +6,7 @@
 //   weight-setter    scores the round and sets weights, once an epoch
 //
 //   pm2 start pm2/service.config.js                      all four
-//   pm2 start pm2/service.config.js --only gate-worker    one machine's gate only
+//   pm2 start pm2/service.config.js --only miniz-oxide-gate-worker    one machine's gate only
 //
 // They are separate processes on purpose. The gate is a ~45 minute subprocess per
 // submission; inside the API it pinned uvicorn to a single worker and took the API down
@@ -29,24 +29,29 @@ if (fs.existsSync(dotenv)) {
   }
 }
 
+// Explicit shell/just environment overrides the values loaded from .env.
+Object.assign(env, process.env);
+
 const python = path.join(root, ".venv/bin/python");
 const cwd = path.join(root, "validator");
 
 module.exports = {
   apps: [
     {
-      name: "submission-api",
+      name: "miniz-oxide-submission-api",
       cwd,
       script: python,
+      interpreter: "none",
       args: "-m service.api",
       env,
       autorestart: true,
       max_restarts: 10,
     },
     {
-      name: "gate-worker",
+      name: "miniz-oxide-gate-worker",
       cwd,
       script: python,
+      interpreter: "none",
       args: "-m service.worker",
       // Each worker needs its own id: it is what the submissions table records as the
       // holder of a claim, and what tells two workers on one box apart.
@@ -58,18 +63,20 @@ module.exports = {
     },
     {
       // Without this, no hotkey has a registration and so nobody can submit at all.
-      name: "chain-watcher",
+      name: "miniz-oxide-chain-watcher",
       cwd,
       script: python,
+      interpreter: "none",
       args: "-m workers.chain_watcher",
       env,
       autorestart: true,
       max_restarts: 10,
     },
     {
-      name: "weight-setter",
+      name: "miniz-oxide-weight-setter",
       cwd,
       script: python,
+      interpreter: "none",
       args: "-m workers.weight_setter",
       env,
       autorestart: true,
