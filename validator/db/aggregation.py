@@ -487,8 +487,10 @@ def publish(
     """Bind verified source to selected evidence; acceptance/registration stay separate."""
     from verifier.identity import required_fingerprint
 
+    from .admission import publication_lock
     from .models import BenchmarkAggregation, BenchmarkAggregationInput, Submission
 
+    publication_lock(session)
     submission = session.get(Submission, submission_id, with_for_update=True)
     aggregation = session.get(BenchmarkAggregation, aggregation_id)
     if submission is None or aggregation is None:

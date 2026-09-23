@@ -83,6 +83,15 @@ class Submission(Base):
             "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_submission_aggregation"
         ),
     )
+    admission_check_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "submission_admission_checks.id",
+            ondelete="RESTRICT",
+            name="fk_submission_admission",
+            use_alter=True,
+        ),
+    )
     hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     baseline_key: Mapped[str | None] = mapped_column(Text)
     baseline_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
@@ -245,6 +254,10 @@ class ScoreSnapshot(Base):
         ForeignKey(
             "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_scoresnapshot_aggregation"
         ),
+    )
+    admission_check_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("submission_admission_checks.id", ondelete="RESTRICT"),
     )
     hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     baseline_key: Mapped[str | None] = mapped_column(Text)
@@ -472,3 +485,45 @@ class BenchmarkAggregationInput(Base):
     )
 
     __table_args__ = (Index("ix_benchmark_aggregation_inputs_run_id", "run_id"),)
+
+
+class SubmissionAdmissionCheck(Base):
+    """Immutable admission evidence; submissions explicitly select their current decision."""
+
+    __tablename__ = "submission_admission_checks"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("submissions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    candidate_aggregation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("benchmark_aggregations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    reference_aggregation_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("benchmark_aggregations.id", ondelete="RESTRICT"),
+    )
+    decision_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    policy_version: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('passed', 'inconclusive', 'not_required', 'dominated')",
+            name="ck_admission_outcome",
+        ),
+        CheckConstraint(
+            "(outcome IN ('passed', 'inconclusive')) = (reference_aggregation_id IS NOT NULL)",
+            name="ck_admission_reference",
+        ),
+        Index("ix_admission_submission", "submission_id"),
+    )

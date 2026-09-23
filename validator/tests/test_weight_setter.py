@@ -56,7 +56,7 @@ class FakeChain:
 
 
 PARAMS = SubnetParams(uid=9, tempo=100, weights_rate_limit=10)
-CONFIG = WeightSetterConfig(netuid=NETUID, burn_uid=0)
+CONFIG = WeightSetterConfig(netuid=NETUID, burn_uid=0, dry_run=False)
 SCORING = scoring.ScoringConfig()
 
 
@@ -98,6 +98,9 @@ def accept(store, hotkey, byte_count, seconds, *, incumbent=2_153_387, digest=No
     from conftest import attach_aggregation
 
     attach_aggregation(store, sub_id)
+    from db.admission import run as admit
+
+    admit(store.scoring, persist=True)
     return sub_id
 
 
@@ -209,6 +212,7 @@ def test_every_outcome_is_written_down_with_its_reasoning(store):
     snaps = snapshots(store, require(result.weight_set_id))
     assert [s.hotkey for s in snaps] == ["alice"]
     assert snaps[0].on_frontier is True
+    assert snaps[0].admission_check_id is not None
     assert snaps[0].combined_weight == pytest.approx(
         snaps[0].pareto_weight + snaps[0].improvement_weight
     )
@@ -256,7 +260,7 @@ def test_a_dry_run_computes_and_records_but_never_submits(store):
 def test_burn_mode_pays_nobody_and_scores_nothing(store):
     accept(store, "alice", 2_100_000, 2.0)
     chain = FakeChain(hotkeys={"burn": 0, "alice": 1}, block=at_epoch_boundary(), since=1000)
-    config = WeightSetterConfig(netuid=NETUID, burn_mode=True)
+    config = WeightSetterConfig(netuid=NETUID, burn_mode=True, dry_run=False)
     result = step(chain, store, config, SCORING, PARAMS)
     assert result.action == "set"
     uids, weights = chain.submitted[0]
@@ -326,3 +330,14 @@ def test_a_wait_is_logged_once_not_every_twelve_seconds():
     finally:
         logger.remove(sink)
     assert len(lines) == 2
+
+
+def test_weight_setting_defaults_to_dry_run(monkeypatch):
+    monkeypatch.delenv("WEIGHT_DRY_RUN", raising=False)
+    assert WeightSetterConfig().dry_run
+    assert WeightSetterConfig.from_env().dry_run
+    monkeypatch.setenv("WEIGHT_DRY_RUN", "0")
+    assert not WeightSetterConfig.from_env().dry_run
+    monkeypatch.setenv("WEIGHT_DRY_RUN", "flase")
+    with pytest.raises(ValueError, match="WEIGHT_DRY_RUN"):
+        WeightSetterConfig.from_env()

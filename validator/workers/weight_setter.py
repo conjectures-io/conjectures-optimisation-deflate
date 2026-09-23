@@ -36,6 +36,15 @@ from chain.weights import WeightChain  # noqa: E402
 Action = Literal["wait", "skip", "set", "failed"]
 
 
+def _dry_run(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes"):
+        return True
+    if normalized in ("0", "false", "no"):
+        return False
+    raise ValueError("WEIGHT_DRY_RUN must be 1/true/yes or 0/false/no")
+
+
 @dc.dataclass(frozen=True, slots=True)
 class WeightSetterConfig:
     network: str = FINNEY
@@ -56,7 +65,7 @@ class WeightSetterConfig:
     # Idle sleep between ticks; about one block.
     poll_seconds: float = 12.0
     # Compute and record the vector, but do not submit it.
-    dry_run: bool = False
+    dry_run: bool = True
 
     def __post_init__(self) -> None:
         if self.burn_uid < 0:
@@ -80,7 +89,7 @@ class WeightSetterConfig:
             burn_mode=env.get("WEIGHT_BURN_MODE", "").lower() in ("1", "true", "yes"),
             set_margin=int(env.get("WEIGHT_SET_MARGIN", str(d.set_margin))),
             poll_seconds=float(env.get("WEIGHT_POLL_SECONDS", str(d.poll_seconds))),
-            dry_run=env.get("WEIGHT_DRY_RUN", "").lower() in ("1", "true", "yes"),
+            dry_run=_dry_run(env.get("WEIGHT_DRY_RUN", "1")),
         )
 
 

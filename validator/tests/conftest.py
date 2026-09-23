@@ -285,7 +285,7 @@ def attach_aggregation(store, sid):
         sub = session.get(models.Submission, sid)
         raw = copy.deepcopy(evidence())
         raw[0]["methods"]["candidate"]["source_sha256"] = sub.source_sha256
-        raw[0]["measured_rounds"] = 2
+        raw[0]["measured_rounds"] = 3
         raw[0]["benchmark_provenance"] = {
             "engine_sha256": "1" * 64,
             "template_sha256": "2" * 64,
@@ -305,7 +305,7 @@ def attach_aggregation(store, sid):
                     "encode_s": 0.0,
                     "total_s": seconds,
                 }
-                for i in range(2)
+                for i in range(3)
             ]
         row = models.BenchmarkRun(
             source_sha256=sub.source_sha256,

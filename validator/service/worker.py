@@ -173,6 +173,19 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
         expected_attempt=sub.verification_attempt,
         **fields,
     )
+    if final == SubmissionState.ACCEPTED.value:
+        from db.admission import run as admit
+
+        try:
+            decisions = admit(store.scoring, persist=True)
+            for point in decisions:
+                if point.submission_id == sub.id and point.admission:
+                    logger.info(
+                        f"[worker] admission {sub.id}: {point.admission['outcome']} "
+                        f"({point.admission['reason_code']})"
+                    )
+        except ValueError as exc:
+            logger.error(f"[worker] admission pending: {exc}")
     logger.info(
         f"[worker] submission {sub.id} {final}"
         + (f" {fields['bytes']} bytes" if "bytes" in fields else "")

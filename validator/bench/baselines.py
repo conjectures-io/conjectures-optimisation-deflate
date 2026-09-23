@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import cast
 
 from sqlalchemy import Engine, select, text, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from bench import corpora
 from bench.artifacts import write_import_files
@@ -197,9 +197,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = cast(Options, ap.parse_args(argv))
     available = discover()
+    from scoring.admission import BASELINE_ORDER
+
+    unknown = set(available) - set(BASELINE_ORDER)
+    if unknown:
+        ap.error(f"update the versioned admission manifest for new baselines: {sorted(unknown)}")
     names = args.only or list(available)
     if len(set(names)) != len(names) or any(n not in available for n in names):
         ap.error("unknown or duplicate baseline name")
+    names = [name for name in BASELINE_ORDER if name in names]
     registry = corpora.load(ROOT)
     selected = [registry.by_name(name) for name in args.corpus]
     if len(set(args.corpus)) != len(args.corpus):
@@ -227,6 +233,26 @@ def main(argv: list[str] | None = None) -> int:
             except (ValueError, BenchError, subprocess.CalledProcessError) as exc:
                 failures.append(name)
                 print(f"{name}: failed: {exc}", file=sys.stderr)
+        from db.admission import run as admit
+        from db.scoring import ScoringDb
+
+        # Seeding is an explicit ordered replay: unchanged prefixes reuse decisions;
+        # overwriting an earlier baseline appends decisions for the changed suffix.
+        try:
+            decisions = admit(ScoringDb(sessionmaker(engine)), persist=True, replay=True)
+            for point in decisions:
+                if point.admission and point.admission["outcome"] == "pending":
+                    print(f"{point.baseline_key or point.submission_id}: awaiting admission")
+                elif point.admission and point.admission["outcome"] == "invalid_evidence":
+                    failures.append("admission")
+                    print(
+                        f"{point.baseline_key or point.submission_id}: "
+                        f"admission error: {point.admission.get('error')}",
+                        file=sys.stderr,
+                    )
+        except ValueError as exc:
+            failures.append("admission")
+            print(f"admission: failed: {exc}", file=sys.stderr)
         # This invokes only the DB report, never the chain weight setter.
         from workers.report import main as report
 

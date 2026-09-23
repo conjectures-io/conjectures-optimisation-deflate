@@ -38,6 +38,8 @@ class HotkeyScore:
     burn_reason: str | None = None
     payable_weight: float = 0.0
     normalized_time_ratio: float | None = None
+    admission_check_id: int | None = None
+    admission: dict | None = None
 
     @property
     def combined_weight(self) -> float:
@@ -48,6 +50,7 @@ class HotkeyScore:
         # The dimensionless coordinate is recoverable from aggregation evidence.
         # Keep the historical snapshot time_s column in actual seconds.
         snapshot.pop("normalized_time_ratio")
+        snapshot.pop("admission")
         return snapshot | {"combined_weight": self.combined_weight}
 
 
@@ -102,8 +105,10 @@ def score(
         raise ValueError("cannot score incomparable evaluation contexts")
     if len({s.submission_id for s in submissions}) != len(submissions):
         raise ValueError("duplicate submission IDs")
-    frontier = score_frontier(submissions, config)
-    _, improvements = score_improvements(history, config)
+    from db.admission import admitted
+
+    frontier = score_frontier([s for s in submissions if admitted(s)], config)
+    _, improvements = score_improvements([s for s in history if admitted(s)], config)
     from .improvement import decay_shares
 
     improvement_by_id = {
@@ -124,7 +129,9 @@ def score(
         improvement = improvement_by_id.get(sid, 0.0)
         reason = None
         payable = pareto + improvement
-        if s.baseline_key is not None or s.hotkey is None:
+        if not admitted(s):
+            reason, payable = "admission-" + (s.admission or {"outcome": "pending"})["outcome"], 0.0
+        elif s.baseline_key is not None or s.hotkey is None:
             reason, payable = "baseline", 0.0
         elif eligible_hotkeys is not None and s.hotkey not in eligible_hotkeys:
             reason, payable = "deregistered", 0.0
@@ -146,6 +153,8 @@ def score(
                 reason,
                 payable,
                 s.normalized_time_ratio,
+                s.admission_check_id,
+                s.admission,
             )
         )
     return Scoring(tuple(scores), frontier, tuple(improvements), eligible_hotkeys is not None)

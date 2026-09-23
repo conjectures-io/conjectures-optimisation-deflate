@@ -288,12 +288,16 @@ just db-up && just db-migrate   # Postgres 17, then the schema
 just service                    # the API
 just service-worker             # the gate, draining the queue
 just chain-watcher              # subnet registrations -> the store
-just weight-setter              # scores the round and sets weights, once an epoch
+just weight-setter              # scores and records in dry-run mode by default
+# WEIGHT_DRY_RUN=0 just weight-setter  # explicitly enable live chain writes
 # or, all four at once:  pm2 start pm2/service.config.js
 ```
 
 Four processes, one database, one wallet -- [docs/OPERATIONS.md](docs/OPERATIONS.md) is
 the whole of it, including what to check when something is wrong.
+
+Startup defaults and machine-specific prerequisites are listed in
+[docs/STARTUP.md](docs/STARTUP.md). Existing `.env` overrides remain authoritative.
 
 The store is Postgres, not a file. It holds submissions, the subnet registrations the
 chain watcher records, the entitlement claims that tie the two together, and the audit of
@@ -461,6 +465,7 @@ aggregation schema, timing queries, and migration rollback commands.
 |---|---|
 | [miner/MANUAL.md](miner/MANUAL.md) | mining, start to finish: setup, the two files, the seven Rust rules, the contract, the ten proof rules, a worked example, submit |
 | [docs/SCORING.md](docs/SCORING.md) | how emission is scored: the 60/40 rule, worked on the real frontier |
+| [docs/FRONTEND_API.md](docs/FRONTEND_API.md) | proposed frontend read API: submissions, weights, Pareto and admission explanations |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | running a validator: the four processes, the store, the wallet, what to check |
 | [CORPUS-SOURCES.md](CORPUS-SOURCES.md) | every benchmark source, its licence, and what it feeds |
 
@@ -582,3 +587,13 @@ the combined variant; its local-global coefficients retain their linear definiti
 
 The default weight method is `local-global-improvement-space-log`. Set
 `SCORING_METHOD` to select a different registered method explicitly.
+
+
+Statistical speed admission runs after aggregation and before rewards. Use
+`just admission-run` for newly published evidence or `just admission-replay --preview`
+to inspect a changed context before explicit replay. `just admission-replay --historical`
+backfills retained historically verified benchmarks without rerunning them; it does not
+refresh live verification eligibility. `just baseline-seed` handles ordered baseline
+admission automatically. `just weights-preview` writes gain-interval and per-file
+admission plots alongside the Pareto report in `data/benchmark-reports/current/`.
+See [statistical admission and replay](docs/SCORING.md#statistical-speed-admission).
