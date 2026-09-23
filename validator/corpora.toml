@@ -15,7 +15,7 @@
 
 # Fetched by `just corpus-pull` from its own repository (public); absent until
 # then, which is not an error until something asks for it. The default: it is
-# what every submission that passes the gate is scored against.
+# what standalone just bench uses. The full gate evaluates stage 1 and stage 2.
 [[corpus]]
 name = "corpus-stage1"
 path = "data/benchmark/corpus-stage1"
@@ -25,7 +25,7 @@ default = true
 # The held-out twin of corpus-stage1, same 28 filenames cut from the disjoint half
 # of the same pool -- fetched by `just corpus-pull` from a private repository, and
 # `public = false` keeps its per-file numbers inside the validator. Never the
-# default: it is scored on demand, not on every submission (see README).
+# standalone default; the full gate includes it on every submission.
 [[corpus]]
 name = "corpus-stage2"
 path = "data/benchmark/corpus-stage2"

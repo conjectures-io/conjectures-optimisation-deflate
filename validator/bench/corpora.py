@@ -100,6 +100,19 @@ def default(validator: Path) -> Corpus:
     return load(validator).default()
 
 
+def gate_corpora(validator: Path) -> tuple[Corpus, ...]:
+    """The full gate evaluates both competition corpora unless explicitly overridden."""
+    registry = load(validator)
+    if os.environ.get("VERIFY_CORPUS", "").strip():
+        selected = (registry.default(),)
+    else:
+        selected = tuple(registry.by_name(name) for name in ("corpus-stage1", "corpus-stage2"))
+    for corpus in selected:
+        if not any(corpus.path.iterdir()):
+            raise Misconfigured(f"corpus {corpus.name} is empty; run just corpus-pull")
+    return selected
+
+
 def adhoc(path: Path) -> Corpus:
     # A directory nobody configured carries no held-out policy, so it is public.
     # If you hold a corpus back, give it an entry.

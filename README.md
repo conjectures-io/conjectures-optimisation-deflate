@@ -325,7 +325,12 @@ formula and stored benchmark evidence without touching the database or chain; `W
 call, and [docs/SCORING.md](docs/SCORING.md) is the argument for why the default weight
 function is the one it is.
 
-Corpora live in `validator/corpora.toml` (`just corpora` lists them); a held-out one is marked `public = false`, which keeps its per-file numbers inside the validator and reports only totals. `VERIFY_CORPUS` in `.env` overrides the default for one run, by name or by directory -- a validator running the staged benchmark points it at `corpus-stage2`, pulled by `just corpus-pull` and built by `just corpus-build --stage 2` from a `BENCHMARK_STAGE2_SEED` that must never reach the public repo, CI logs or the miners' side of the wire. Promote a leader by copying its `parse.rs` over `validator/incumbent/parse.rs` (keep the header) and running `just repin`; every later submission is scored against it. After any edit to a pinned file, `just repin`.
+The gate evaluates **both corpus-stage1 and corpus-stage2 by default** and publishes
+one combined aggregation after both pass. Install both with `just corpus-pull`.
+`VERIFY_CORPUS` explicitly restricts a run to one corpus; leave it unset for normal
+validator operation. Standalone `just bench` retains its single-corpus default.
+
+Corpora live in `validator/corpora.toml` (`just corpora` lists them); a held-out one is marked `public = false`, which keeps its per-file numbers inside the validator and reports only totals. `VERIFY_CORPUS` in `.env` overrides the default for one run, by name or by directory -- a local single-corpus test can point it at `corpus-stage2`, pulled by `just corpus-pull` and built by `just corpus-build --stage 2` from a `BENCHMARK_STAGE2_SEED` that must never reach the public repo, CI logs or the miners' side of the wire. Promote a leader by copying its `parse.rs` over `validator/incumbent/parse.rs` (keep the header) and running `just repin`; every later submission is scored against it. After any edit to a pinned file, `just repin`.
 
 ## The gate
 

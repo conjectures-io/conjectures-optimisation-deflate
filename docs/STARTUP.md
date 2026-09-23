@@ -44,12 +44,15 @@ setter; without a metagraph its payout eligibility remains provisional.
 - Keep `SERVICE_STALE_CLAIM_SECONDS` greater than `VERIFY_TOTAL_TIMEOUT` (defaults
   7200 and 2700 seconds). A separate scorer needs the required verification fingerprint.
 
-## Remaining corpus integration
+## Gate corpora
 
-The automatic gate still measures the single default `corpus-stage1` (or
-`VERIFY_CORPUS` override). Two-corpus baseline/scoring alignment is a separate pending
-implementation task. `SCORING_CORPORA` can select exact corpus hashes but does not
-make the gate benchmark both corpora. Do not treat startup defaults as resolving this.
+The gate benchmarks `corpus-stage1` and `corpus-stage2` by default, checks each
+corpus verdict, stores each raw run and publishes one combined aggregation only
+when both pass. Both corpora must be installed and nonempty. `VERIFY_CORPUS` is an
+explicit single-corpus override for local testing; leave it unset on the validator
+for the two-corpus workflow. Ordinary `just bench` still uses its selected single
+corpus. Previously stored one-corpus submissions need fresh compatible evidence;
+this change does not upgrade old results or verification stamps automatically.
 
 ## Starting processes
 
@@ -151,8 +154,8 @@ reusing one fails instead of silently overwriting evidence. These baselines are
 claimed by the gate, and accepted results participate in admission and scoring with
 all allocated weight burned. The predefined example baseline manifest keeps its
 fixed order; operator baselines join the ordinary submission chronology afterward.
-Existing corpus-context compatibility requirements still apply: a one-corpus gate
-result cannot automatically compete against two-corpus baseline aggregations.
+Existing corpus-context compatibility requirements still apply: explicit single-corpus
+overrides cannot compete against two-corpus baseline aggregations.
 
 Files are stored before the queue transaction commits. Repeated test enqueue creates
 new submission IDs, allowing repeated measurements. Migration 0008 permits ownerless
