@@ -158,3 +158,10 @@ Files are stored before the queue transaction commits. Repeated test enqueue cre
 new submission IDs, allowing repeated measurements. Migration 0008 permits ownerless
 rows; downgrading refuses while such rows remain rather than deleting test evidence.
 These are trusted local operator commands, not unauthenticated API endpoints.
+
+Status distinguishes **gate passed** from competition admission. It resolves current
+admission eligibility without computing new statistical tests or publishing decisions;
+historical recorded decisions are retained under `--verbose`. Pending baseline evidence,
+stale verification and incompatible scoring contexts are shown as pending, not success.
+Identical Rust source IDs are diagnostic information, not a new rejection policy.
+The optional baseline name defaults to the source directory name.

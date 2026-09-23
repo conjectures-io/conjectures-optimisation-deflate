@@ -73,6 +73,61 @@ def status(store, sid: int) -> dict:
             if row.admission_check_id
             else None
         )
+        live_detail = None
+        if not test and row.state == "accepted":
+            from db.admission import evaluate
+            from verifier.identity import required_fingerprint
+
+            if row.verifier_fingerprint != required_fingerprint():
+                live_detail = {
+                    "outcome": "pending",
+                    "reason_code": "stale-verification",
+                    "message": "verification must be refreshed for current policy",
+                }
+            else:
+                try:
+                    points = store.scoring._inputs(None, None, preview=False, session=session)
+                    current = next(
+                        (p for p in evaluate(session, points) if p.submission_id == sid), None
+                    )
+                    live_detail = (
+                        current.admission
+                        if current
+                        else {
+                            "outcome": "pending",
+                            "reason_code": "missing-current-evidence",
+                            "message": "current compatible scoring evidence is unavailable",
+                        }
+                    )
+                except ValueError as exc:
+                    live_detail = {
+                        "outcome": "pending",
+                        "reason_code": "incompatible-evidence",
+                        "message": str(exc),
+                    }
+            if live_detail and live_detail.get("reason_code") == "awaiting-predecessor":
+                live_detail = {
+                    **live_detail,
+                    "message": "awaiting current baseline evidence; "
+                    "refresh baseline verification and compatible aggregations",
+                }
+        duplicates = (
+            list(
+                session.scalars(
+                    select(models.Submission.id)
+                    .where(
+                        models.Submission.id < sid,
+                        models.Submission.source_sha256 == row.source_sha256,
+                        models.Submission.state == "accepted",
+                        models.Submission.hotkey.is_not(None)
+                        | models.Submission.baseline_key.is_not(None),
+                    )
+                    .order_by(models.Submission.id)
+                )
+            )
+            if row.source_sha256
+            else []
+        )
         snapshot = (
             session.scalar(
                 select(models.ScoreSnapshot)
@@ -89,6 +144,7 @@ def status(store, sid: int) -> dict:
         )
         weight_set = session.get(models.WeightSet, snapshot.weight_set_id) if snapshot else None
         return {
+            "identical_source_submissions": duplicates,
             "metrics": {
                 "total_s": row.compression_seconds,
                 "lz77_s": row.parse_seconds,
@@ -125,7 +181,8 @@ def status(store, sid: int) -> dict:
             },
             "admission": {
                 "id": row.admission_check_id,
-                "details": admission.details if admission else None,
+                "details": live_detail,
+                "recorded_details": admission.details if admission else None,
                 "excluded_test": test,
             },
             "exit_code": row.exit_code,
@@ -139,7 +196,8 @@ def status(store, sid: int) -> dict:
 def summary(payload: dict) -> str:
     terminal = payload["state"] in {"accepted", "rejected", "error"}
     missing = "not recorded" if terminal else "pending"
-    lines = [f"Submission {payload['id']} ({payload['kind']}): {payload['state']}"]
+    state = "gate passed" if payload["state"] == "accepted" else payload["state"]
+    lines = [f"Submission {payload['id']} ({payload['kind']}): {state}"]
     for label, done in (
         ("Preverification", payload["preverification"]["passed_at"]),
         ("Lean verification", payload["lean_verification"]["passed_at"]),
@@ -153,11 +211,17 @@ def summary(payload: dict) -> str:
         result = "excluded (test submission)"
     elif detail:
         outcome = detail["outcome"]
-        result = "admitted" if outcome in {"passed", "not_required"} else "not admitted"
-        result += f" ({outcome})"
+        if outcome in {"pending", "invalid_evidence"}:
+            result = "pending — " + detail.get("message", detail.get("reason_code", outcome))
+        else:
+            result = "admitted" if outcome in {"passed", "not_required"} else "not admitted"
+            result += f" ({outcome})"
     else:
         result = "no decision recorded" if terminal else "pending"
     lines.append(f"  Speed admission: {result}")
+    duplicates = payload.get("identical_source_submissions", [])
+    if duplicates:
+        lines.append("  Identical source: submission " + ", ".join(map(str, duplicates)))
     stats = detail.get("statistics")
     if stats:
         lines.append(
@@ -195,6 +259,8 @@ def summary(payload: dict) -> str:
         lines.append(
             "  Score: excluded (test submission)"
             if admission["excluded_test"]
+            else "  Score: not eligible while admission is pending"
+            if detail.get("outcome") in {"pending", "invalid_evidence"}
             else "  Score: not recorded for this evidence"
         )
     if payload["state"] in {"rejected", "error"}:
@@ -220,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         cmd = commands.add_parser(kind)
         cmd.add_argument("directory", type=Path)
         if kind == "baseline":
-            cmd.add_argument("name")
+            cmd.add_argument("name", nargs="?")
     cmd = commands.add_parser("status")
     cmd.add_argument("id", type=int)
     cmd.add_argument("--watch", action="store_true")
@@ -233,7 +299,9 @@ def main(argv: list[str] | None = None) -> int:
                 store,
                 args.directory,
                 load().files,
-                args.name if args.command == "baseline" else None,
+                (args.name or args.directory.resolve().name)
+                if args.command == "baseline"
+                else None,
             )
             print(f"Queued {args.command} submission {sid}.")
             print(f"Track: just submission-status {sid} --watch")

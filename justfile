@@ -394,7 +394,7 @@ submit-test DIR:
     {{python}} -m tools.submission test {{quote(DIR)}}
 
 # Queue an operator baseline; participates in scoring but its allocation burns.
-submit-baseline DIR NAME:
+submit-baseline DIR NAME="":
     {{python}} -m tools.submission baseline {{quote(DIR)}} {{quote(NAME)}}
 
 # Show any submission's persisted milestones; --watch polls until Ctrl+C.
