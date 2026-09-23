@@ -288,12 +288,16 @@ just db-up && just db-migrate   # Postgres 17, then the schema
 just service                    # the API
 just service-worker             # the gate, draining the queue
 just chain-watcher              # subnet registrations -> the store
-just weight-setter              # scores the round and sets weights, once an epoch
+just weight-setter              # scores and records in dry-run mode by default
+# WEIGHT_DRY_RUN=0 just weight-setter  # explicitly enable live chain writes
 # or, all four at once:  pm2 start pm2/service.config.js
 ```
 
 Four processes, one database, one wallet -- [docs/OPERATIONS.md](docs/OPERATIONS.md) is
 the whole of it, including what to check when something is wrong.
+
+Startup defaults and machine-specific prerequisites are listed in
+[docs/STARTUP.md](docs/STARTUP.md). Existing `.env` overrides remain authoritative.
 
 The store is Postgres, not a file. It holds submissions, the subnet registrations the
 chain watcher records, the entitlement claims that tie the two together, and the audit of

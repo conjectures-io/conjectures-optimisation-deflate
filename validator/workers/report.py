@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 from pathlib import Path
 
 import db
@@ -22,7 +23,7 @@ def main(argv: list[str] | None = None) -> None:
         type=Path,
         help="JSON hotkey-to-uid mapping; absent means provisional payments",
     )
-    ap.add_argument("--burn-uid", type=int, default=0)
+    ap.add_argument("--burn-uid", type=int, default=int(os.environ.get("WEIGHT_BURN_UID", "0")))
     args = ap.parse_args(argv)
     config = scoring.ScoringConfig.from_env()
     if args.method:
