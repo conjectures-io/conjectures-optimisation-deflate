@@ -388,3 +388,15 @@ status:
 # Follow application logs, optionally restricted to a service recipe name or db.
 logs *ARGS:
     {{python}} -m tools.services logs {{ARGS}}
+
+# Queue ownerless diagnostic files; excluded from competition scoring.
+submit-test DIR:
+    {{python}} -m tools.submission test {{quote(DIR)}}
+
+# Queue an operator baseline; participates in scoring but its allocation burns.
+submit-baseline DIR NAME:
+    {{python}} -m tools.submission baseline {{quote(DIR)}} {{quote(NAME)}}
+
+# Show any submission's persisted milestones; --watch polls until Ctrl+C.
+submission-status ID *ARGS:
+    {{python}} -m tools.submission status {{quote(ID)}} {{ARGS}}

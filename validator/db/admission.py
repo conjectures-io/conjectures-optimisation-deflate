@@ -80,8 +80,12 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
     frontier, result, prefix = [], [], []
     names = {p.baseline_key for p in ordered if p.baseline_key}
     baseline_context = (
-        bool(names)
-        or session.scalar(select(Submission.id).where(Submission.baseline_active).limit(1))
+        bool(names & set(BASELINE_ORDER))
+        or session.scalar(
+            select(Submission.id)
+            .where(Submission.baseline_active, Submission.baseline_key.in_(BASELINE_ORDER))
+            .limit(1)
+        )
         is not None
     )
     missing = next(
@@ -94,7 +98,10 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
             raise ValueError("submission missing")
         awaiting_baseline = (
             baseline_context
-            and (point.baseline_key is None or BASELINE_ORDER.index(point.baseline_key) > missing)
+            and (
+                point.baseline_key not in BASELINE_ORDER
+                or BASELINE_ORDER.index(point.baseline_key) > missing
+            )
             and missing < len(BASELINE_ORDER)
         )
         if awaiting_baseline or blocked:

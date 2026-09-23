@@ -119,3 +119,42 @@ verification. Interrupted verification claims use the existing stale-claim recov
 Status reports process state, not proof that a worker is making progress. Application
 log following uses PM2's log files and never includes unrelated PM2 services.
 These commands do not install PM2, configure reboot persistence, or configure log rotation.
+
+## Local submissions and status
+
+Apply `just db-migrate` and restart the gate worker and weight setter after upgrading.
+Restart the local API too if running, so its leaderboard uses the test exclusion. Then:
+
+```bash
+just submit-test miner/examples/lazy
+just submit-baseline miner/examples/lazy my-lazy-baseline
+just submission-status 42
+just submission-status 42 --watch
+```
+
+Each source directory must contain `parse.rs` and `Parse.lean`. Successful enqueue
+prints the submission ID and its exact watch command. Watch polls every two seconds
+until Ctrl+C, reporting changed DB data. It works for miner, test and baseline IDs.
+The default view shows milestone outcomes, aggregate measurements, admission and
+the latest recorded score for matching evidence. Add `--verbose` for verification
+timestamps, source identity, full statistics, admission details and the gate report. These are persisted
+milestones, not live subprocess-stage telemetry; a null milestone does not identify
+which stage failed. Inspect the gate report for failure details.
+
+Test submissions have neither hotkey nor baseline key. They run through the gate
+without spending registration slots, retain verification and benchmark/aggregation
+results, and are excluded before admission, Pareto, recency, scoring and leaderboard
+calculations. They do not publish a competitive speed-admission decision.
+
+Operator baselines have no hotkey and a `local:NAME` baseline key. Names are unique;
+reusing one fails instead of silently overwriting evidence. These baselines are
+claimed by the gate, and accepted results participate in admission and scoring with
+all allocated weight burned. The predefined example baseline manifest keeps its
+fixed order; operator baselines join the ordinary submission chronology afterward.
+Existing corpus-context compatibility requirements still apply: a one-corpus gate
+result cannot automatically compete against two-corpus baseline aggregations.
+
+Files are stored before the queue transaction commits. Repeated test enqueue creates
+new submission IDs, allowing repeated measurements. Migration 0008 permits ownerless
+rows; downgrading refuses while such rows remain rather than deleting test evidence.
+These are trusted local operator commands, not unauthenticated API endpoints.
