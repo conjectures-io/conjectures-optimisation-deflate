@@ -39,12 +39,28 @@ def main(argv: list[str] | None = None) -> None:
         rows = store.scoring.scoring_inputs(aggregation_ids=args.aggregation_id)
         from sqlalchemy import select
 
-        from db.models import BenchmarkAggregation, BenchmarkAggregationInput
+        from db.aggregation import validate_evidence
+        from db.models import BenchmarkAggregation, BenchmarkAggregationInput, BenchmarkRun
 
         provenance = {}
+        timings = {}
         with store.sessions() as session:
             for row in rows:
                 aggregation = session.get(BenchmarkAggregation, row.aggregation_id)
+                run_rows = list(
+                    session.scalars(
+                        select(BenchmarkRun)
+                        .join(
+                            BenchmarkAggregationInput,
+                            BenchmarkAggregationInput.run_id == BenchmarkRun.id,
+                        )
+                        .where(BenchmarkAggregationInput.aggregation_id == aggregation.id)
+                        .order_by(BenchmarkRun.id)
+                    )
+                )
+                timings[str(row.submission_id)] = timing_observations(
+                    [(validate_evidence(run), run.candidate_method) for run in run_rows]
+                )
                 provenance[str(row.submission_id)] = {
                     "source_sha256": aggregation.source_sha256,
                     "aggregation_id": aggregation.id,
@@ -106,49 +122,225 @@ def main(argv: list[str] | None = None) -> None:
             "burn": result.burn_weight,
         }
         (args.out_dir / "scores.json").write_text(json.dumps(payload, indent=2, allow_nan=False))
-        plot(result, args.out_dir)
+        plot(result, args.out_dir, provenance, timings)
 
 
-def plot(result, directory):
+def timing_observations(runs):
+    """Keep paired measured observations only; never pool warmups into plots."""
+    return [
+        {"lz77_s": rep.time_s, "total_s": rep.total_s}
+        for run, method in runs
+        for file in run.files
+        for rep in file.methods[method].reps
+        if rep.phase == "measured" and rep.total_s is not None
+    ]
+
+
+def normalize_frontier(ordered):
+    """Global local-global coordinates; a degenerate axis maps to zero."""
+    front = [s for s in ordered if s.on_frontier]
+    if not front:
+        return {}
+    t0, t1 = min(s.time_s for s in front), max(s.time_s for s in front)
+    r0, r1 = min(s.ratio_pct for s in front), max(s.ratio_pct for s in front)
+    return {
+        s.submission_id: (
+            (s.time_s - t0) / (t1 - t0) if t1 > t0 else 0.0,
+            (s.ratio_pct - r0) / (r1 - r0) if r1 > r0 else 0.0,
+        )
+        for s in front
+    }
+
+
+def plot(result, directory, provenance=None, timings=None):
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    ordered = sorted(result.scores, key=lambda s: s.time_s)
-    for index, s in enumerate(ordered):
-        label = s.baseline_key or s.hotkey or str(s.submission_id)
-        axes[0].scatter(s.time_s, s.ratio_pct, marker="s" if s.baseline_key else "o")
-        axes[0].annotate(
-            label,
-            (s.time_s, s.ratio_pct),
-            xytext=(4, 8 if index % 2 == 0 else -14),
-            textcoords="offset points",
-            fontsize=8,
-        )
-    front = [s for s in ordered if s.on_frontier]
-    axes[0].plot([s.time_s for s in front], [s.ratio_pct for s in front], "--", color="gray")
+    provenance, timings = provenance or {}, timings or {}
+    ordered = sorted(result.scores, key=lambda s: (s.time_s, s.submission_id))
+    # Assign by identity, not speed rank, so every panel shares the same mapping.
+    identities = sorted(s.submission_id for s in ordered)
+    cmap = plt.get_cmap("tab20" if len(identities) <= 20 else "turbo")
+    colors = {
+        key: cmap(i if len(identities) <= 20 else i / max(1, len(identities) - 1))
+        for i, key in enumerate(identities)
+    }
     labels = [s.baseline_key or f"{s.hotkey}:{s.submission_id}" for s in ordered]
+    front = [s for s in ordered if s.on_frontier]
+    normalized = normalize_frontier(ordered)
+
+    def save(fig, name):
+        fig.savefig(directory / name, dpi=160)
+        plt.close(fig)
+
+    def pareto(ax, *, normalize=False, uncertainty=False):
+        selected = front if normalize else ordered
+        coordinates = (
+            normalized if normalize else {s.submission_id: (s.time_s, s.ratio_pct) for s in ordered}
+        )
+        for index, s in enumerate(selected):
+            x, y = coordinates[s.submission_id]
+            color = colors[s.submission_id]
+            if uncertainty:
+                stats = provenance.get(str(s.submission_id), {}).get("timing", {})
+                interval = (stats.get("intervals") or {}).get("compression_seconds")
+                if interval:
+                    # Draw endpoints directly: a percentile interval need not contain the estimate.
+                    ax.hlines(y, interval[0], interval[1], color=color, linewidth=2)
+                    ax.plot(interval, [y, y], "|", color=color, markersize=8)
+            ax.scatter(
+                x,
+                y,
+                color=color,
+                marker="s" if s.baseline_key else "o",
+                zorder=3,
+                clip_on=not normalize,
+            )
+            ax.annotate(
+                s.baseline_key or f"{s.hotkey}:{s.submission_id}",
+                (x, y),
+                xytext=(4 if x < 0.9 or not normalize else -4, 8 if index % 2 == 0 else -14),
+                ha="left" if x < 0.9 or not normalize else "right",
+                textcoords="offset points",
+                fontsize=8,
+            )
+        ax.plot(
+            [coordinates[s.submission_id][0] for s in front],
+            [coordinates[s.submission_id][1] for s in front],
+            "--",
+            color="gray",
+        )
+        if normalize:
+            ax.plot([0, 1], [1, 0], ":", color="lightgray")
+            ax.set(
+                xlim=(0, 1),
+                ylim=(0, 1),
+                xlabel="Normalized compression time",
+                ylabel="Normalized compressed size",
+                title="Frontier normalized to its extremes",
+            )
+            ax.set_aspect("equal", adjustable="box")
+        else:
+            if ordered and all(s.time_s > 0 for s in ordered):
+                ax.set_xscale("log")
+            ax.margins(x=0.15, y=0.15)
+            ax.set(
+                xlabel="Sum of per-file median compression seconds",
+                ylabel="Compressed / raw (%)",
+                title="Compression Pareto",
+            )
+        ax.grid(alpha=0.15)
+        if not selected:
+            ax.text(0.5, 0.5, "No current scoring evidence", transform=ax.transAxes, ha="center")
+
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6), layout="constrained")
+    pareto(axes[0])
     paid = [s.payable_weight for s in ordered]
-    burned = [s.combined_weight - s.payable_weight for s in ordered]
-    unclaimed = max(0.0, 1.0 - sum(s.combined_weight for s in ordered))
-    if unclaimed > 0:
-        labels.append("unclaimed")
-        paid.append(0.0)
-        burned.append(unclaimed)
-    axes[1].bar(labels, paid, label="payable (provisional without metagraph)")
-    axes[1].bar(labels, burned, bottom=paid, label="burned allocation")
-    axes[1].tick_params(axis="x", rotation=60)
-    axes[1].legend()
-    if ordered and all(s.time_s > 0 for s in ordered):
-        axes[0].set_xscale("log")
-    axes[0].margins(x=0.15, y=0.15)
-    axes[0].set(xlabel="Sum of per-file median parse seconds", ylabel="Compressed / raw (%)")
-    axes[1].set(ylabel="Share of total emission")
-    fig.tight_layout()
-    fig.savefig(directory / "pareto.png", dpi=160)
-    plt.close(fig)
+    burned = [max(0.0, s.combined_weight - s.payable_weight) for s in ordered]
+    bar_colors = [colors[s.submission_id] for s in ordered]
+    axes[1].bar(range(len(ordered)), paid, color=bar_colors)
+    axes[1].bar(
+        range(len(ordered)),
+        burned,
+        bottom=paid,
+        color=bar_colors,
+        hatch="///",
+        edgecolor="black",
+        linewidth=0.4,
+    )
+    axes[1].set_xticks(range(len(ordered)), labels, rotation=60, ha="right")
+    axes[1].legend(
+        handles=[
+            Patch(
+                facecolor="white",
+                edgecolor="black",
+                label="Payable (provisional without metagraph)",
+            ),
+            Patch(facecolor="white", edgecolor="black", hatch="///", label="Burned allocation"),
+        ],
+        fontsize=8,
+    )
+    axes[1].set(ylabel="Share of total emission", title="Submission allocations")
+    pareto(axes[2], normalize=True)
+    save(fig, "pareto.png")
+
+    fig, ax = plt.subplots(figsize=(10, 6), layout="constrained")
+    pareto(ax, uncertainty=True)
+    ax.set_title("Compression Pareto with 95% bootstrap timing intervals")
+    fig.supxlabel(
+        "Within recorded runs only; excludes host drift and systematic bias. "
+        "Missing intervals are omitted.",
+        fontsize=9,
+    )
+    save(fig, "pareto-uncertainty.png")
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6), layout="constrained")
+    for ax, field, title in zip(
+        axes, ("total_s", "lz77_s"), ("Total compression", "LZ77 stage"), strict=True
+    ):
+        for index, s in enumerate(ordered):
+            values = [sample[field] for sample in timings.get(str(s.submission_id), [])]
+            if values:
+                boxes = ax.boxplot(
+                    [values],
+                    positions=[index],
+                    widths=0.6,
+                    patch_artist=True,
+                    medianprops={"color": "black"},
+                    flierprops={
+                        "marker": ".",
+                        "markersize": 3,
+                        "markeredgecolor": colors[s.submission_id],
+                    },
+                )
+                boxes["boxes"][0].set_facecolor(colors[s.submission_id])
+        ax.set_xticks(range(len(ordered)), labels, rotation=60, ha="right")
+        ax.set(title=title, ylabel="Seconds per file / measured repetition")
+        ax.grid(axis="y", alpha=0.2)
+        if not any(timings.values()):
+            ax.text(0.5, 0.5, "No measured timing samples", transform=ax.transAxes, ha="center")
+    fig.suptitle("Measured per-file timings (warmups excluded)")
+    fig.supxlabel(
+        "Boxes: quartiles and median; whiskers: 1.5×IQR. "
+        "Spread includes file size/content differences, not just noise.",
+        fontsize=9,
+    )
+    save(fig, "compression-times.png")
+
+    fig, ax = plt.subplots(figsize=(9, 7), layout="constrained")
+    extent = 0.0
+    for s, label in zip(ordered, labels, strict=True):
+        stats = provenance.get(str(s.submission_id), {}).get("timing", {})
+        lz77 = stats.get("totals", {}).get("candidate", {}).get("lz77_s")
+        if lz77 is not None:
+            ax.scatter(
+                lz77,
+                s.time_s,
+                color=colors[s.submission_id],
+                label=label,
+                marker="s" if s.baseline_key else "o",
+            )
+            ax.annotate(
+                label, (lz77, s.time_s), xytext=(4, 5), textcoords="offset points", fontsize=8
+            )
+            extent = max(extent, s.time_s, lz77)
+    if extent:
+        ax.plot([0, extent], [0, extent], "--", color="gray", label="Total = LZ77")
+        ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "No aggregate stage timings", transform=ax.transAxes, ha="center")
+    ax.set(
+        xlabel="LZ77 seconds (sum of per-file medians)",
+        ylabel="Total compression seconds (sum of per-file medians)",
+        title="Total compression time vs LZ77 stage",
+        xlim=(0, None),
+        ylim=(0, None),
+    )
+    ax.grid(alpha=0.2)
+    save(fig, "compression-vs-lz77.png")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ registration requirements still apply at intake.
 
 Each competitor is a point on two axes, both "lower is better":
 
-- **time** — absolute parse seconds, as the harness measured them
+- **time** — total compression seconds (LZ77 + shared DEFLATE encoding)
 - **ratio** — compressed bytes as a percentage of raw, *not* absolute bytes, because the
   corpus changes between rounds and absolute bytes are not comparable across it
 
@@ -62,7 +62,8 @@ Other methods, including elbow-sweetspot, remain selectable for comparisons.
 
 Local-global does not use the external speed limit in its formula. Acceptance still
 requires time no greater than 8 times the paired incumbent. Timing is the sum of per-file
-medians of measured repetitions, excluding warmups. Output ratio is total compressed
+medians of the paired LZ77 + encoding times for each measured repetition, excluding
+warmups. Stage medians are kept for telemetry, but their sum is not the scored statistic. Output ratio is total compressed
 bytes divided by total raw bytes. Compare only identical corpus-content sets and compatible
 measurement contexts, even when displaying percentages.
 
@@ -143,3 +144,10 @@ between-run host drift and do not affect rewards.
 aggregate report and plot. `--aggregation-id ID` may be repeated to inspect selected
 stored aggregations for currently eligible submission identities. Reports include exact
 inputs and scoring configuration; historical weight-set snapshots remain unchanged.
+
+Current aggregation version is `compression-median-v3`, using schema-v4 measurements.
+Encoding runs on every repetition, and hashing/decompression checks remain outside
+both stage timers. Per-file LZ77, encoding and total timing statistics are retained;
+bootstrap intervals apply to total compression time and the total-time ratio.
+Legacy LZ77-only aggregations cannot enter the current frontier; they require new
+measurements. No synthetic totals are backfilled from the old single encoding sample.

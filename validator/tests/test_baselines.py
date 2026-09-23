@@ -72,7 +72,15 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
         raw[1]["raw_bytes"] = len(payload)
         raw[1]["sha256"] = hashlib.sha256(payload).hexdigest()
         for method in raw[1]["methods"].values():
-            method["reps"].append({"phase": "measured", "time_s": 0.3, "order_index": 2})
+            method["reps"].append(
+                {
+                    "phase": "measured",
+                    "time_s": 0.3,
+                    "order_index": 2,
+                    "encode_s": 0.0,
+                    "total_s": 0.3,
+                }
+            )
         run = parse("\n".join(json.dumps(x) for x in raw), corpus)
         return Measurement(corpus, (run,), tmp_path, False)
 
@@ -115,7 +123,13 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
 
     monkeypatch.setattr(db, "connect", connect)
     report(["--out-dir", str(tmp_path / "report")])
-    assert (tmp_path / "report/pareto.png").is_file()
+    for name in (
+        "pareto.png",
+        "pareto-uncertainty.png",
+        "compression-times.png",
+        "compression-vs-lz77.png",
+    ):
+        assert (tmp_path / "report" / name).is_file()
     payload = json.loads((tmp_path / "report/scores.json").read_text())
     assert payload["burn"] == 1
     assert payload["sources"]

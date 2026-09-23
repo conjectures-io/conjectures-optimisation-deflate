@@ -1,7 +1,7 @@
 """The engine's JSONL as typed objects, plus the one definition of every number
 derived from it.
 
-The engine folds nothing, so "the parse time of a method on a file" is a choice
+The engine folds nothing, so "the compression time of a method on a file" is a choice
 made here and nowhere else: the median over the measured reps. Every caller --
 the gate, the miner CLI, the worker -- reads it through these, so they cannot
 drift apart.
@@ -10,6 +10,7 @@ drift apart.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -20,8 +21,8 @@ from .errors import Malformed
 
 INCUMBENT = "incumbent"
 
-#: The engine's `record::SCHEMA_VERSION`; a file that says otherwise is not ours.
-SCHEMA_VERSION = 3
+#: The engine's `record::SCHEMA_VERSION`; v3 remains readable as historical evidence.
+SCHEMA_VERSION = 4
 
 #: How much the incumbent's own time may vary between processes before the run
 #: is called noise rather than measurement.
@@ -33,6 +34,8 @@ class Rep:
     phase: str
     order_index: int
     time_s: float
+    encode_s: float | None = None
+    total_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,26 @@ class MethodResult:
         return statistics.median(self.measured) if self.measured else 0.0
 
     @property
+    def measured_total(self) -> tuple[float, ...]:
+        return tuple(
+            r.total_s for r in self.reps if r.phase == "measured" and r.total_s is not None
+        )
+
+    @property
+    def measured_encode(self) -> tuple[float, ...]:
+        return tuple(
+            r.encode_s for r in self.reps if r.phase == "measured" and r.encode_s is not None
+        )
+
+    @property
+    def total_s(self) -> float | None:
+        return statistics.median(self.measured_total) if self.measured_total else None
+
+    @property
+    def encoding_s(self) -> float | None:
+        return statistics.median(self.measured_encode) if self.measured_encode else None
+
+    @property
     def sample_std_s(self) -> float | None:
         """Measured repetition spread; unknown for fewer than two samples."""
         return statistics.stdev(self.measured) if len(self.measured) >= 2 else None
@@ -68,7 +91,7 @@ class MethodResult:
     @property
     def spread(self) -> float:
         # max/min over the measured reps. Large means a loaded host, not a slow parser.
-        m = self.measured
+        m = self.measured_total or self.measured
         lo = min(m, default=0.0)
         return max(m, default=0.0) / lo if lo > 0 else 0.0
 
@@ -112,7 +135,8 @@ class Totals:
     raw_bytes: int
     output_bytes: int
     parse_s: float
-    encode_s: float
+    encode_s: float | None
+    total_s: float | None
 
 
 @dataclass(frozen=True)
@@ -131,7 +155,9 @@ class Run:
 
     def totals(self, method: str) -> Totals:
         raw = output = 0
-        parse = encode = 0.0
+        parse = 0.0
+        encode: float | None = 0.0
+        total: float | None = 0.0
         for f in self.files:
             m = f.methods.get(method)
             if m is None:
@@ -139,16 +165,21 @@ class Run:
             raw += f.raw_bytes
             output += m.output_bytes or 0
             parse += m.parse_s
-            encode += m.encode_s or 0.0
-        return Totals(raw_bytes=raw, output_bytes=output, parse_s=parse, encode_s=encode)
+            encode = (
+                encode + m.encoding_s if encode is not None and m.encoding_s is not None else None
+            )
+            total = total + m.total_s if total is not None and m.total_s is not None else None
+        return Totals(
+            raw_bytes=raw, output_bytes=output, parse_s=parse, encode_s=encode, total_s=total
+        )
 
     def ratio(self, method: str, against: str = INCUMBENT) -> float:
         # Compressed size against the incumbent's: below 1.0 is an improvement.
         return _over(self.totals(method).output_bytes, self.totals(against).output_bytes)
 
     def slowdown(self, method: str, against: str = INCUMBENT) -> float:
-        # Parse time against the incumbent's; what SPEED_FLOOR is applied to.
-        return _over(self.totals(method).parse_s, self.totals(against).parse_s)
+        # Combined compression time, with paired stage timings from each repetition.
+        return _over(self.totals(method).total_s or 0.0, self.totals(against).total_s or 0.0)
 
     def failures(self, method: str) -> tuple[str, ...]:
         out: list[str] = []
@@ -158,6 +189,8 @@ class Run:
                 out.append(f"{f.file}: {method}: not measured")
                 continue
             out += [f"{f.file}: {method}: {e}" for e in m.errors]
+            if m.ok and (not m.measured_total or len(m.measured_total) != len(m.measured)):
+                out.append(f"{f.file}: {method}: full compression timings missing; rebenchmark")
             if not m.deterministic:
                 out.append(f"{f.file}: {method}: tokens changed between reps")
         return tuple(out)
@@ -176,9 +209,13 @@ def parse(stdout: str, corpus: Corpus) -> Run:
     if head.get("kind") != "meta":
         raise Malformed("the first line must be the meta record")
     meta = _meta(head)
-    if meta.schema_version != SCHEMA_VERSION:
+    if meta.schema_version not in (3, SCHEMA_VERSION):
         raise Malformed(f"schema version {meta.schema_version}, expected {SCHEMA_VERSION}")
     files = tuple(_file(r, corpus) for r in records[1:] if r.get("kind") == "file")
+    if meta.schema_version == SCHEMA_VERSION:
+        for file in files:
+            for result in file.methods.values():
+                validate_timings(result)
     return Run(meta=meta, files=files, raw_records=tuple(records))
 
 
@@ -202,11 +239,11 @@ def incumbent_agreement(runs: Iterable[Run]) -> tuple[str, ...]:
     for file, hashes in sorted(per_file.items()):
         if len(hashes) > 1:
             out.append(f"{file}: the incumbent compressed it differently across processes")
-    times = [run.totals(INCUMBENT).parse_s for run in seen]
+    times = [run.totals(INCUMBENT).total_s or 0.0 for run in seen]
     lo = min(times)
     if lo > 0 and max(times) / lo > HOST_DRIFT:
         out.append(
-            f"the incumbent's own parse time varied {max(times) / lo:.2f}x across "
+            f"the incumbent's own compression time varied {max(times) / lo:.2f}x across "
             "processes; the host was loaded and these ratios are not comparable"
         )
     return tuple(out)
@@ -269,6 +306,8 @@ def _method(name: str, r: Mapping[str, object]) -> MethodResult:
                 phase=_str(rep, "phase"),
                 order_index=_int(rep, "order_index"),
                 time_s=_float(rep, "time_s"),
+                encode_s=_opt_float(rep, "encode_s"),
+                total_s=_opt_float(rep, "total_s"),
             )
             for rep in (_as_dict(x) for x in _list(r, "reps"))
         ),
@@ -337,3 +376,20 @@ def _bool(r: Mapping[str, object], k: str) -> bool:
     if not isinstance(v, bool):
         raise Malformed(f"{k} must be true or false")
     return v
+
+
+def validate_timings(result: MethodResult) -> None:
+    """v4 successful repetitions must contain complete, consistent stage timings."""
+    for rep in result.reps:
+        for value in (rep.time_s, rep.encode_s, rep.total_s):
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise Malformed("invalid compression timing sample")
+        if rep.total_s is None:
+            if not result.errors:
+                raise Malformed("full compression timings missing; rebenchmark")
+            continue
+        if not result.external and rep.encode_s is None:
+            raise Malformed("encoding timing missing")
+        expected = rep.time_s + (rep.encode_s or 0.0)
+        if not math.isclose(rep.total_s, expected, rel_tol=1e-12, abs_tol=1e-15):
+            raise Malformed("total timing does not equal its measured stages")

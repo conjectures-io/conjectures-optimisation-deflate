@@ -161,7 +161,8 @@ def seed_one(
                 )
                 result = aggregate(session, rows)
                 # Speed gate applies equally. Keep evidence but do not activate a failed revision.
-                if result.parse_seconds > 8.0 * result.incumbent_seconds:
+                assert result.compression_seconds is not None
+                if result.compression_seconds > 8.0 * result.incumbent_seconds:
                     sub = session.get(Submission, sid)
                     assert sub is not None
                     if not sub.baseline_active:

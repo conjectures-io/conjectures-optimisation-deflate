@@ -146,15 +146,15 @@ if "REJECT" in rs:
 n = int(rs.split("BYTES=")[1].split()[0]) if "BYTES=" in rs else 2000000
 t = float(rs.split("SECONDS=")[1].split()[0]) if "SECONDS=" in rs else 0.100
 Path(sys.argv[sys.argv.index("--results") + 1]).write_text(json.dumps({
-    "schema_version": 3,
+    "schema_version": 4,
     "corpus": {"name": "corpus-initial", "public": True},
     "candidates": ["submission"],
     "raw_bytes": 8060939,
     "speed_floor": 8.0,
     "methods": {
         "incumbent": {"external": False, "output_bytes": 2153387, "parse_s": 0.025,
-                      "errors": []},
-        "submission": {"external": False, "output_bytes": n, "parse_s": t,
+                      "total_s": 0.025, "errors": []},
+        "submission": {"external": False, "output_bytes": n, "parse_s": t, "total_s": t,
                        "ratio": n / 2153387, "slowdown": t / 0.025,
                        "accepted": True, "improved": n < 2153387, "errors": []},
     },
@@ -298,7 +298,14 @@ def attach_aggregation(store, sid):
         ):
             raw[1]["methods"][name]["output_bytes"] = size
             raw[1]["methods"][name]["reps"] = [
-                {"phase": "measured", "order_index": i, "time_s": seconds} for i in range(2)
+                {
+                    "phase": "measured",
+                    "order_index": i,
+                    "time_s": seconds,
+                    "encode_s": 0.0,
+                    "total_s": seconds,
+                }
+                for i in range(2)
             ]
         row = models.BenchmarkRun(
             source_sha256=sub.source_sha256,

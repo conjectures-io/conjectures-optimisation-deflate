@@ -98,6 +98,14 @@ def test_concurrent_runs_do_not_collide(corpus: corpora.Corpus):
         done = list(pool.map(measure, EXAMPLES))
 
     a, b = done
+    for measurement in done:
+        assert measurement.only().meta.schema_version == 4
+        for file in measurement.only().files:
+            for method in file.methods.values():
+                assert len(method.reps) == 3
+                for rep in method.reps:
+                    assert rep.encode_s is not None and rep.encode_s > 0
+                    assert rep.total_s == pytest.approx(rep.time_s + rep.encode_s)
     assert a.workspace != b.workspace
     assert not a.workspace.exists() and not b.workspace.exists()
     for f, g in zip(a.only().files, b.only().files):
@@ -135,3 +143,31 @@ def test_a_parser_that_does_not_compile_is_named(tmp_path: Path, corpus: corpora
         bench.run(config(), {"broken": broken}, corpus)
     assert e.value.method == "broken"
     assert "cannot find value `nope`" in e.value.detail
+
+
+def test_full_compression_timings_include_every_round_and_external_references(tmp_path: Path):
+    cfg = dataclasses.replace(config(), bars=True)
+    if not cfg.engine.exists():
+        pytest.skip("run just build first")
+    (tmp_path / "text.txt").write_bytes(b"repeatable compression timing example\n" * 1000)
+    corpus = corpora.Corpus("timing-smoke", tmp_path, True, {})
+    measured = bench.run(cfg, {"template": REPO / EXAMPLES["template"]}, corpus)
+    run = measured.only()
+    assert run.meta.schema_version == 4
+    assert not run.failures("template")
+    for result in run.files[0].methods.values():
+        assert result.ok and len(result.measured_total) == 2
+        assert len(result.reps) == 3
+        for rep in result.reps:
+            assert rep.total_s is not None and rep.total_s > 0
+            if result.external:
+                assert rep.encode_s is None and rep.total_s == rep.time_s
+            else:
+                assert rep.encode_s is not None and rep.encode_s > 0
+                assert rep.total_s == pytest.approx(rep.time_s + rep.encode_s)
+    from bench.report import summary
+
+    methods = summary(measured)["methods"]
+    assert isinstance(methods, dict)
+    assert methods["miniz_oxide-1"]["parse_s"] is None
+    assert methods["miniz_oxide-1"]["total_s"] > 0

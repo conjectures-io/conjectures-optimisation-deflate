@@ -163,3 +163,13 @@ build/host provenance must be remeasured. Publication requires current successfu
 and Lean verification and the ordinary speed floor; it does not grant a miner registration.
 Use consistent host, CPU limits, repetitions, compiler and engine across the evaluation.
 Stage 2 reports are operator-only and must not be published with per-file private evidence.
+
+### Updating to total compression timing
+
+Apply `just db-migrate` (revision `0006`), then rerun baseline seeding on the same
+corpora and with the same CPU/resource settings used for subsequent submissions.
+The v4 engine measures both LZ77 and encoding every round. The incremental seeder
+replaces incompatible active measurements while retaining historical evidence.
+Until rebenchmarked and published, old LZ77-only points are excluded from scoring.
+Use `just weights-preview --out-dir "$PWD/data/benchmark-reports/current"` from the
+repository root to inspect the resulting total-time Pareto and stage telemetry.

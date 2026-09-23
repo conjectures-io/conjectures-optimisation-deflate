@@ -31,7 +31,7 @@ def evidence(candidate="candidate", time_s=0.2) -> list[dict[str, Any]]:  # pyri
     return [
         {
             "kind": "meta",
-            "schema_version": 3,
+            "schema_version": 4,
             "started_at_unix": 1700000000.0,
             "corpus": "tiny",
             "corpus_dir": "/no/longer/present",
@@ -57,7 +57,15 @@ def evidence(candidate="candidate", time_s=0.2) -> list[dict[str, Any]]:  # pyri
                     "deterministic": True,
                     "encode_s": 0.1,
                     "errors": [],
-                    "reps": [{"phase": "measured", "order_index": i, "time_s": time_s}],
+                    "reps": [
+                        {
+                            "phase": "measured",
+                            "order_index": i,
+                            "time_s": time_s,
+                            "encode_s": 0.0,
+                            "total_s": time_s,
+                        }
+                    ],
                 }
                 for i, name in enumerate(methods)
             },
@@ -251,7 +259,9 @@ def test_token_determinism_projection(store, tmp_path, deterministic):
     raw = evidence()
     raw[0]["measured_rounds"] = 2
     for result in raw[1]["methods"].values():
-        result["reps"].append({"phase": "measured", "order_index": 3, "time_s": 0.1})
+        result["reps"].append(
+            {"phase": "measured", "order_index": 3, "time_s": 0.1, "encode_s": 0.0, "total_s": 0.1}
+        )
     raw[1]["methods"]["candidate"]["deterministic"] = deterministic
     storage.import_file(store.engine, save(tmp_path, raw))
     with store.engine.connect() as conn:

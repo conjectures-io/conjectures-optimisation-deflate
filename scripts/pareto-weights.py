@@ -219,7 +219,9 @@ def load_run(path, include_non_candidates=False):
         for method, m in rec["methods"].items():
             if method in NON_CANDIDATES and not include_non_candidates:
                 continue
-            times = [r["time_s"] for r in m["reps"] if r["phase"] == "measured"]
+            times = [r.get("total_s") for r in m["reps"] if r["phase"] == "measured"]
+            if not times or any(t is None for t in times):
+                raise ValueError("full compression timings missing; rebenchmark legacy runs")
             a = acc.setdefault(method, [0, 0, 0.0])
             a[0] += rec["raw_bytes"]
             a[1] += m["output_bytes"]

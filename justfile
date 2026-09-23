@@ -122,8 +122,8 @@ corpus-verify *ARGS:
 
 # --- Benchmark ---------------------------------------------------------------
 
-# miner/template and every miner/examples/* against the incumbent and the reference
-# bars, timed as the gate times, on the default corpus. Pass submission dirs to
+# miner/template and every miner/examples/* against the incumbent, timed as the
+# gate times, on the default corpus. External references: VERIFY_BENCH_BARS=1. Pass submission dirs to
 # narrow it, or --corpus NAME to move it.
 bench *ARGS: build
     {{bench}} {{ARGS}} --runs-dir {{root}}/data/benchmark-runs
@@ -132,7 +132,7 @@ bench *ARGS: build
 bench-report *RUN:
     {{python}} -m bench.analyze {{RUN}}
 
-# Two runs of the same code must agree on every byte and token; parse time within 15%.
+# Two runs of the same code must agree on every byte and token; total compression time within 15%.
 bench-compare A B:
     {{python}} -m bench.compare {{A}} {{B}}
 

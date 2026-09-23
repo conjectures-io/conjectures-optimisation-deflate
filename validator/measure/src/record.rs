@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 /// v3: methods are dlopen'd cdylibs rather than linked-in functions, so `meta.methods`
 /// carries `source_sha256`/`lib_sha256` per method; `output_sha256` added per method;
 /// the reference bars became ordinary `external` methods; one corpus per run.
-pub const SCHEMA_VERSION: u32 = 3;
+// v4: encode every repetition; separate stage and combined compression timings.
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
@@ -56,7 +57,10 @@ pub struct Meta {
 pub struct Rep {
     pub phase: &'static str,
     pub order_index: u64,
+    /// LZ77 time for slots; full compression for external references (legacy field).
     pub time_s: f64,
+    pub encode_s: Option<f64>,
+    pub total_s: Option<f64>,
 }
 
 /// One method on one corpus file. Every rep is kept; nothing is folded.
@@ -68,6 +72,7 @@ pub struct MethodOut {
     pub tokens: Option<u64>,
     pub tokens_sha256: Option<String>,
     pub deterministic: bool,
+    /// Legacy first-round observation; stage statistics use the per-repetition fields.
     pub encode_s: Option<f64>,
     pub errors: Vec<String>,
     pub reps: Vec<Rep>,

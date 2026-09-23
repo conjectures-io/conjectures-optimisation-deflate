@@ -5,7 +5,7 @@
 
 Exit 0 when the runs agree, 1 with one line per difference otherwise. This is the repeatability
 check: a submission benchmarked twice must produce identical token streams and byte counts on
-every file, and its pooled median parse time must not have moved more than TIME_TOLERANCE.
+every file, and its pooled median compression time must not have moved more than TIME_TOLERANCE.
 """
 
 from __future__ import annotations
@@ -52,7 +52,8 @@ def compare(a: tuple[Meta, list[FileRec]], b: tuple[Meta, list[FileRec]]) -> lis
     for m in sorted(set(ta) & set(tb)):
         if ta[m] > 0 and abs(tb[m] - ta[m]) / ta[m] > TIME_TOLERANCE:
             problems.append(
-                f"{m}: pooled median parse time {ta[m]:.4f}s -> {tb[m]:.4f}s ({tb[m] / ta[m]:.2f}x)"
+                f"{m}: pooled median compression time {ta[m]:.4f}s -> {tb[m]:.4f}s "
+                f"({tb[m] / ta[m]:.2f}x)"
             )
     for k in ("methods", "cpu_model", "rustc_version"):
         if a[0].get(k) != b[0].get(k):
@@ -64,13 +65,17 @@ def main() -> None:
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
-    problems = compare(load_run(sys.argv[1]), load_run(sys.argv[2]))
+    try:
+        problems = compare(load_run(sys.argv[1]), load_run(sys.argv[2]))
+    except ValueError as exc:
+        sys.exit(str(exc))
     for p in problems:
         print(p)
     if problems:
         sys.exit(f"{len(problems)} difference(s) between {sys.argv[1]} and {sys.argv[2]}")
     print(
-        f"agree: same bytes and tokens on every file, pooled parse time within {TIME_TOLERANCE:.0%}"
+        "agree: same bytes and tokens on every file, "
+        f"pooled compression time within {TIME_TOLERANCE:.0%}"
     )
 
 

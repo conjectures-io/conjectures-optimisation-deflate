@@ -69,8 +69,8 @@ def _scorable(stmt):
         models.Submission.bytes.is_not(None),
         models.Submission.raw_bytes.is_not(None),
         models.Submission.raw_bytes > 0,
-        models.Submission.parse_seconds.is_not(None),
-        models.Submission.parse_seconds > 0,
+        models.Submission.compression_seconds.is_not(None),
+        models.Submission.compression_seconds > 0,
         models.Submission.incumbent_seconds.is_not(None),
         models.Submission.incumbent_bytes.is_not(None),
     )
@@ -83,14 +83,14 @@ def _to_scored(row: models.Submission) -> ScoredSubmission:
     # this fails loudly instead of putting a half-measured point on the frontier.
     assert row.bytes is not None, "_scorable filters bytes IS NULL"
     assert row.raw_bytes is not None, "_scorable filters raw_bytes IS NULL"
-    assert row.parse_seconds is not None, "_scorable filters parse_seconds IS NULL"
+    assert row.compression_seconds is not None, "_scorable filters compression_seconds IS NULL"
     assert row.incumbent_seconds is not None, "_scorable filters incumbent_seconds IS NULL"
     return ScoredSubmission(
         submission_id=row.id,
         hotkey=row.hotkey,
         bytes=row.bytes,
         raw_bytes=row.raw_bytes,
-        time_s=row.parse_seconds,
+        time_s=row.compression_seconds,
         incumbent_bytes=row.incumbent_bytes,
         incumbent_seconds=row.incumbent_seconds,
         submitted_at=row.submitted_at,
@@ -179,16 +179,19 @@ class ScoringDb:
                         "bytes",
                         "incumbent_bytes",
                         "parse_seconds",
+                        "compression_seconds",
                         "incumbent_seconds",
                     )
                 ):
+                    continue
+                if aggregation.compression_seconds is None:
                     continue
                 result.append(
                     dc.replace(
                         _to_scored(row),
                         bytes=aggregation.bytes,
                         raw_bytes=aggregation.raw_bytes,
-                        time_s=aggregation.parse_seconds,
+                        time_s=aggregation.compression_seconds,
                         incumbent_bytes=aggregation.incumbent_bytes,
                         incumbent_seconds=aggregation.incumbent_seconds,
                         context=context,

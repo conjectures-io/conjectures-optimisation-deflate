@@ -13,19 +13,21 @@ per-rep timings in the run file, so a run only needs to be collected once no mat
 analysis evolves.
 
 The headline numbers are the gate's numbers: compressed bytes pooled over files against the
-incumbent, and the sum of per-file median parse times against the incumbent's, with the
+incumbent, and the sum of per-file median compression times against the incumbent's, with the
 verdict the gate would give. Per-format tables, the Pareto front and the stability section are
 context computed from the same file.
 
 Output goes to `data/benchmark-reports/<run-stem>/`: REPORT.md plus, when matplotlib is installed,
 the box plots drawn by plot.py for compression ratio and speed, by format and method.
 
-Schema (v3; `bench/report.py` writes it and `validator/measure/src/record.rs` defines it):
+Schema (v4; `bench/report.py` writes it and `validator/measure/src/record.rs` defines it):
 first line is `{"kind": "meta", ...}`; every following line is `{"kind": "file", corpus, file,
 format, raw_bytes, sha256, methods: {name: {output_bytes, output_sha256, tokens_sha256,
-deterministic, external, errors, encode_s, reps: [{phase, order_index, time_s}, ...]}}}`
-where `time_s` is the parse alone. Fields are additive-only -- this script reads known
-keys and ignores anything else.
+deterministic, external, errors, encode_s,
+reps: [{phase, order_index, time_s, encode_s, total_s}, ...]}}}`
+where `time_s` is LZ77 (full compression for external references), and `total_s` is
+the sum of the measured stages. Scoring uses the median of `total_s`.
+This script reads known keys and ignores anything else.
 """
 
 from __future__ import annotations
@@ -69,6 +71,8 @@ class Rep(TypedDict):
     phase: str
     order_index: int
     time_s: float
+    encode_s: NotRequired[float | None]
+    total_s: NotRequired[float | None]
 
 
 class MethodRec(TypedDict):
@@ -150,6 +154,11 @@ def flatten(files: list[FileRec]) -> list[Row]:
     for rec in files:
         for method, mrec in rec["methods"].items():
             for rep in mrec["reps"]:
+                total = rep.get("total_s")
+                if total is None:
+                    raise ValueError(
+                        "full compression timings missing; rebenchmark legacy/failed runs"
+                    )
                 rows.append(
                     Row(
                         corpus=rec["corpus"],
@@ -159,7 +168,7 @@ def flatten(files: list[FileRec]) -> list[Row]:
                         method=method,
                         output_bytes=mrec["output_bytes"],
                         phase=rep["phase"],
-                        time_s=rep["time_s"],
+                        time_s=total,
                     )
                 )
     return rows
@@ -232,7 +241,7 @@ def pooled_bytes(files: list[FileRec]) -> dict[str, int]:
 
 
 def pooled_median_time(min_time: dict[Key, float]) -> dict[str, float]:
-    """{method: sum over files of the median parse time} -- the floor's arithmetic."""
+    """{method: sum over files of the median compression time} -- the floor's arithmetic."""
     out: dict[str, float] = defaultdict(float)
     for (_fmt, method, _f), t in min_time.items():
         out[method] += t
@@ -346,11 +355,11 @@ def report(meta: Meta, files: list[FileRec], run_path: str) -> str:
         f"- warmup rounds: {meta.get('warmup_rounds')}, "
         f"measured rounds: {meta.get('measured_rounds')}",
         "",
-        f"## Score: pooled bytes and pooled median parse time against `{REFERENCE_METHOD}` "
+        f"## Score: pooled bytes and pooled median compression time against `{REFERENCE_METHOD}` "
         f"({len(files)} files, {raw:,} raw bytes)",
         "",
         f"The gate's arithmetic. `accepted` means fewer bytes and at most {floor:.0f}x the "
-        "incumbent's time. Only the parse is timed; the encoder is the same for everyone.",
+        "incumbent's total compression time. Both LZ77 and the shared encoder are timed.",
         "",
         md_table(score_rows, ["method", "bytes", "vs incumbent", "time", "gate would say"]),
         "",
@@ -362,7 +371,7 @@ def report(meta: Meta, files: list[FileRec], run_path: str) -> str:
         "",
         md_by_format(ratio_by_fm, formats, methods, ".3f"),
         "",
-        f"## Speed vs. `{REFERENCE_METHOD}`, by format -- min-of-reps parse time ratio, mean",
+        f"## Speed vs. `{REFERENCE_METHOD}`, by format -- median compression time ratio, mean",
         "",
         md_by_format(speed_by_fm, formats, methods, ".2f", "x"),
         "",
@@ -389,7 +398,10 @@ def main() -> None:
     if not files:
         print(f"no file records in {run_path}", file=sys.stderr)
         sys.exit(1)
-    rows = flatten(files)
+    try:
+        rows = flatten(files)
+    except ValueError as exc:
+        sys.exit(str(exc))
     formats = sorted({r["format"] for r in rows})
     methods = method_order({r["method"] for r in rows})
     run_stem = os.path.splitext(os.path.basename(run_path))[0]
@@ -417,7 +429,7 @@ def main() -> None:
             group_by_format_method(per_file_speed_ratio(per_file_median_time(rows))),
             formats,
             methods,
-            f"{run_stem} -- min parse time vs. {REFERENCE_METHOD}, by format",
+            f"{run_stem} -- median compression time vs. {REFERENCE_METHOD}, by format",
             f"time(method) / time({REFERENCE_METHOD}) (lower is faster)",
             os.path.join(out_dir, "speed-ratio-by-format.png"),
         )

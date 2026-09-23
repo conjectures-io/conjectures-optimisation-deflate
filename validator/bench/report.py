@@ -78,8 +78,9 @@ def summary(m: Measurement, floor: float = SPEED_FLOOR) -> dict[str, object]:
         entry: dict[str, object] = {
             "external": bool(meta and meta.external),
             "output_bytes": totals.output_bytes,
-            "parse_s": totals.parse_s,
+            "parse_s": None if meta and meta.external else totals.parse_s,
             "encode_s": totals.encode_s,
+            "total_s": totals.total_s,
             "source_sha256": meta.source_sha256 if meta else None,
             "lib_sha256": meta.lib_sha256 if meta else None,
             "errors": list(run.failures(name)),
@@ -145,6 +146,7 @@ def records(m: Measurement, floor: float = SPEED_FLOOR) -> list[dict[str, object
             for name, meta_ in run.meta.methods.items()
         },
         "incumbent_parse_s": [r.totals(INCUMBENT).parse_s for r in m.runs],
+        "incumbent_total_s": [r.totals(INCUMBENT).total_s for r in m.runs],
         "warnings": list(m.warnings()),
     }
     return [meta, *(_file_json(f) | {"kind": "file", "corpus": m.corpus.name} for f in merge(m))]
@@ -178,7 +180,14 @@ def _method_json(mr: MethodResult) -> dict[str, object]:
         "encode_s": mr.encode_s,
         "errors": list(mr.errors),
         "reps": [
-            {"phase": r.phase, "order_index": r.order_index, "time_s": r.time_s} for r in mr.reps
+            {
+                "phase": r.phase,
+                "order_index": r.order_index,
+                "time_s": r.time_s,
+                "encode_s": r.encode_s,
+                "total_s": r.total_s,
+            }
+            for r in mr.reps
         ],
     }
 
@@ -196,7 +205,7 @@ def _bytes_table(files: Sequence[FileResult], order: Sequence[str]) -> list[str]
 
 def _summary_table(m: Measurement, order: Sequence[str], floor: float) -> list[str]:
     judged = verdicts(m, floor)
-    head = ["method", "bytes", "ratio", "parse", "slowdown", ""]
+    head = ["method", "bytes", "ratio", "lz77", "encode", "total", "slowdown", ""]
     rows: list[list[str] | None] = []
     for name in order:
         # Always against the incumbent from the same process. Across processes
@@ -211,8 +220,10 @@ def _summary_table(m: Measurement, order: Sequence[str], floor: float) -> list[s
                 name,
                 str(t.output_bytes),
                 f"{_over(t.output_bytes, base.output_bytes):.5f}x",
-                f"{t.parse_s:.3f}s",
-                f"{_over(t.parse_s, base.parse_s):.2f}x",
+                "—" if run.meta.methods[name].external else f"{t.parse_s:.3f}s",
+                "—" if t.encode_s is None else f"{t.encode_s:.3f}s",
+                "—" if t.total_s is None else f"{t.total_s:.3f}s",
+                f"{run.slowdown(name):.2f}x" if t.total_s is not None else "—",
                 v.line() if v else ("reference" if name != INCUMBENT else "the incumbent"),
             ]
         )

@@ -262,7 +262,8 @@ def test_scoring_requires_both_current_verification_and_trusted_measurement(stor
         conn.execute(
             text(
                 "UPDATE submissions SET state='accepted', bytes=10, raw_bytes=100, "
-                "parse_seconds=1, incumbent_bytes=15, incumbent_seconds=1 WHERE id=:id"
+                "parse_seconds=1, compression_seconds=1, incumbent_bytes=15, "
+                "incumbent_seconds=1 WHERE id=:id"
             ),
             {"id": sid},
         )

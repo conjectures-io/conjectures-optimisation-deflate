@@ -15,6 +15,7 @@ that is an entry point's job. What a Sandbox is and how it is enforced stays
     VERIFY_BENCH_BUILD_MEMORY_MB=4096 cgroup cap while building; 0 disables
     VERIFY_BENCH_CPUS=                e.g. "2-3"; cgroup AllowedCPUs, unset disables
     VERIFY_BENCH_REPS=11              timed reps per file per method
+    VERIFY_BENCH_BARS=0               opt in to external reference compressors with 1
     VERIFY_BENCH_WARMUP=1             discarded reps before them
     VERIFY_BENCH_KEEP=auto            auto | always | never -- what to do with the workspace
     VERIFY_BENCH_WORKSPACE=<dir>      where run workspaces are made
@@ -114,7 +115,7 @@ class Config:
     keep: Keep = Keep.AUTO
     #: Measure `miniz_oxide` and `libdeflate` alongside. Context for a report,
     #: never part of a verdict, and they cost more than the parsers do.
-    bars: bool = True
+    bars: bool = False
 
     @classmethod
     def from_env(cls, validator: Path) -> Config:
@@ -131,7 +132,7 @@ class Config:
             reps=max(int(env("VERIFY_BENCH_REPS", "11")), 1),
             warmup=max(int(env("VERIFY_BENCH_WARMUP", "1")), 0),
             keep=Keep(env("VERIFY_BENCH_KEEP", "auto")),
-            bars=env("VERIFY_BENCH_BARS", "1") != "0",
+            bars=env("VERIFY_BENCH_BARS", "0") != "0",
         )
 
     @property
@@ -421,4 +422,5 @@ def provenance(config: Config) -> dict[str, object]:
         "memory_mb": config.memory_mb,
         "sandbox": config.enabled,
         "build_profile": "release",
+        "external_references": config.bars,
     }

@@ -116,6 +116,7 @@ class Submission(Base):
     # it is what the speed floor is enforced on and what miners are shown.
     incumbent_seconds: Mapped[float | None] = mapped_column(Float)
     parse_seconds: Mapped[float | None] = mapped_column(Float)
+    compression_seconds: Mapped[float | None] = mapped_column(Float)
     time_ratio: Mapped[float | None] = mapped_column(Float)
 
     # --- queue bookkeeping ---------------------------------------------------
@@ -373,7 +374,7 @@ class BenchmarkCompressionResult(Base):
 
 
 class BenchmarkSpeedSample(Base):
-    """One parse-time repetition linked to its file/method compression result."""
+    """One repetition with LZ77, encoding and total timings; legacy totals are NULL."""
 
     __tablename__ = "benchmark_speed_samples"
 
@@ -384,6 +385,8 @@ class BenchmarkSpeedSample(Base):
     phase: Mapped[str] = mapped_column(Text, nullable=False)
     order_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
     time_s: Mapped[float] = mapped_column(Float, nullable=False)
+    encode_s: Mapped[float | None] = mapped_column(Float)
+    total_s: Mapped[float | None] = mapped_column(Float)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -403,6 +406,14 @@ class BenchmarkSpeedSample(Base):
         CheckConstraint("phase IN ('warmup', 'measured')", name="ck_benchmark_speed_samples_phase"),
         CheckConstraint(
             "time_s >= 0 AND time_s < 'Infinity'::float8", name="ck_benchmark_speed_samples_time"
+        ),
+        CheckConstraint(
+            "encode_s >= 0 AND encode_s < 'Infinity'::float8",
+            name="ck_benchmark_speed_samples_encode",
+        ),
+        CheckConstraint(
+            "total_s >= time_s AND total_s < 'Infinity'::float8",
+            name="ck_benchmark_speed_samples_total",
         ),
     )
 
@@ -426,6 +437,7 @@ class BenchmarkAggregation(Base):
     bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     incumbent_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     parse_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    compression_seconds: Mapped[float | None] = mapped_column(Float)
 
     __table_args__ = (
         CheckConstraint(
@@ -439,6 +451,10 @@ class BenchmarkAggregation(Base):
             "incumbent_seconds > 0 AND incumbent_seconds < 'Infinity'::float8 "
             "AND parse_seconds >= 0 AND parse_seconds < 'Infinity'::float8",
             name="ck_benchmark_aggregations_time",
+        ),
+        CheckConstraint(
+            "compression_seconds >= 0 AND compression_seconds < 'Infinity'::float8",
+            name="ck_benchmark_aggregations_compression",
         ),
     )
 

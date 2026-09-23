@@ -19,8 +19,11 @@ def rec(
     external: bool = False,
 ) -> MethodRec:
     # One method's record on one file: one warmup rep, then `times` as measured reps.
-    reps = [Rep(phase="warmup", order_index=0, time_s=9.9)]
-    reps += [Rep(phase="measured", order_index=i + 1, time_s=t) for i, t in enumerate(times)]
+    reps = [Rep(phase="warmup", order_index=0, time_s=9.9, encode_s=0.0, total_s=9.9)]
+    reps += [
+        Rep(phase="measured", order_index=i + 1, time_s=t, encode_s=0.0, total_s=t)
+        for i, t in enumerate(times)
+    ]
     return MethodRec(
         output_bytes=output_bytes,
         tokens_sha256=sha,
@@ -84,6 +87,7 @@ def test_front_excludes_the_external_reference_and_dominated_methods():
 def test_stability_flags_noise_and_nondeterminism():
     _, files = run()
     files[0]["methods"]["fast-worse"]["reps"][2]["time_s"] = 0.08
+    files[0]["methods"]["fast-worse"]["reps"][2]["total_s"] = 0.08
     files[1]["methods"]["slow-better"]["deterministic"] = False
     s = an.stability(files, an.per_file_spread(an.flatten(files)))
     assert round(s["fast-worse"][0], 6) == 1.6 and s["fast-worse"][1] == 1
@@ -96,7 +100,7 @@ def test_compare_accepts_the_same_run_and_rejects_changed_bytes_or_slow_drift():
     b[1][0]["methods"]["fast-worse"]["output_bytes"] = 601
     b[1][0]["methods"]["fast-worse"]["tokens_sha256"] = "u"
     assert any("different tokens" in p for p in compare(a, b))
-    assert any("pooled median parse time" in p for p in compare(a, run(scale=1.5)))
+    assert any("pooled median compression time" in p for p in compare(a, run(scale=1.5)))
 
 
 def test_report_names_the_verdict_the_gate_would_give():

@@ -180,7 +180,13 @@ fn bench_file(
                 errors: Vec::new(),
                 reps: Vec::new(),
             });
-            entry.reps.push(Rep { phase, order_index: *order, time_s: once.parse_s });
+            entry.reps.push(Rep {
+                phase,
+                order_index: *order,
+                time_s: once.parse_s,
+                encode_s: once.encode_s,
+                total_s: once.error.is_none().then_some(once.parse_s + once.encode_s.unwrap_or(0.0)),
+            });
 
             if let Some(e) = &once.error {
                 eprintln!("  {}: {e}", m.name);

@@ -92,7 +92,9 @@ def test_evidence_validation_requires_repeated_determinism(tmp_path):
         validate_evidence(row)
     raw[0]["measured_rounds"] = 2
     for result in raw[1]["methods"].values():
-        result["reps"].append({"phase": "measured", "order_index": 2, "time_s": 0.3})
+        result["reps"].append(
+            {"phase": "measured", "order_index": 2, "time_s": 0.3, "encode_s": 0.0, "total_s": 0.3}
+        )
     assert validate_evidence(row).meta.measured_rounds == 2
     raw[1]["methods"]["candidate"]["reps"].pop()
     with pytest.raises(ValueError, match="incomplete"):
@@ -117,9 +119,21 @@ def measured_row(session, name="one", offset=0):
     for method, values in (("candidate", [1.0, 3.0, 8.0]), ("incumbent", [2.0, 4.0, 9.0])):
         raw[1]["methods"][method]["output_bytes"] = 30 if method == "candidate" else 50
         raw[1]["methods"][method]["reps"] = [
-            {"phase": "warmup", "order_index": 0, "time_s": 999.0}
+            {
+                "phase": "warmup",
+                "order_index": 0,
+                "time_s": 999.0,
+                "encode_s": 0.0,
+                "total_s": 999.0,
+            }
         ] + [
-            {"phase": "measured", "order_index": i + 1, "time_s": v + offset}
+            {
+                "phase": "measured",
+                "order_index": i + 1,
+                "time_s": v + offset,
+                "encode_s": 0.0,
+                "total_s": v + offset,
+            }
             for i, v in enumerate(values)
         ]
     row = BenchmarkRun(
@@ -149,7 +163,11 @@ def test_reduction_and_uncertainty(store):
         assert isinstance(stats["files"], list)
         assert stats["files"][0]["sample_std_s"] > 0
         assert isinstance(stats["intervals"], dict)
-        assert stats["intervals"]["parse_seconds"][0] <= 7 <= stats["intervals"]["parse_seconds"][1]
+        assert (
+            stats["intervals"]["compression_seconds"][0]
+            <= 7
+            <= stats["intervals"]["compression_seconds"][1]
+        )
         prov = rows[1].raw_data[0]["benchmark_provenance"]
         assert isinstance(prov, dict)
         prov["host_sha256"] = "changed"

@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from bench.corpora import Corpus
-from bench.results import INCUMBENT, Run, parse
+from bench.results import INCUMBENT, SCHEMA_VERSION, Run, parse
 from bench.storage import sha256
 
 from .models import BenchmarkRun
@@ -95,6 +95,8 @@ def validate_evidence(row: BenchmarkRun) -> Run:
         "\n".join(json.dumps(record, allow_nan=False) for record in row.raw_data),
         Corpus(row.corpus, Path("."), False, {}),
     )
+    if run.meta.schema_version != SCHEMA_VERSION:
+        raise ValueError("full compression timings required; rebenchmark legacy runs")
     if len(row.raw_data) != len(run.files) + 1 or not run.files:
         raise ValueError("unexpected or missing file records")
     if run.candidates() != (row.candidate_method,):
@@ -145,7 +147,7 @@ def validate_evidence(row: BenchmarkRun) -> Run:
     return run
 
 
-CALCULATOR_VERSION = "median-v2"
+CALCULATOR_VERSION = "compression-median-v3"
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,7 @@ class Aggregated:
     bytes: int
     incumbent_seconds: float
     parse_seconds: float
+    compression_seconds: float
     run_ids: tuple[int, ...]
 
     @property
@@ -164,14 +167,14 @@ class Aggregated:
 
     @property
     def time_ratio(self) -> float:
-        return self.parse_seconds / self.incumbent_seconds
+        return self.compression_seconds / self.incumbent_seconds
 
 
 def compatibility(run: Run) -> tuple[object, ...]:
     """Recorded protocol/environment only; absent metadata is not certification.
 
-    Current artifacts do not identify the engine binary, CPU affinity, compiler
-    flags or host uniquely. These omissions must remain visible in reports.
+    Provenance binds the engine, template, host and configured resource limits.
+    Only matching protocols and environments may be combined.
     """
     m = run.meta
     provenance = run.raw_records[0].get("benchmark_provenance")
@@ -212,15 +215,17 @@ def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
             )
         seen.update(hashes)
     raw = output = incumbent_output = 0
-    seconds = incumbent_seconds = 0.0
+    seconds = parse_seconds = incumbent_seconds = 0.0
     for row, run in zip(rows, runs, strict=True):
         candidate = run.totals(row.candidate_method)
         incumbent = run.totals(INCUMBENT)
         raw += candidate.raw_bytes
         output += candidate.output_bytes
         incumbent_output += incumbent.output_bytes
-        seconds += candidate.parse_s
-        incumbent_seconds += incumbent.parse_s
+        assert candidate.total_s is not None and incumbent.total_s is not None
+        parse_seconds += candidate.parse_s
+        seconds += candidate.total_s
+        incumbent_seconds += incumbent.total_s
     if raw <= 0 or seconds <= 0 or incumbent_seconds <= 0:
         raise ValueError("positive input size and measured times required")
     if not math.isfinite(seconds) or not math.isfinite(incumbent_seconds):
@@ -231,6 +236,7 @@ def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
         incumbent_output,
         output,
         incumbent_seconds,
+        parse_seconds,
         seconds,
         tuple(sorted(row.id for row in rows)),
     )
@@ -261,13 +267,32 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
                         "file": file.file,
                         "method": method,
                         "n": len(result.measured),
-                        "median_s": result.parse_s,
-                        "sample_std_s": result.sample_std_s,
+                        "median_s": result.total_s,
+                        "sample_std_s": statistics.stdev(result.measured_total)
+                        if len(result.measured_total) > 1
+                        else None,
+                        "lz77_median_s": result.parse_s,
+                        "lz77_sample_std_s": result.sample_std_s,
+                        "encode_median_s": result.encoding_s,
+                        "encode_sample_std_s": statistics.stdev(result.measured_encode)
+                        if len(result.measured_encode) > 1
+                        else None,
                     }
                 )
     answer: dict[str, object] = {
         "files": files,
-        "method": "paired-per-file-percentile-bootstrap-v2",
+        "totals": {
+            role: {
+                "lz77_s": sum(run.totals(method).parse_s for run, method in pairs),
+                "encode_s": sum(run.totals(method).encode_s or 0.0 for run, method in pairs),
+                "compression_s": sum(run.totals(method).total_s or 0.0 for run, method in pairs),
+            }
+            for role, pairs in (
+                ("candidate", list(zip(runs, [row.candidate_method for row in rows], strict=True))),
+                ("incumbent", [(run, INCUMBENT) for run in runs]),
+            )
+        },
+        "method": "paired-per-file-compression-bootstrap-v3",
         "confidence": 0.95,
         "draws": draws,
         "scope": "within recorded runs only; excludes host drift and systematic bias",
@@ -279,7 +304,7 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
     seed = int(sha256([row.raw_data for row in rows])[:16], 16)
     rng = random.Random(seed)
     samples: dict[str, list[float]] = {
-        "parse_seconds": [],
+        "compression_seconds": [],
         "incumbent_seconds": [],
         "time_ratio": [],
     }
@@ -290,12 +315,12 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
             for file in run.files:
                 indices = [rng.randrange(n) for _ in range(n)]
                 candidate += statistics.median(
-                    [file.methods[row.candidate_method].measured[i] for i in indices]
+                    [file.methods[row.candidate_method].measured_total[i] for i in indices]
                 )
                 incumbent += statistics.median(
-                    [file.methods[INCUMBENT].measured[i] for i in indices]
+                    [file.methods[INCUMBENT].measured_total[i] for i in indices]
                 )
-        samples["parse_seconds"].append(candidate)
+        samples["compression_seconds"].append(candidate)
         samples["incumbent_seconds"].append(incumbent)
         if incumbent <= 0:
             raise ValueError("zero incumbent time in bootstrap resample")
@@ -318,6 +343,7 @@ def evaluation_context(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
         "corpora": sorted([[r.corpus, r.corpus_sha256] for r in rows]),
         "protocol": list(compatibility(runs[0])),
         "calculator": CALCULATOR_VERSION,
+        "timing": "lz77+encode; median of paired stage sums per file",
     }
 
 
@@ -346,6 +372,7 @@ def aggregate(session: Session, rows: Sequence[BenchmarkRun]):
         bytes=values.bytes,
         incumbent_bytes=values.incumbent_bytes,
         parse_seconds=values.parse_seconds,
+        compression_seconds=values.compression_seconds,
         incumbent_seconds=values.incumbent_seconds,
     )
     session.add(row)
@@ -390,12 +417,26 @@ def publish(
         or aggregation.context != evaluation_context(rows)
     ):
         raise ValueError("stale aggregation context")
-    for field in ("raw_bytes", "bytes", "incumbent_bytes", "parse_seconds", "incumbent_seconds"):
+    for field in (
+        "raw_bytes",
+        "bytes",
+        "incumbent_bytes",
+        "parse_seconds",
+        "compression_seconds",
+        "incumbent_seconds",
+    ):
         if getattr(aggregation, field) != getattr(values, field):
             raise ValueError("aggregation no longer matches evidence")
     if not math.isfinite(speed_floor) or speed_floor <= 0 or values.time_ratio > speed_floor:
         raise ValueError("aggregation exceeds speed floor")
-    for field in ("raw_bytes", "bytes", "incumbent_bytes", "parse_seconds", "incumbent_seconds"):
+    for field in (
+        "raw_bytes",
+        "bytes",
+        "incumbent_bytes",
+        "parse_seconds",
+        "compression_seconds",
+        "incumbent_seconds",
+    ):
         setattr(submission, field, getattr(values, field))
     submission.time_ratio = values.time_ratio
     submission.measured_source_sha256 = values.source_sha256

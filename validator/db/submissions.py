@@ -29,6 +29,7 @@ SCORE_FIELDS = frozenset(
         "bytes",
         "incumbent_seconds",
         "parse_seconds",
+        "compression_seconds",
         "time_ratio",
     }
 )

@@ -30,8 +30,8 @@ HELD_OUT = Corpus(name="held-out", path=Path("/corpus"), public=False, formats={
 
 
 def method(name: str, out_bytes: int, times: list[float], **over: object) -> MethodResult:
-    reps = [Rep(phase="warmup", order_index=0, time_s=9.9)]
-    reps += [Rep("measured", i + 1, t) for i, t in enumerate(times)]
+    reps = [Rep(phase="warmup", order_index=0, time_s=9.9, encode_s=0.0, total_s=9.9)]
+    reps += [Rep("measured", i + 1, t, encode_s=0.0, total_s=t) for i, t in enumerate(times)]
     fields: dict[str, object] = {
         "external": False,
         "output_bytes": out_bytes,
@@ -48,7 +48,7 @@ def method(name: str, out_bytes: int, times: list[float], **over: object) -> Met
 
 def run_of(candidate: str, methods: dict[str, MethodResult], files: int = 2) -> Run:
     meta = Meta(
-        schema_version=3,
+        schema_version=4,
         started_at_unix=0.0,
         corpus="open",
         corpus_dir="/corpus",
