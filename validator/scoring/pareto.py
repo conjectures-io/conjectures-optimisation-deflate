@@ -296,10 +296,7 @@ def corner_coefficient(a, b, m, coef_max, coef_min):
 
 # ── The registry ──────────────────────────────────────────────────────────
 
-# Every method, by the name the reports and TAU_SCORING_METHOD use. The validator's
-# default is elbow-sweetspot: on the real frontier it and the diagonal sweeps agree on
-# the defensible answer (the knee), while hypervolume inverts under a change of units and
-# neighbor-improvement anchors against a bound nothing is near.
+# Methods remain available for comparison; local-global is the selected competition default.
 METHODS: dict[str, WeightFn] = {
     "hypervolume": hypervolume_weights,
     "hypervolume-normalized": normalized_hypervolume_weights,
@@ -311,7 +308,7 @@ METHODS: dict[str, WeightFn] = {
     "local-global": local_global_weights,
 }
 
-DEFAULT_METHOD = "elbow-sweetspot"
+DEFAULT_METHOD = "local-global"
 
 
 def weigh(front, bounds: Boundaries, method: str = DEFAULT_METHOD) -> Weights:

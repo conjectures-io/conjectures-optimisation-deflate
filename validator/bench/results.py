@@ -2,7 +2,7 @@
 derived from it.
 
 The engine folds nothing, so "the parse time of a method on a file" is a choice
-made here and nowhere else: the minimum over the measured reps. Every caller --
+made here and nowhere else: the median over the measured reps. Every caller --
 the gate, the miner CLI, the worker -- reads it through these, so they cannot
 drift apart.
 """
@@ -10,6 +10,7 @@ drift apart.
 from __future__ import annotations
 
 import json
+import statistics
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import cast
@@ -57,9 +58,12 @@ class MethodResult:
 
     @property
     def parse_s(self) -> float:
-        # The floor of what the parse costs: the fastest rep, as the gate has
-        # always measured it. Slower reps are the host's noise, not the parser's.
-        return min(self.measured, default=0.0)
+        return statistics.median(self.measured) if self.measured else 0.0
+
+    @property
+    def sample_std_s(self) -> float | None:
+        """Measured repetition spread; unknown for fewer than two samples."""
+        return statistics.stdev(self.measured) if len(self.measured) >= 2 else None
 
     @property
     def spread(self) -> float:

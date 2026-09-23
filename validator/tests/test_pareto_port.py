@@ -185,4 +185,8 @@ def newest_run() -> dict[str, list[Point]]:
     runs = sorted(RUNS.glob("*.jsonl"))
     if not runs:
         pytest.skip("no benchmark run under data/benchmark-runs/")
-    return load_run(runs[-1])
+    for path in reversed(runs):
+        loaded = load_run(path)
+        if {"corpus-stage1", "corpus-stage2"} <= loaded.keys():
+            return loaded
+    pytest.skip("no historical two-stage comparison artifact available")

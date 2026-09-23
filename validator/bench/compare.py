@@ -5,7 +5,7 @@
 
 Exit 0 when the runs agree, 1 with one line per difference otherwise. This is the repeatability
 check: a submission benchmarked twice must produce identical token streams and byte counts on
-every file, and its pooled minimum parse time must not have moved more than TIME_TOLERANCE.
+every file, and its pooled median parse time must not have moved more than TIME_TOLERANCE.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from .analyze import (
     Meta,
     flatten,
     load_run,
-    per_file_min_time,
-    pooled_min_time,
+    per_file_median_time,
+    pooled_median_time,
 )
 
 # Time may move this much between two runs on the same machine before it is a finding.
@@ -47,12 +47,12 @@ def compare(a: tuple[Meta, list[FileRec]], b: tuple[Meta, list[FileRec]]) -> lis
                 problems.append(f"{label} {m}: different bytes")
             elif ra.get("output_sha256") != rb.get("output_sha256"):
                 problems.append(f"{label} {m}: same byte count, different bytes")
-    ta = pooled_min_time(per_file_min_time(flatten(a[1])))
-    tb = pooled_min_time(per_file_min_time(flatten(b[1])))
+    ta = pooled_median_time(per_file_median_time(flatten(a[1])))
+    tb = pooled_median_time(per_file_median_time(flatten(b[1])))
     for m in sorted(set(ta) & set(tb)):
         if ta[m] > 0 and abs(tb[m] - ta[m]) / ta[m] > TIME_TOLERANCE:
             problems.append(
-                f"{m}: pooled min parse time {ta[m]:.4f}s -> {tb[m]:.4f}s ({tb[m] / ta[m]:.2f}x)"
+                f"{m}: pooled median parse time {ta[m]:.4f}s -> {tb[m]:.4f}s ({tb[m] / ta[m]:.2f}x)"
             )
     for k in ("methods", "cpu_model", "rustc_version"):
         if a[0].get(k) != b[0].get(k):

@@ -30,7 +30,7 @@ class ScoredSubmission:
     """
 
     submission_id: int
-    hotkey: str
+    hotkey: str | None
     bytes: int
     raw_bytes: int
     time_s: float
@@ -41,6 +41,13 @@ class ScoredSubmission:
     incumbent_bytes: int
     incumbent_seconds: float
     submitted_at: dt.datetime
+    aggregation_id: int | None = None
+    baseline_key: str | None = None
+    context: dict[str, object] | None = None
+
+    @property
+    def point_id(self) -> str:
+        return str(self.submission_id)
 
     @property
     def ratio_pct(self) -> float:
@@ -87,12 +94,120 @@ def _to_scored(row: models.Submission) -> ScoredSubmission:
         incumbent_bytes=row.incumbent_bytes,
         incumbent_seconds=row.incumbent_seconds,
         submitted_at=row.submitted_at,
+        aggregation_id=row.aggregation_id,
+        baseline_key=row.baseline_key,
     )
 
 
 class ScoringDb:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self._sessions = sessions
+
+    def scoring_inputs(self, corpora=None, aggregation_ids=None) -> list[ScoredSubmission]:
+        """All verified points in one published, comparable evaluation context.
+
+        SCORING_CORPORA is a JSON object mapping corpus names to content hashes.
+        Without it, a single context is required; mixed contexts fail closed.
+        """
+        import json
+        import os
+
+        from .aggregation import CALCULATOR_VERSION, evaluation_context, reduce_runs
+
+        requested = corpora
+        if requested is None and os.getenv("SCORING_CORPORA"):
+            requested = json.loads(os.environ["SCORING_CORPORA"])
+        with session_scope(self._sessions) as session:
+            rows = list(
+                session.scalars(
+                    _scorable(select(models.Submission))
+                    .where(
+                        models.Submission.aggregation_id.is_not(None),
+                        (
+                            True
+                            if aggregation_ids is not None
+                            else (
+                                models.Submission.baseline_key.is_(None)
+                                | models.Submission.baseline_active
+                            )
+                        ),
+                    )
+                    .order_by(models.Submission.submitted_at, models.Submission.id)
+                )
+            )
+            overrides = {}
+            if aggregation_ids is not None:
+                for aid in aggregation_ids:
+                    item = session.get(models.BenchmarkAggregation, aid)
+                    if item is None or item.source_sha256 in overrides:
+                        raise ValueError(
+                            "unknown aggregation or multiple aggregations for one source"
+                        )
+                    overrides[item.source_sha256] = item
+            result = []
+            for row in rows:
+                aggregation = (
+                    overrides.get(row.source_sha256)
+                    if aggregation_ids is not None
+                    else session.get(models.BenchmarkAggregation, row.aggregation_id)
+                )
+                if aggregation is None or aggregation.calculator_version != CALCULATOR_VERSION:
+                    continue
+                runs = list(
+                    session.scalars(
+                        select(models.BenchmarkRun)
+                        .join(
+                            models.BenchmarkAggregationInput,
+                            models.BenchmarkAggregationInput.run_id == models.BenchmarkRun.id,
+                        )
+                        .where(models.BenchmarkAggregationInput.aggregation_id == aggregation.id)
+                    )
+                )
+                try:
+                    values = reduce_runs(runs)
+                    context = evaluation_context(runs)
+                except ValueError:
+                    continue  # Invalidated evidence removes the point, not only its payout.
+                if context != aggregation.context or values.source_sha256 != row.source_sha256:
+                    continue
+                if requested is not None and dict(context["corpora"]) != requested:
+                    continue
+                if any(
+                    getattr(values, key) != getattr(aggregation, key)
+                    for key in (
+                        "raw_bytes",
+                        "bytes",
+                        "incumbent_bytes",
+                        "parse_seconds",
+                        "incumbent_seconds",
+                    )
+                ):
+                    continue
+                result.append(
+                    dc.replace(
+                        _to_scored(row),
+                        bytes=aggregation.bytes,
+                        raw_bytes=aggregation.raw_bytes,
+                        time_s=aggregation.parse_seconds,
+                        incumbent_bytes=aggregation.incumbent_bytes,
+                        incumbent_seconds=aggregation.incumbent_seconds,
+                        context=context,
+                        aggregation_id=aggregation.id,
+                    )
+                )
+            if aggregation_ids is not None and {r.aggregation_id for r in result} != set(
+                aggregation_ids
+            ):
+                raise ValueError(
+                    "requested aggregation is invalid or lacks a currently verified "
+                    "submission identity"
+                )
+            if len({json.dumps(r.context, sort_keys=True) for r in result}) > 1:
+                raise ValueError(
+                    "incompatible published scoring contexts; select SCORING_CORPORA "
+                    "and rebenchmark consistently"
+                )
+            return result
 
     def best_per_hotkey(self) -> list[ScoredSubmission]:
         """Each hotkey's best accepted submission -- one competitor, one point.

@@ -344,7 +344,9 @@ def _measure(
             workspace=workspace,
         )
     try:
-        return parse_results(r.stdout, corpus)
+        result = parse_results(r.stdout, corpus)
+        result.raw_records[0]["benchmark_provenance"] = provenance(config)
+        return result
     except Malformed as e:
         raise MeasureFailed(
             f"unreadable output measuring {candidate}: {e}",
@@ -396,3 +398,27 @@ def _cleanup(config: Config, workspace: Path, *, keep: bool) -> bool:
         return True
     shutil.rmtree(workspace, ignore_errors=True)
     return False
+
+
+def provenance(config: Config) -> dict[str, object]:
+    """Trusted harness/build/environment identity, retained in each raw artifact."""
+    machine = Path("/etc/machine-id")
+    templates = sorted(
+        p for p in config.template.rglob("*") if p.is_file() and "target" not in p.parts
+    )
+    digest = hashlib.sha256()
+    for path in templates:
+        digest.update(str(path.relative_to(config.template)).encode() + b"\0" + path.read_bytes())
+    return {
+        "version": 1,
+        "engine_sha256": hashlib.sha256(config.engine.read_bytes()).hexdigest(),
+        "template_sha256": digest.hexdigest(),
+        "host_sha256": hashlib.sha256(machine.read_bytes()).hexdigest()
+        if machine.exists()
+        else None,
+        "cpus": config.cpus,
+        "process_affinity": sorted(os.sched_getaffinity(0)),
+        "memory_mb": config.memory_mb,
+        "sandbox": config.enabled,
+        "build_profile": "release",
+    }

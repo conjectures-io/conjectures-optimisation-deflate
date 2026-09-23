@@ -13,7 +13,7 @@ per-rep timings in the run file, so a run only needs to be collected once no mat
 analysis evolves.
 
 The headline numbers are the gate's numbers: compressed bytes pooled over files against the
-incumbent, and the sum of per-file minimum parse times against the incumbent's, with the
+incumbent, and the sum of per-file median parse times against the incumbent's, with the
 verdict the gate would give. Per-format tables, the Pareto front and the stability section are
 context computed from the same file.
 
@@ -181,14 +181,14 @@ def per_file_ratio(rows: list[Row]) -> dict[Key, float]:
     return out
 
 
-def per_file_min_time(rows: list[Row]) -> dict[Key, float]:
-    """{(format, method, file): minimum measured time_s} -- the gate's statistic."""
+def per_file_median_time(rows: list[Row]) -> dict[Key, float]:
+    """{(format, method, file): median measured time_s} -- the gate's statistic."""
     by_key: dict[Key, list[float]] = defaultdict(list)
     for r in rows:
         if r["phase"] != "measured":
             continue
         by_key[(r["format"], r["method"], r["file"])].append(r["time_s"])
-    return {k: min(v) for k, v in by_key.items()}
+    return {k: statistics.median(v) for k, v in by_key.items()}
 
 
 def per_file_spread(rows: list[Row]) -> dict[Key, float]:
@@ -231,8 +231,8 @@ def pooled_bytes(files: list[FileRec]) -> dict[str, int]:
     return dict(out)
 
 
-def pooled_min_time(min_time: dict[Key, float]) -> dict[str, float]:
-    """{method: sum over files of the minimum parse time} -- the floor's arithmetic."""
+def pooled_median_time(min_time: dict[Key, float]) -> dict[str, float]:
+    """{method: sum over files of the median parse time} -- the floor's arithmetic."""
     out: dict[str, float] = defaultdict(float)
     for (_fmt, method, _f), t in min_time.items():
         out[method] += t
@@ -311,11 +311,11 @@ def report(meta: Meta, files: list[FileRec], run_path: str) -> str:
     floor = float(floor_raw) if isinstance(floor_raw, (int, float)) else 8.0
 
     ratio = per_file_ratio(rows)
-    min_time = per_file_min_time(rows)
+    min_time = per_file_median_time(rows)
     speed_ratio = per_file_speed_ratio(min_time)
     ratio_by_fm = group_by_format_method(ratio)
     speed_by_fm = group_by_format_method(speed_ratio)
-    pb, pt = pooled_bytes(files), pooled_min_time(min_time)
+    pb, pt = pooled_bytes(files), pooled_median_time(min_time)
     stab = stability(files, per_file_spread(rows))
     raw = sum(f["raw_bytes"] for f in files)
 
@@ -346,7 +346,7 @@ def report(meta: Meta, files: list[FileRec], run_path: str) -> str:
         f"- warmup rounds: {meta.get('warmup_rounds')}, "
         f"measured rounds: {meta.get('measured_rounds')}",
         "",
-        f"## Score: pooled bytes and pooled minimum parse time against `{REFERENCE_METHOD}` "
+        f"## Score: pooled bytes and pooled median parse time against `{REFERENCE_METHOD}` "
         f"({len(files)} files, {raw:,} raw bytes)",
         "",
         f"The gate's arithmetic. `accepted` means fewer bytes and at most {floor:.0f}x the "
@@ -414,7 +414,7 @@ def main() -> None:
             os.path.join(out_dir, "ratio-by-format.png"),
         )
         boxplot_by_format(
-            group_by_format_method(per_file_speed_ratio(per_file_min_time(rows))),
+            group_by_format_method(per_file_speed_ratio(per_file_median_time(rows))),
             formats,
             methods,
             f"{run_stem} -- min parse time vs. {REFERENCE_METHOD}, by format",

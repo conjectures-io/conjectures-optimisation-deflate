@@ -355,3 +355,11 @@ smoke: build
     just check miner/examples/optimal --results /tmp/smoke-optimal.json
     just check miner/examples/no-lz77 --results /tmp/smoke-no-lz77.json
     just check miner/examples/optimal-iter --results /tmp/smoke-optimal-iter.json
+
+# Aggregate stored runs; --corpus NAME:SHA256, --source HASH or --submission-id ID.
+bench-aggregate *ARGS:
+    {{python}} -m bench.aggregate {{ARGS}}
+
+# Incrementally verify and seed operator baselines; --overwrite forces new measurements.
+baseline-seed *ARGS: build
+    {{python}} -m bench.baselines {{ARGS}}

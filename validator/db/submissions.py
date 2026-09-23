@@ -79,7 +79,10 @@ class SubmissionsDb:
         with session_scope(self._sessions) as session:
             row = session.execute(
                 select(models.Submission)
-                .where(models.Submission.state == SubmissionState.QUEUED.value)
+                .where(
+                    models.Submission.state == SubmissionState.QUEUED.value,
+                    models.Submission.baseline_key.is_(None),
+                )
                 .order_by(models.Submission.submitted_at, models.Submission.id)
                 .limit(1)
                 .with_for_update(skip_locked=True)
@@ -124,7 +127,8 @@ class SubmissionsDb:
             for key, value in fields.items():
                 setattr(row, key, value)
             row.finished_at = clock.now()
-            if state is SubmissionState.ACCEPTED:
+            if state is SubmissionState.ACCEPTED and row.baseline_key is None:
+                assert row.hotkey is not None
                 try:
                     registration = self._registrations.claim_slot(session, row.hotkey, sub_id)
                 except NoSlot:

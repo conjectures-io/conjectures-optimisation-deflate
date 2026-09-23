@@ -446,7 +446,12 @@ def bench_config() -> bench.Config:
     return dataclasses.replace(bench.Config.from_env(ROOT), bars=False)
 
 
-def stage_score(results: Path | None) -> int:
+def stage_score(
+    results: Path | None,
+    store: db.Store | None = None,
+    sub_id: int | None = None,
+    token: str | None = None,
+) -> int:
     # Only now compile natively: round trip, compressed bytes, speed floor.
     # The engine measures and this decides; SPEED_FLOOR is the only policy here.
     corpus = corpora.default(ROOT)
@@ -486,6 +491,30 @@ def stage_score(results: Path | None) -> int:
     for f in v.failures[:20]:
         print(f"  {f}")
     print(v.line())
+    if store is not None and sub_id is not None:
+        from bench.artifacts import write_import_files
+        from bench.storage import import_file
+        from db.aggregation import aggregate, publish
+        from db.models import BenchmarkRun, Submission
+
+        paths = write_import_files(
+            measured, ROOT.parent / "data/benchmark-runs/service", verdict.SPEED_FLOOR
+        )
+        run_ids = [import_file(store.engine, path) for path in paths]
+        if v.accepted:
+            with store.sessions.begin() as session:
+                row = session.get(Submission, sub_id, with_for_update=True)
+                if row is None or row.verification_attempt != token:
+                    raise db.verification.StaleAttempt(
+                        "verification attempt superseded before aggregation"
+                    )
+                from sqlalchemy import select
+
+                aggregation = aggregate(
+                    session,
+                    list(session.scalars(select(BenchmarkRun).where(BenchmarkRun.id.in_(run_ids)))),
+                )
+                publish(session, sub_id, aggregation.id, speed_floor=verdict.SPEED_FLOOR)
     if results is not None:
         results.write_text(json.dumps(report.summary(measured, verdict.SPEED_FLOOR), indent=2))
     return 0 if v.accepted else 1
@@ -624,7 +653,7 @@ def main() -> None:
         else:
             if store is not None and fingerprint() != verification_id:
                 misconfigured("trusted verification inputs changed before native compilation")
-            code = stage_score(results)
+            code = stage_score(results, store, sub_id, token)
             if code == 0 and store is not None and sub_id is not None:
                 store.verification.publish(sub_id, token, "measured")
     except (OSError, SQLAlchemyError, ValueError, db.verification.StaleAttempt) as exc:

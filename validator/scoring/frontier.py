@@ -1,6 +1,6 @@
 """The 60% share: turn accepted submissions into a frontier, and weigh it.
 
-One competitor is one hotkey, represented by their best accepted submission. Everything
+One point is one verified submission; payout ownership is applied after weighting. Everything
 below is pure -- it takes the rows the store already read and returns numbers -- so the
 rule can be exercised without a database or a chain.
 """
@@ -32,11 +32,12 @@ class FrontierScore:
 
 
 def to_points(submissions: Sequence[ScoredSubmission]) -> dict[str, Point]:
-    # One point per hotkey. Both axes are "lower is better": seconds, and compressed
+    # One point per submission. Both axes are "lower is better": seconds, and compressed
     # bytes as a percentage of raw. The percentage rather than the bytes because the
     # corpus changes between rounds and absolute bytes are not comparable across it.
     return {
-        s.hotkey: Point(name=s.hotkey, time_s=s.time_s, ratio_pct=s.ratio_pct) for s in submissions
+        s.point_id: Point(name=s.point_id, time_s=s.time_s, ratio_pct=s.ratio_pct)
+        for s in sorted(submissions, key=lambda s: (s.submitted_at, s.submission_id))
     }
 
 
@@ -66,7 +67,7 @@ def score_frontier(submissions: Sequence[ScoredSubmission], config: ScoringConfi
     bounds = boundaries_for(submissions, config.speed_floor)
     front = pareto_front(list(points.values()))
     raw = weigh(front, bounds, config.method)
-    weights = {hotkey: 0.0 for hotkey in points}
+    weights = {point_id: 0.0 for point_id in points}
     for hotkey, share in raw.items():
         weights[hotkey] = share * config.pareto_share
     return FrontierScore(

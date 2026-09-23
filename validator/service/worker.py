@@ -134,7 +134,8 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
     the submission goes back on the queue uncharged and the loop stops so an operator
     sees it, rather than grinding the same misconfiguration through every submission.
     """
-    logger.info(f"[worker] verifying submission {sub.id} ({sub.hotkey[:8]}…)")
+    label = sub.hotkey or sub.baseline_key or "unknown"
+    logger.info(f"[worker] verifying submission {sub.id} ({label[:8]}…)")
     with tempfile.TemporaryDirectory(prefix=f"score-{sub.id}-") as tmp:
         results = Path(tmp) / "results.json"
         result = run_gate(

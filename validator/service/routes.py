@@ -50,6 +50,7 @@ def submission_view(row: models.Submission) -> schemas.SubmissionView:
     return schemas.SubmissionView(
         id=row.id,
         hotkey=row.hotkey,
+        baseline_key=row.baseline_key,
         digest=row.digest,
         submitted_at=iso(row.submitted_at),
         state=row.state,
@@ -178,6 +179,7 @@ def leaderboard(request: Request) -> schemas.Leaderboard:
                 rank=i + 1,
                 submission=row.id,
                 hotkey=row.hotkey,
+                baseline_key=row.baseline_key,
                 # leaderboard() selects only accepted rows, and the worker records bytes
                 # on every acceptance, so this is never NULL in practice.
                 bytes=row.bytes or 0,

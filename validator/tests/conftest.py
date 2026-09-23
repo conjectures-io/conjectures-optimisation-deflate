@@ -205,6 +205,15 @@ def stub_verifier(tmp_path, monkeypatch, store):
                 store.verification.publish(sid, token, stage)
         return result
 
+    original_finish = store.submissions.finish
+
+    def finish(*args, **kwargs):
+        state = original_finish(*args, **kwargs)
+        if state == "accepted":
+            attach_aggregation(store, args[0])
+        return state
+
+    monkeypatch.setattr(store.submissions, "finish", finish)
     monkeypatch.setattr(worker_mod, "run_gate", run_gate)
     return path
 
@@ -261,3 +270,45 @@ def post_submission(client, kp, d: Path, *, signer=None, timestamp: int | None =
         },
         files={"parse.rs": ("parse.rs", rs), "Parse.lean": ("Parse.lean", lean)},
     )
+
+
+def attach_aggregation(store, sid):
+    """Test gate evidence mirrors the production DB publication path."""
+    import copy
+
+    from test_bench_storage import evidence
+
+    from bench.storage import sha256
+    from db.aggregation import aggregate, publish
+
+    with store.sessions.begin() as session:
+        sub = session.get(models.Submission, sid)
+        raw = copy.deepcopy(evidence())
+        raw[0]["methods"]["candidate"]["source_sha256"] = sub.source_sha256
+        raw[0]["measured_rounds"] = 2
+        raw[0]["benchmark_provenance"] = {
+            "engine_sha256": "1" * 64,
+            "template_sha256": "2" * 64,
+            "host_sha256": "3" * 64,
+        }
+        raw[1]["raw_bytes"] = sub.raw_bytes
+        for name, size, seconds in (
+            ("candidate", sub.bytes, sub.parse_seconds),
+            ("incumbent", sub.incumbent_bytes, sub.incumbent_seconds),
+        ):
+            raw[1]["methods"][name]["output_bytes"] = size
+            raw[1]["methods"][name]["reps"] = [
+                {"phase": "measured", "order_index": i, "time_s": seconds} for i in range(2)
+            ]
+        row = models.BenchmarkRun(
+            source_sha256=sub.source_sha256,
+            candidate_method="candidate",
+            corpus="tiny",
+            corpus_sha256=sha256([("a.txt", "c" * 64, sub.raw_bytes)]),
+            status="complete",
+            raw_data=raw,
+        )
+        session.add(row)
+        session.flush()
+        result = aggregate(session, [row])
+        publish(session, sid, result.id)

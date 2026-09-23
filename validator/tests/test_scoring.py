@@ -76,20 +76,24 @@ def test_the_environment_is_read_strictly():
 
 
 def test_the_frontier_share_sums_to_the_pareto_share():
-    rows = [sub("a", 2_100_000, 2.0), sub("b", 2_200_000, 0.5), sub("c", 2_300_000, 0.25)]
+    rows = [
+        sub("a", 2_100_000, 2.0, sid=1),
+        sub("b", 2_200_000, 0.5, sid=2),
+        sub("c", 2_300_000, 0.25, sid=3),
+    ]
     result = scoring.score_frontier(rows, CONFIG)
     assert sum(result.weights.values()) == pytest.approx(CONFIG.pareto_share)
-    assert set(result.frontier) == {"a", "b", "c"}
+    assert set(result.frontier) == {"1", "2", "3"}
 
 
 def test_a_dominated_hotkey_earns_nothing_from_the_frontier():
     # `slow` is both slower and larger than `good`: there is no sense in which it bought
     # anything, so the Pareto component pays it zero.
-    rows = [sub("good", 2_100_000, 0.5), sub("slow", 2_300_000, 2.0)]
+    rows = [sub("good", 2_100_000, 0.5, sid=1), sub("slow", 2_300_000, 2.0, sid=2)]
     result = scoring.score_frontier(rows, CONFIG)
-    assert result.weights["slow"] == 0.0
-    assert result.weights["good"] == pytest.approx(CONFIG.pareto_share)
-    assert result.on_frontier("good") and not result.on_frontier("slow")
+    assert result.weights["2"] == 0.0
+    assert result.weights["1"] == pytest.approx(CONFIG.pareto_share)
+    assert result.on_frontier("1") and not result.on_frontier("2")
 
 
 def test_the_time_boundary_follows_the_newest_measurement():
@@ -285,3 +289,35 @@ def test_the_burn_uid_is_never_paid_as_a_miner():
     view = meta(u0="burn", u1="a")
     plan = scoring.to_vector({"burn": 0.5, "a": 0.5}, view, burn_uid=0)
     assert plan.weights == pytest.approx((0.5, 0.5))
+
+
+def test_eligibility_does_not_change_geometry_and_oldest_hotkey_point_is_paid():
+    rows = [
+        dc.replace(sub(None, 2_400_000, 0.1, sid=1), baseline_key="floor"),
+        sub("miner", 2_300_000, 0.2, sid=2, minutes=1),
+        sub("miner", 2_200_000, 0.4, sid=3, minutes=2),
+        sub("gone", 2_160_000, 0.8, sid=4, minutes=3),
+    ]
+    a = scoring.score(rows, rows, CONFIG, eligible_hotkeys={"miner", "gone"})
+    b = scoring.score(rows, rows, CONFIG, eligible_hotkeys={"miner"})
+    assert a.frontier == b.frontier
+    by_id = {s.submission_id: s for s in b.scores}
+    assert by_id[1].burn_reason == "baseline" and by_id[1].payable_weight == 0
+    assert by_id[2].payable_weight == by_id[2].pareto_weight
+    assert by_id[3].burn_reason == "duplicate-hotkey" and by_id[3].payable_weight == 0
+    assert by_id[4].burn_reason == "deregistered" and by_id[4].payable_weight == 0
+    assert sum(b.weights.values()) + b.burn_weight == pytest.approx(1)
+
+
+def test_exact_duplicate_coordinates_preserve_oldest_point():
+    rows = [sub("later", 2_200_000, 0.5, sid=2, minutes=1), sub("first", 2_200_000, 0.5, sid=1)]
+    result = scoring.score(rows, rows, CONFIG)
+    assert result.frontier.frontier == ("1",)
+
+
+def test_baselines_establish_record_without_recent_improvement_events():
+    baseline = dc.replace(sub(None, 2_000_000, 1, sid=1), baseline_key="optimal")
+    no_improvement = sub("miner", 2_050_000, 0.5, sid=2, minutes=1)
+    assert scoring.improvement_events([baseline, no_improvement], 0.0025) == []
+    result = scoring.score([baseline], [baseline], CONFIG, eligible_hotkeys=set())
+    assert result.burn_weight == 1

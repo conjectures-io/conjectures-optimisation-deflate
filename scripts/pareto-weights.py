@@ -49,8 +49,8 @@ rather than faked. Normalization comes in two kinds, picked per method in `NORMA
                         has no external limit in its formula at all. Normalizing it
                         against a competition constant would just be noise.
 
-What running them on the real frontier found, and why the validator's default is
-elbow-sweetspot, is in docs/SCORING.md.
+Historical comparisons and the selected local-global default are described in
+docs/SCORING.md.
 """
 
 import argparse

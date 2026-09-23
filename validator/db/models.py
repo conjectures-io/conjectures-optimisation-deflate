@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -82,7 +83,9 @@ class Submission(Base):
             "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_submission_aggregation"
         ),
     )
-    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    baseline_key: Mapped[str | None] = mapped_column(Text)
+    baseline_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # sha256(parse.rs || Parse.lean), hex -- what the miner signed, and the submission's
     # identity. The same files from the same hotkey are the same submission.
     digest: Mapped[str] = mapped_column(Text, nullable=False)
@@ -126,6 +129,19 @@ class Submission(Base):
 
     __table_args__ = (
         UniqueConstraint("hotkey", "digest", name="uq_submissions_hotkey_digest"),
+        UniqueConstraint("baseline_key", "digest", name="uq_submission_baseline_digest"),
+        CheckConstraint(
+            "(baseline_key IS NULL) = (hotkey IS NOT NULL)", name="ck_submission_owner"
+        ),
+        CheckConstraint(
+            "NOT baseline_active OR baseline_key IS NOT NULL", name="ck_submission_baseline_active"
+        ),
+        Index(
+            "uq_active_baseline",
+            "baseline_key",
+            unique=True,
+            postgresql_where=text("baseline_active"),
+        ),
         CheckConstraint(
             "lean_verified_at IS NULL OR static_verified_at IS NOT NULL",
             name="ck_submission_lean_requires_static",
@@ -229,8 +245,11 @@ class ScoreSnapshot(Base):
             "benchmark_aggregations.id", ondelete="RESTRICT", name="fk_scoresnapshot_aggregation"
         ),
     )
-    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
-    # The submission the hotkey was scored on (their best accepted at the time).
+    hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    baseline_key: Mapped[str | None] = mapped_column(Text)
+    burn_reason: Mapped[str | None] = mapped_column(Text)
+    payable_weight: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    # Point identity independent of payout ownership.
     submission_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("submissions.id", ondelete="SET NULL")
     )
@@ -396,6 +415,9 @@ class BenchmarkAggregation(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     calculator_version: Mapped[str] = mapped_column(Text, nullable=False)
+    input_key: Mapped[str | None] = mapped_column(Text, unique=True)
+    context: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    statistics: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

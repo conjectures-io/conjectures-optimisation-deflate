@@ -488,3 +488,11 @@ available for `bench-import`. Retrying returns the existing run ID. Multiple pat
 accepted; each file is committed independently. Old single-candidate v3 JSONL files are
 supported. Old merged multi-candidate reports are rejected because they discarded
 reference samples. Importing requires neither corpus/source files nor a Rust build.
+
+### Baseline frontier and database aggregation
+
+`just baseline-seed --corpus corpus-stage1 --corpus corpus-stage2` incrementally verifies
+and benchmarks the reference submissions into the database. Use `--overwrite` for fresh
+measurements, preserving history. `just weights-preview --out-dir data/benchmark-reports/baselines`
+plots the resulting frontier and baseline burn allocations. See [operations](docs/OPERATIONS.md)
+and [scoring](docs/SCORING.md) for aggregation inputs, timing uncertainty and payout eligibility.

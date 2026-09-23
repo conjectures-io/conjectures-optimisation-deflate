@@ -32,7 +32,8 @@ class SubmissionView(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     id: int
-    hotkey: str
+    hotkey: str | None
+    baseline_key: str | None = None
     digest: str
     submitted_at: str
     state: str
@@ -46,7 +47,8 @@ class SubmissionView(BaseModel):
 class Ranking(BaseModel):
     rank: int
     submission: int
-    hotkey: str
+    hotkey: str | None
+    baseline_key: str | None = None
     bytes: int
     vs_incumbent: float | None = None
     time_ratio: float | None = None

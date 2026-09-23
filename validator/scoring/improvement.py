@@ -47,8 +47,12 @@ def improvement_events(history: Sequence[ScoredSubmission], threshold: float) ->
     submits next.
     """
     events: list[Improvement] = []
-    best: float = float("inf")
+    best: float = min(
+        (float(s.bytes) for s in history if s.baseline_key is not None), default=float("inf")
+    )
     for s in sorted(history, key=lambda s: (s.submitted_at, s.submission_id)):
+        if s.baseline_key is not None:
+            continue
         # The incumbent is the floor the round starts from and re-floors on promotion.
         best = min(best, float(s.incumbent_bytes)) if s.incumbent_bytes else best
         if best == float("inf"):
