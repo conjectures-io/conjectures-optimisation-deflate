@@ -206,6 +206,21 @@ class SubmissionsDb:
                 session.expunge(row)
             return row
 
+    def files(self, sub_id: int) -> dict[str, bytes]:
+        """The submission's files as stored in the database, by name; empty if it has none.
+
+        Only submissions queued through the conjectures platform API have any: that API runs
+        apart from the gate host, so it cannot write the gate's submission directory. This
+        repository's own service writes the directory instead.
+        """
+        with session_scope(self._sessions) as session:
+            rows = session.execute(
+                select(models.SubmissionFile.name, models.SubmissionFile.content).where(
+                    models.SubmissionFile.submission_id == sub_id
+                )
+            ).all()
+            return {name: bytes(content) for name, content in rows}
+
     def pending_from(self, hotkey: str) -> int:
         # How many of this hotkey's submissions are queued or being verified.
         with session_scope(self._sessions) as session:

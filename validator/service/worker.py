@@ -27,6 +27,7 @@ import db
 from db import SubmissionState, models
 
 from .settings import Settings, load
+from .storage import NAMES, write_submission
 
 VALIDATOR = Path(__file__).resolve().parent.parent
 VERIFY = VALIDATOR / "verifier/verify.py"
@@ -135,6 +136,27 @@ def run_gate(
             )
 
 
+def materialize(store: db.Store, sub_id: int, directory: Path) -> bool:
+    """Write a submission's database-held files into its submission directory.
+
+    verify.py reads the directory `service.settings` names for the id, whichever path queued
+    the submission. A submission queued through the platform API arrives with its files in
+    `submission_files` and no directory, since that API shares no disk with this host; one
+    queued through this repository's own service already has its directory and nothing in the
+    table. Returns whether anything was written.
+
+    The database copy wins when both exist: it is the one the submitter's signature covers,
+    through the digest, and a directory left over from an earlier run must not stand in for it.
+    """
+    files = store.submissions.files(sub_id)
+    if not files:
+        return False
+    if set(files) != set(NAMES):
+        raise ValueError(f"submission {sub_id} stores {sorted(files)}, not {list(NAMES)}")
+    write_submission(directory, files["parse.rs"], files["Parse.lean"])
+    return True
+
+
 def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> str:
     """Verify one claimed submission and record the outcome. Returns its final state.
 
@@ -144,11 +166,20 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
     """
     label = sub.hotkey or sub.baseline_key or "unknown"
     logger.info(f"[worker] verifying submission {sub.id} ({label[:8]}…)")
+    directory = settings.submission_dir(sub.id)
+    try:
+        materialize(store, sub.id, directory)
+    except ValueError as exc:
+        # A row the platform wrote wrongly is the validator's problem, not the miner's: back
+        # on the queue uncharged, and the loop stops so an operator sees it.
+        logger.error(f"[worker] submission {sub.id}: {exc}")
+        store.submissions.requeue(
+            sub.id, expected_claim=sub.claimed_at, expected_attempt=sub.verification_attempt
+        )
+        return SubmissionState.ERROR.value
     with tempfile.TemporaryDirectory(prefix=f"score-{sub.id}-") as tmp:
         results = Path(tmp) / "results.json"
-        result = run_gate(
-            settings.submission_dir(sub.id), results, sub.claimed_at, sub.verification_attempt
-        )
+        result = run_gate(directory, results, sub.claimed_at, sub.verification_attempt)
         measured = scored(results) if result.returncode == 0 else {}
     report = result.stdout
     state = STATE_OF_EXIT.get(result.returncode)
