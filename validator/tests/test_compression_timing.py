@@ -123,6 +123,7 @@ def test_database_stores_stages_and_scores_total_time(store, tmp_path):
     points = store.scoring.scoring_inputs()
     assert len(points) == 1
     assert points[0].time_s == 101 and points[0].incumbent_seconds == 11
+    assert points[0].pareto_time == pytest.approx(101 / 11)
 
 
 @pytest.mark.parametrize("problem", ["missing", "negative", "nonfinite", "sum", "missing_encoder"])

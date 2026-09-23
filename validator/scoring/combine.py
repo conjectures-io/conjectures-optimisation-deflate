@@ -37,13 +37,18 @@ class HotkeyScore:
     baseline_key: str | None = None
     burn_reason: str | None = None
     payable_weight: float = 0.0
+    normalized_time_ratio: float | None = None
 
     @property
     def combined_weight(self) -> float:
         return self.pareto_weight + self.improvement_weight
 
     def as_snapshot(self) -> dict:
-        return dc.asdict(self) | {"combined_weight": self.combined_weight}
+        snapshot = dc.asdict(self)
+        # The dimensionless coordinate is recoverable from aggregation evidence.
+        # Keep the historical snapshot time_s column in actual seconds.
+        snapshot.pop("normalized_time_ratio")
+        return snapshot | {"combined_weight": self.combined_weight}
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -90,6 +95,8 @@ def score(
     """
     import json
 
+    if len({s.normalized_time_ratio is not None for s in [*submissions, *history]}) > 1:
+        raise ValueError("cannot mix absolute and relative time coordinates")
     contexts = {json.dumps(s.context, sort_keys=True) for s in [*submissions, *history]}
     if len(contexts) > 1:
         raise ValueError("cannot score incomparable evaluation contexts")
@@ -138,6 +145,7 @@ def score(
                 s.baseline_key,
                 reason,
                 payable,
+                s.normalized_time_ratio,
             )
         )
     return Scoring(tuple(scores), frontier, tuple(improvements), eligible_hotkeys is not None)

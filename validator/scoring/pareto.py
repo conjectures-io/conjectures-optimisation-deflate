@@ -19,6 +19,7 @@ this round. A point's normalized position must not move because someone else ent
 from __future__ import annotations
 
 import dataclasses as dc
+import math
 from collections.abc import Callable, Sequence
 
 # The gate rejects anything slower than this multiple of the incumbent, so the time
@@ -294,9 +295,69 @@ def corner_coefficient(a, b, m, coef_max, coef_min):
     return 1.0 - d * (1.0 - coef_min)
 
 
+def improvement_factors(front, *, incremental=False, logarithmic=False):
+    """Two equal axis budgets; no external reference or compression threshold.
+
+    Total: each point's gain from the worst time / ratio, divided by the sum
+    of all point gains on that axis.
+    Incremental: time gained over the next slower point / entire time range,
+    plus ratio gained over the previous worse-compressing point / ratio range.
+    The worst point on each axis gets zero on that axis. Each axis sums to one.
+    Logarithmic gains use log(worse / better), so equal proportional reductions
+    receive equal credit. Both axes must be finite and strictly positive.
+    """
+    ordered = sorted(front, key=lambda p: p.time_s)
+    if logarithmic and any(
+        not math.isfinite(value) or value <= 0
+        for point in ordered
+        for value in (point.time_s, point.ratio_pct)
+    ):
+        raise ValueError("log improvement space requires finite positive time and ratio")
+    if not ordered:
+        return {}
+    if len(ordered) == 1:
+        return {ordered[0].name: 1.0}
+
+    def gain(worse, better):
+        difference = max(0.0, worse - better)
+        if not logarithmic:
+            return difference
+        relative = difference / better
+        # log1p preserves tiny genuine improvements; log subtraction avoids overflow.
+        return (
+            math.log1p(relative) if math.isfinite(relative) else math.log(worse) - math.log(better)
+        )
+
+    times, ratios = {}, {}
+    for i, point in enumerate(ordered):
+        slower = ordered[i + 1] if incremental and i + 1 < len(ordered) else ordered[-1]
+        worse = ordered[i - 1] if incremental and i > 0 else ordered[0]
+        times[point.name] = gain(slower.time_s, point.time_s)
+        ratios[point.name] = gain(worse.ratio_pct, point.ratio_pct)
+    total_time, total_ratio = sum(times.values()), sum(ratios.values())
+    return {
+        p.name: 0.5 * (times[p.name] / total_time if total_time else 1 / len(ordered))
+        + 0.5 * (ratios[p.name] / total_ratio if total_ratio else 1 / len(ordered))
+        for p in ordered
+    }
+
+
+def adjusted_local_global(front, bounds=None, *, incremental=False, logarithmic=False):
+    base = local_global_weights(front, bounds)
+    factors = improvement_factors(front, incremental=incremental, logarithmic=logarithmic)
+    raw = {name: weight * factors[name] for name, weight in base.items()}
+    total = sum(raw.values())
+    return {name: value / total for name, value in raw.items()} if total else base
+
+
+def local_global_improvement_space_log_weights(front, bounds=None) -> Weights:
+    """Local-global multiplied by equally weighted log time and ratio gap budgets."""
+    return adjusted_local_global(front, bounds, incremental=True, logarithmic=True)
+
+
 # ── The registry ──────────────────────────────────────────────────────────
 
-# Methods remain available for comparison; local-global is the selected competition default.
+# Methods remain available for comparison; the log improvement-space variant is the default.
 METHODS: dict[str, WeightFn] = {
     "hypervolume": hypervolume_weights,
     "hypervolume-normalized": normalized_hypervolume_weights,
@@ -306,9 +367,10 @@ METHODS: dict[str, WeightFn] = {
     "diagonal-sweep-k0.33": lambda front, bounds: diagonal_sweep_weights(front, bounds, k=1 / 3),
     "diagonal-sweep-k3.0": lambda front, bounds: diagonal_sweep_weights(front, bounds, k=3.0),
     "local-global": local_global_weights,
+    "local-global-improvement-space-log": local_global_improvement_space_log_weights,
 }
 
-DEFAULT_METHOD = "local-global"
+DEFAULT_METHOD = "local-global-improvement-space-log"
 
 
 def weigh(front, bounds: Boundaries, method: str = DEFAULT_METHOD) -> Weights:

@@ -406,3 +406,53 @@ def test_preview_recalculates_historical_evidence_without_publication(store, inv
     assert store.scoring.preview_inputs() == []
     with pytest.raises(ValueError, match="requested aggregation"):
         store.scoring.preview_inputs(aggregation_ids=[aid])
+
+
+def test_relative_timing_balances_files_and_corpora(store):
+    from copy import deepcopy
+
+    from bench.storage import sha256
+    from db.aggregation import reduce_runs, timing_statistics
+
+    with store.sessions.begin() as session:
+        one = measured_row(session)
+        two = measured_row(session, "two")
+        large = deepcopy(one.raw_data[1])
+        large["file"], large["sha256"], large["raw_bytes"] = "large", "e" * 64, 100000
+        one.raw_data.append(large)
+        # First corpus: file ratios 2 and 0.5. Second corpus: file ratio 3.
+        for record, candidate, incumbent in (
+            (one.raw_data[1], 2.0, 1.0),
+            (large, 500.0, 1000.0),
+            (two.raw_data[1], 30.0, 10.0),
+        ):
+            methods = record["methods"]
+            assert isinstance(methods, dict)
+            for name, time in (("candidate", candidate), ("incumbent", incumbent)):
+                for rep in methods[name]["reps"]:
+                    rep.update(time_s=time, encode_s=0.0, total_s=time)
+        for row in (one, two):
+            row.corpus_sha256 = sha256(
+                sorted((f["file"], f["sha256"], f["raw_bytes"]) for f in row.raw_data[1:])
+            )
+        values = reduce_runs([one, two])
+        assert values.balanced_time_ratio == pytest.approx(((2 + 0.5) / 2 + 3) / 2)
+        assert values.compression_seconds == 532
+        assert values.time_ratio == pytest.approx(532 / 1011)
+        stats = timing_statistics([one, two], draws=100)
+        intervals = stats["intervals"]
+        assert isinstance(intervals, dict)
+        assert intervals["balanced_time_ratio"] == pytest.approx([2.125, 2.125])
+
+
+def test_relative_timing_rejects_zero_file_incumbent(store):
+    from db.aggregation import reduce_runs
+
+    with store.sessions.begin() as session:
+        row = measured_row(session)
+        methods = row.raw_data[1]["methods"]
+        assert isinstance(methods, dict)
+        for rep in methods["incumbent"]["reps"]:
+            rep.update(time_s=0.0, encode_s=0.0, total_s=0.0)
+        with pytest.raises(ValueError, match="positive"):
+            reduce_runs([row])

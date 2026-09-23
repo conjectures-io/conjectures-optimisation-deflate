@@ -148,7 +148,7 @@ def validate_evidence(row: BenchmarkRun) -> Run:
     return run
 
 
-CALCULATOR_VERSION = "compression-balanced-v4"
+CALCULATOR_VERSION = "compression-relative-time-v5"
 
 
 @dataclass(frozen=True)
@@ -164,6 +164,7 @@ class Aggregated:
 
     ratio_pct: float
     incumbent_ratio_pct: float
+    balanced_time_ratio: float
 
     @property
     def byte_weighted_ratio_pct(self) -> float:
@@ -240,6 +241,41 @@ def compression_statistics(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
     }
 
 
+def relative_timing_statistics(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
+    """Equal-corpus mean of per-nonempty-file ratios of median total times."""
+    corpora = []
+    for row in sorted(rows, key=lambda row: row.corpus):
+        run = validate_evidence(row)
+        ratios = []
+        for file in run.files:
+            if file.raw_bytes == 0:
+                continue
+            candidate = file.methods[row.candidate_method].total_s
+            incumbent = file.methods[INCUMBENT].total_s
+            if candidate is None or incumbent is None or candidate <= 0 or incumbent <= 0:
+                raise ValueError(f"{file.file}: positive per-file compression times required")
+            ratio = candidate / incumbent
+            if not math.isfinite(ratio):
+                raise ValueError("nonfinite per-file time ratio")
+            ratios.append(ratio)
+        if not ratios:
+            raise ValueError(f"{row.corpus}: relative timing requires nonempty files")
+        corpora.append(
+            {
+                "corpus": row.corpus,
+                "files": len(ratios),
+                "time_ratio": statistics.mean(ratios),
+            }
+        )
+    if not corpora:
+        raise ValueError("at least one corpus required")
+    return {
+        "method": "equal-corpus-mean-of-per-file-median-time-ratios",
+        "time_ratio": statistics.mean(c["time_ratio"] for c in corpora),
+        "corpora": corpora,
+    }
+
+
 def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
     """Sum median times; balance compression ratios across files and corpora."""
     if not rows or len({r.corpus for r in rows}) != len(rows):
@@ -285,6 +321,7 @@ def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
         tuple(sorted(row.id for row in rows)),
         compression["ratio_pct"],
         compression["incumbent_ratio_pct"],
+        relative_timing_statistics(rows)["time_ratio"],
     )
 
 
@@ -338,7 +375,8 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
                 ("incumbent", [(run, INCUMBENT) for run in runs]),
             )
         },
-        "method": "paired-per-file-compression-bootstrap-v3",
+        "relative_timing": relative_timing_statistics(rows),
+        "method": "paired-per-file-compression-bootstrap-v4",
         "confidence": 0.95,
         "draws": draws,
         "scope": "within recorded runs only; excludes host drift and systematic bias",
@@ -353,19 +391,30 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
         "compression_seconds": [],
         "incumbent_seconds": [],
         "time_ratio": [],
+        "balanced_time_ratio": [],
     }
     for _ in range(draws):
         candidate = incumbent = 0.0
+        corpus_ratios = []
         for row, run in zip(rows, runs, strict=True):
             n = run.meta.measured_rounds
+            file_ratios = []
             for file in run.files:
                 indices = [rng.randrange(n) for _ in range(n)]
-                candidate += statistics.median(
+                candidate_file = statistics.median(
                     [file.methods[row.candidate_method].measured_total[i] for i in indices]
                 )
-                incumbent += statistics.median(
+                incumbent_file = statistics.median(
                     [file.methods[INCUMBENT].measured_total[i] for i in indices]
                 )
+                candidate += candidate_file
+                incumbent += incumbent_file
+                if file.raw_bytes > 0:
+                    if incumbent_file <= 0:
+                        raise ValueError("zero per-file incumbent time in bootstrap resample")
+                    file_ratios.append(candidate_file / incumbent_file)
+            corpus_ratios.append(statistics.mean(file_ratios))
+        samples["balanced_time_ratio"].append(statistics.mean(corpus_ratios))
         samples["compression_seconds"].append(candidate)
         samples["incumbent_seconds"].append(incumbent)
         if incumbent <= 0:
@@ -391,6 +440,7 @@ def evaluation_context(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
         "calculator": CALCULATOR_VERSION,
         "timing": "lz77+encode; median of paired stage sums per file",
         "compression": "equal-corpus-mean-of-nonempty-file-ratios",
+        "speed": "equal-corpus-mean-of-per-file-median-time-ratios",
     }
 
 

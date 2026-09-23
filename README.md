@@ -413,7 +413,7 @@ just bench-report                                              # score, floor ve
 just bench-compare data/benchmark-runs/A.jsonl data/benchmark-runs/B.jsonl   # two runs of the same code must agree
 ```
 
-With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; each candidate is measured with the incumbent only by default. Set `VERIFY_BENCH_BARS=1` to include the external `miniz_oxide` and `libdeflate` references for local comparison; `--no-bars` explicitly disables them. This default also applies to `just bench-db` and `just baseline-seed`. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Every warmup and measured round runs both LZ77 and the shared DEFLATE encoder. The harness records LZ77 time, encoding time, and their paired sum separately. Speed scoring, the speed floor, and the Pareto time axis use the sum of per-file median **total compression times**, excluding warmups. The median total is computed from each repetition’s stage sum, not by adding stage medians. File I/O, token hashing, and decompression checks are outside the timers; token hashes still detect nondeterminism every round. Runs record the sha256 of every source and corpus file and are never overwritten.
+With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; each candidate is measured with the incumbent only by default. Set `VERIFY_BENCH_BARS=1` to include the external `miniz_oxide` and `libdeflate` references for local comparison; `--no-bars` explicitly disables them. This default also applies to `just bench-db` and `just baseline-seed`. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Every warmup and measured round runs both LZ77 and the shared DEFLATE encoder. The harness records LZ77 time, encoding time, and their paired sum separately. Benchmark summaries and the speed floor use the sum of per-file median **total compression times**, excluding warmups. The Pareto speed axis uses per-file candidate/incumbent ratios of these median totals, averaged equally within each corpus and then equally across corpora. The median total is computed from each repetition’s stage sum, not by adding stage medians. File I/O, token hashing, and decompression checks are outside the timers; token hashes still detect nondeterminism every round. Runs record the sha256 of every source and corpus file and are never overwritten.
 
 ### Memory and CPU limits: systemd user setup
 
@@ -500,7 +500,8 @@ and [scoring](docs/SCORING.md) for aggregation inputs, timing uncertainty and pa
 ### Compression timing protocol (v4)
 
 `just bench` and `just bench-db` report `lz77`, `encode`, and `total` seconds.
-`just weights-preview` plots total compression time. The shared encoder's cost
+`just weights-preview` uses equal-corpus, equal-file mean candidate/incumbent
+total-time ratios for the Pareto speed axis; absolute times remain telemetry. The shared encoder's cost
 therefore counts toward a submission's speed, including savings from fewer tokens.
 External reference compressors report their full compression time with no stage split.
 The token output buffer is allocated before timing; allocation inside LZ77 and the
@@ -538,7 +539,8 @@ Use repeated `--aggregation-id ID` to choose earlier evidence explicitly.
 `data/benchmark-reports/current/` by default (overwriting the previous preview).
 Use `--out-dir PATH` to choose another directory. The figures are:
 
-- `pareto.png`: total compression time versus size, submission allocations (hatched
+- `pareto.png`: mean per-file time relative to the incumbent versus compression ratio,
+  submission allocations (hatched
   portions burn), and a square normalized frontier. Normalization uses the frontier's
   time and size extremes, matching the global part of `local-global`; a constant axis
   maps to zero. Dominated points appear only in the original-coordinate panel.
@@ -556,3 +558,27 @@ Use `--out-dir PATH` to choose another directory. The figures are:
 
 Algorithm colours are shared across all figures. Plots use the selected aggregations'
 DB evidence and require no local JSONL files.
+
+
+To compare experimental Pareto weights on synthetic frontiers, run:
+
+```bash
+.venv/bin/python scripts/pareto-weights.py
+```
+
+Reports are written to `data/spike/pareto/weights/`. `compare-*.png` compares all
+methods on the same points; `COPY-AUDIT.md` measures the combined reward of a
+point and its near-copies. Focused plots under `improvement-space-study/`
+compare local-global with the incremental improvement-space factor. Use
+`--method`, `--scenario` and `--out-dir` to narrow the experiment. The selected `local-global-improvement-space-log` method is now the live-scoring
+default; the remaining experimental methods are comparison-only.
+
+The spike also supports `improvement-space-log` and
+`local-global-improvement-space-log`. They measure each adjacent improvement as
+`log(worse / better)`, normalized by `log(worst / best)`, on both axes. Equal
+proportional improvements receive equal credit; equal absolute improvements
+receive more credit at lower values. Only the improvement factor changes in
+the combined variant; its local-global coefficients retain their linear definition.
+
+The default weight method is `local-global-improvement-space-log`. Set
+`SCORING_METHOD` to select a different registered method explicitly.

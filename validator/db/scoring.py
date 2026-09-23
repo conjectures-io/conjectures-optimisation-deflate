@@ -23,7 +23,9 @@ from .status import SubmissionState
 class ScoredSubmission:
     """One accepted submission, reduced to what scoring actually uses.
 
-    `time_s` and `ratio_pct` are the Pareto axes, both "lower is better". `ratio_pct` is
+    `pareto_time` and `ratio_pct` are the Pareto axes, both "lower is better".
+    `time_s` retains absolute seconds; current evidence supplies normalized_time_ratio.
+    `ratio_pct` is
     the equal-corpus mean of per-file compression percentages for current aggregations.
     Raw byte totals remain telemetry. Legacy standalone inputs use byte-weighted ratios.
     """
@@ -44,9 +46,14 @@ class ScoredSubmission:
     baseline_key: str | None = None
     context: dict[str, object] | None = None
 
+    normalized_time_ratio: float | None = None
     verification_current: bool | None = None
     normalized_ratio_pct: float | None = None
     normalized_incumbent_ratio_pct: float | None = None
+
+    @property
+    def pareto_time(self) -> float:
+        return self.normalized_time_ratio if self.normalized_time_ratio is not None else self.time_s
 
     @property
     def point_id(self) -> str:
@@ -196,7 +203,7 @@ class ScoringDb:
                     continue  # Invalidated evidence removes the point, not only its payout.
                 # A formula change may alter only aggregation metadata. Corpus,
                 # timing definition and measurement protocol must still agree.
-                ignored = {"calculator", "compression"} if preview else set()
+                ignored = {"calculator", "compression", "speed"} if preview else set()
                 stored_context = {
                     key: value for key, value in aggregation.context.items() if key not in ignored
                 }
@@ -234,6 +241,7 @@ class ScoringDb:
                         incumbent_bytes=aggregation.incumbent_bytes,
                         incumbent_seconds=aggregation.incumbent_seconds,
                         verification_current=row.verifier_fingerprint == current_fingerprint,
+                        normalized_time_ratio=values.balanced_time_ratio,
                         normalized_ratio_pct=values.ratio_pct,
                         normalized_incumbent_ratio_pct=values.incumbent_ratio_pct,
                         context=context,

@@ -110,3 +110,35 @@ def test_repetition_totals_hold_file_mix_constant():
     ]
     with pytest.raises(ValueError, match="equal nonzero"):
         timing_observations([(NS(files=[file([1]), file([2, 3])]), "candidate")])
+
+
+def test_relative_axis_and_intervals_preserve_absolute_telemetry(tmp_path, monkeypatch):
+    import matplotlib.figure
+
+    figures = {}
+    original = matplotlib.figure.Figure.savefig
+
+    def capture(self, filename, **kwargs):
+        figures[filename.name] = self
+        return original(self, filename, **kwargs)
+
+    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", capture)
+    p = point(1, 20, 30)
+    p.normalized_time_ratio = 0.5
+    provenance = {
+        "1": {
+            "timing": {
+                "intervals": {"balanced_time_ratio": [0.4, 0.6], "compression_seconds": [19, 21]},
+                "totals": {"candidate": {"lz77_s": 10}},
+            }
+        }
+    }
+    plot(NS(scores=[p]), tmp_path, provenance)
+    raw = figures["pareto.png"].axes[0]
+    assert raw.collections[0].get_offsets()[0][0] == 0.5
+    assert "incumbent" in raw.get_xlabel()
+    uncertain = figures["pareto-uncertainty.png"].axes[0]
+    segment = uncertain.collections[0].get_segments()[0]
+    assert list(segment[:, 0]) == [0.4, 0.6]
+    telemetry = figures["compression-vs-lz77.png"].axes[0]
+    assert list(telemetry.collections[0].get_offsets()[0]) == [10, 20]

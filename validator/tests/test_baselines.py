@@ -149,5 +149,5 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
     report_provenance = next(iter(payload["sources"].values()))
     assert report_provenance["verification_current"] is False
     assert report_provenance["source_calculator_version"] == "compression-median-v3"
-    assert report_provenance["calculator_version"] == "compression-balanced-v4"
+    assert report_provenance["calculator_version"] == "compression-relative-time-v5"
     assert report_provenance["compression"]["ratio_pct"] == payload["points"][0]["ratio_pct"]

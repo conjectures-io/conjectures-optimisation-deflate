@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> None:
     output = []
     telemetry = {row.submission_id: row.byte_weighted_ratio_pct for row in rows}
     previous = None
-    for s in sorted(result.scores, key=lambda s: s.time_s):
+    for s in sorted(result.scores, key=time_coordinate):
         key = str(s.submission_id)
         label = s.baseline_key or s.hotkey or key
         row = dataclasses.asdict(s) | {
@@ -116,14 +116,15 @@ def main(argv: list[str] | None = None) -> None:
         }
         if s.on_frontier:
             if previous is not None:
-                row["time_change_pct"] = 100 * (s.time_s / previous.time_s - 1)
+                row["time_change_pct"] = 100 * (time_coordinate(s) / time_coordinate(previous) - 1)
                 row["size_change_pct"] = (
                     100 * (s.ratio_pct / previous.ratio_pct - 1) if previous.ratio_pct else None
                 )
             previous = s
         output.append(row)
         print(
-            f"{s.submission_id:>5} {label:<18} {s.time_s:>9.5f}s {s.ratio_pct:>7.3f}% "
+            f"{s.submission_id:>5} {label:<18} {time_coordinate(s):>8.4f}x incumbent "
+            f"({s.time_s:.5f}s) {s.ratio_pct:>7.3f}% "
             f"frontier={s.on_frontier} pareto={s.pareto_weight:.5f} "
             f"recency={s.improvement_weight:.5f} payable={s.payable_weight:.5f} "
             f"{s.burn_reason or ''}"
@@ -171,16 +172,21 @@ def timing_observations(runs):
     ]
 
 
+def time_coordinate(point):
+    relative = getattr(point, "normalized_time_ratio", None)
+    return relative if relative is not None else point.time_s
+
+
 def normalize_frontier(ordered):
     """Global local-global coordinates; a degenerate axis maps to zero."""
     front = [s for s in ordered if s.on_frontier]
     if not front:
         return {}
-    t0, t1 = min(s.time_s for s in front), max(s.time_s for s in front)
+    t0, t1 = min(time_coordinate(s) for s in front), max(time_coordinate(s) for s in front)
     r0, r1 = min(s.ratio_pct for s in front), max(s.ratio_pct for s in front)
     return {
         s.submission_id: (
-            (s.time_s - t0) / (t1 - t0) if t1 > t0 else 0.0,
+            (time_coordinate(s) - t0) / (t1 - t0) if t1 > t0 else 0.0,
             (s.ratio_pct - r0) / (r1 - r0) if r1 > r0 else 0.0,
         )
         for s in front
@@ -195,7 +201,7 @@ def plot(result, directory, provenance=None, timings=None):
     from matplotlib.patches import Patch
 
     provenance, timings = provenance or {}, timings or {}
-    ordered = sorted(result.scores, key=lambda s: (s.time_s, s.submission_id))
+    ordered = sorted(result.scores, key=lambda s: (time_coordinate(s), s.submission_id))
     # Assign by identity, not speed rank, so every panel shares the same mapping.
     identities = sorted(s.submission_id for s in ordered)
     cmap = plt.get_cmap("tab20" if len(identities) <= 20 else "turbo")
@@ -203,6 +209,7 @@ def plot(result, directory, provenance=None, timings=None):
         key: cmap(i if len(identities) <= 20 else i / max(1, len(identities) - 1))
         for i, key in enumerate(identities)
     }
+    relative_time = any(getattr(s, "normalized_time_ratio", None) is not None for s in ordered)
     labels = [s.baseline_key or f"{s.hotkey}:{s.submission_id}" for s in ordered]
     front = [s for s in ordered if s.on_frontier]
     normalized = normalize_frontier(ordered)
@@ -214,14 +221,18 @@ def plot(result, directory, provenance=None, timings=None):
     def pareto(ax, *, normalize=False, uncertainty=False):
         selected = front if normalize else ordered
         coordinates = (
-            normalized if normalize else {s.submission_id: (s.time_s, s.ratio_pct) for s in ordered}
+            normalized
+            if normalize
+            else {s.submission_id: (time_coordinate(s), s.ratio_pct) for s in ordered}
         )
         for index, s in enumerate(selected):
             x, y = coordinates[s.submission_id]
             color = colors[s.submission_id]
             if uncertainty:
                 stats = provenance.get(str(s.submission_id), {}).get("timing", {})
-                interval = (stats.get("intervals") or {}).get("compression_seconds")
+                interval = (stats.get("intervals") or {}).get(
+                    "balanced_time_ratio" if relative_time else "compression_seconds"
+                )
                 if interval:
                     # Draw endpoints directly: a percentile interval need not contain the estimate.
                     ax.hlines(y, interval[0], interval[1], color=color, linewidth=2)
@@ -261,7 +272,9 @@ def plot(result, directory, provenance=None, timings=None):
         else:
             ax.margins(x=0.15, y=0.15)
             ax.set(
-                xlabel="Sum of per-file median compression seconds",
+                xlabel="Mean per-file time / incumbent (equal corpus weights)"
+                if relative_time
+                else "Sum of per-file median compression seconds",
                 ylabel="Mean file compression ratio, equal corpus weights (%)",
                 title="Compression Pareto",
             )

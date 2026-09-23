@@ -52,18 +52,33 @@ own docstring predicted:
   against the 100% ratio ceiling and nothing real is near it: even a literals-only parser
   reaches 63.5%.
 
-**local-global** is the default. For a point between faster/worse A and slower/better B,
+**local-global-improvement-space-log** is the default. For a point between faster/worse A and slower/better B,
 normalize its time and compression ratio within their rectangle to t and r. The default
 coefficient is `2 - t - r`: 1 on the straight trade-off, greater on the better side.
 The local coefficient uses immediate neighbours (endpoints get 1); the global coefficient
-uses the frontier extremes. Multiply the two, normalize across all frontier points, then
-multiply by the Pareto emission share. A singleton receives the entire Pareto share.
+uses the frontier extremes. Multiply both coefficients by the logarithmic improvement
+space factor, then normalize across frontier points and multiply by the Pareto share.
+For points sorted by increasing time, the factor is the mean of:
+
+- `log(t_next / t_i) / log(t_max / t_min)`, zero for the slowest point;
+- `log(r_previous / r_i) / log(r_max / r_min)`, zero for the worst compression ratio.
+
+This splits a fixed improvement budget on each axis. Equal proportional gains receive
+equal credit; a fixed absolute gain receives more credit at lower values. Local-global
+coefficients themselves remain linear. Both axes must be positive and finite. A singleton receives the entire Pareto share.
 Other methods, including elbow-sweetspot, remain selectable for comparisons.
 
 Local-global does not use the external speed limit in its formula. Acceptance still
-requires time no greater than 8 times the paired incumbent. Timing is the sum of per-file
-medians of the paired LZ77 + encoding times for each measured repetition, excluding
-warmups. Stage medians are kept for telemetry, but their sum is not the scored statistic. The scored compression ratio is the arithmetic mean of per-file compressed/raw
+requires time no greater than 8 times the paired incumbent. The Pareto time coordinate is now the arithmetic mean of per-file
+candidate/incumbent median total-time ratios within each corpus, then the equal-weight
+mean across corpora. Total time means paired LZ77 + encoding time, excluding warmups.
+A coordinate of 1 means incumbent performance; lower is better. Nonempty files count
+equally regardless of size. Empty files are excluded from both balanced metrics but
+remain in absolute telemetry. Positive per-file median times are required.
+The absolute sum of per-file medians remains telemetry and still supplies the existing
+8x acceptance check. The dimensionless Pareto coordinate has its own paired bootstrap
+interval (`balanced_time_ratio`); it is not the ratio of summed times.
+Recalculation reuses retained evidence; preview automatically applies the new formula. Stage medians are kept for telemetry, but their sum is not the scored statistic. The scored compression ratio is the arithmetic mean of per-file compressed/raw
 ratios within each corpus, then the equally weighted mean across corpora. Empty
 files are excluded from this ratio (an all-empty corpus is rejected), but their
 bytes and timings remain in telemetry. Total compressed/raw bytes is retained
@@ -139,7 +154,7 @@ all selected points must share one evaluation context; incompatible contexts sto
 Aggregations retain exact run IDs, source hash, calculator version, environment/build
 provenance and timing statistics. Per-file sample standard deviation describes repetition
 spread. A deterministic paired per-file bootstrap provides percentile 95% intervals for
-summed median times and their ratio. Intervals with fewer than ten measured rounds are
+summed median times, their ratio, and the balanced per-file time-ratio coordinate. Intervals with fewer than ten measured rounds are
 flagged sparse; fewer than two means no interval. They do not capture systematic bias or
 between-run host drift and do not affect rewards.
 
@@ -148,10 +163,13 @@ aggregate report and plot. `--aggregation-id ID` may be repeated to inspect sele
 stored evidence for previously verified, accepted submission identities. Reports include exact
 inputs and scoring configuration; historical weight-set snapshots remain unchanged.
 
-Current aggregation version is `compression-balanced-v4`, using schema-v4 measurements.
+Current aggregation version is `compression-relative-time-v5`, using schema-v4 measurements.
 Encoding runs on every repetition, and hashing/decompression checks remain outside
 both stage timers. Per-file LZ77, encoding and total timing statistics are retained;
-bootstrap intervals apply to total compression time and the total-time ratio.
+bootstrap intervals apply to total compression time, the total-time ratio, and the
+balanced per-file time ratio used on the Pareto axis. Historical snapshot `time_s`
+columns retain absolute seconds; the relative coordinate is derived from the linked
+aggregation evidence and is exported explicitly as `normalized_time_ratio` in previews.
 Legacy LZ77-only aggregations cannot enter the current frontier; they require new
 measurements. No synthetic totals are backfilled from the old single encoding sample.
 

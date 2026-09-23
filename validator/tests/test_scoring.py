@@ -321,3 +321,19 @@ def test_baselines_establish_record_without_recent_improvement_events():
     assert scoring.improvement_events([baseline, no_improvement], 0.0025) == []
     result = scoring.score([baseline], [baseline], CONFIG, eligible_hotkeys=set())
     assert result.burn_weight == 1
+
+
+def test_relative_time_drives_frontier_while_snapshots_keep_seconds():
+    fast_absolute = dc.replace(sub("a", 100, 1, sid=1), normalized_time_ratio=2)
+    fast_relative = dc.replace(sub("b", 100, 10, sid=2), normalized_time_ratio=0.5)
+    points = [fast_absolute, fast_relative]
+    result = scoring.score(points, points, CONFIG)
+    assert result.frontier.frontier == ("2",)
+    assert result.frontier.points["2"].time_s == 0.5
+    assert result.frontier.bounds.time_s == CONFIG.speed_floor
+    selected = next(s for s in result.scores if s.submission_id == 2)
+    assert selected.normalized_time_ratio == 0.5 and selected.time_s == 10
+    assert selected.as_snapshot()["time_s"] == 10
+    assert "normalized_time_ratio" not in selected.as_snapshot()
+    with pytest.raises(ValueError, match="absolute and relative"):
+        scoring.score(points, [dc.replace(fast_absolute, normalized_time_ratio=None)], CONFIG)
