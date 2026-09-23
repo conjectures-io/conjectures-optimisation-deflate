@@ -5,8 +5,9 @@ a knee forever. This component is the part of emission that only exists while th
 competition is still moving, and it decays, so yesterday's breakthrough fades rather
 than becoming an annuity.
 
-An improvement is measured on bytes, the competition's headline metric: lower wins, and
-the leaderboard has always ranked on it. A submission that is merely faster at the same
+An improvement is measured on the balanced compression ratio: lower wins.
+Legacy standalone callers without aggregation metrics retain byte comparisons.
+A submission that is merely faster at the same
 size does not move the record -- it may well be a new frontier point, and the other 60%
 is where it is paid for that.
 """
@@ -31,9 +32,10 @@ class Improvement:
     bytes: int
     # The record it beat, and by how much, relative. Kept so a snapshot can say why a
     # submission counted.
-    previous_best: int
+    previous_best: float
     relative_gain: float
     at: dt.datetime
+    metric: str = "bytes"
 
 
 def improvement_events(history: Sequence[ScoredSubmission], threshold: float) -> list[Improvement]:
@@ -46,29 +48,40 @@ def improvement_events(history: Sequence[ScoredSubmission], threshold: float) ->
     mid-round raises the bar rather than handing out a free improvement to whoever
     submits next.
     """
+    normalized = any(s.normalized_ratio_pct is not None for s in history)
+    if normalized and any(
+        s.normalized_ratio_pct is None or s.normalized_incumbent_ratio_pct is None for s in history
+    ):
+        raise ValueError("mixed compression metrics")
+
+    def metric(s):
+        return s.ratio_pct if normalized else float(s.bytes)
+
     events: list[Improvement] = []
     best: float = min(
-        (float(s.bytes) for s in history if s.baseline_key is not None), default=float("inf")
+        (metric(s) for s in history if s.baseline_key is not None), default=float("inf")
     )
     for s in sorted(history, key=lambda s: (s.submitted_at, s.submission_id)):
         if s.baseline_key is not None:
             continue
         # The incumbent is the floor the round starts from and re-floors on promotion.
-        best = min(best, float(s.incumbent_bytes)) if s.incumbent_bytes else best
+        incumbent = s.normalized_incumbent_ratio_pct if normalized else s.incumbent_bytes
+        best = min(best, float(incumbent)) if incumbent else best
         if best == float("inf"):
-            best = float(s.bytes)
-        if s.bytes <= best * (1.0 - threshold):
+            best = metric(s)
+        if metric(s) < best and metric(s) <= best * (1.0 - threshold):
             events.append(
                 Improvement(
                     submission_id=s.submission_id,
                     hotkey=s.hotkey,
                     bytes=s.bytes,
-                    previous_best=int(best),
-                    relative_gain=(best - s.bytes) / best,
+                    previous_best=best,
+                    relative_gain=(best - metric(s)) / best,
                     at=s.submitted_at,
+                    metric="ratio_pct" if normalized else "bytes",
                 )
             )
-            best = float(s.bytes)
+            best = metric(s)
     return events
 
 

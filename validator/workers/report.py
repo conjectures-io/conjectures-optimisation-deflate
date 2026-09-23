@@ -36,12 +36,18 @@ def main(argv: list[str] | None = None) -> None:
         }
     store = db.connect()
     try:
-        rows = store.scoring.scoring_inputs(aggregation_ids=args.aggregation_id)
+        rows = store.scoring.preview_inputs(aggregation_ids=args.aggregation_id)
         from sqlalchemy import select
 
-        from db.aggregation import validate_evidence
+        from db.aggregation import (
+            CALCULATOR_VERSION,
+            compression_statistics,
+            timing_statistics,
+            validate_evidence,
+        )
         from db.models import BenchmarkAggregation, BenchmarkAggregationInput, BenchmarkRun
 
+        print(f"Recalculating preview from stored benchmark evidence: {len(rows)} submissions.")
         provenance = {}
         timings = {}
         with store.sessions() as session:
@@ -64,7 +70,10 @@ def main(argv: list[str] | None = None) -> None:
                 provenance[str(row.submission_id)] = {
                     "source_sha256": aggregation.source_sha256,
                     "aggregation_id": aggregation.id,
-                    "calculator_version": aggregation.calculator_version,
+                    "calculator_version": CALCULATOR_VERSION,
+                    "source_calculator_version": aggregation.calculator_version,
+                    "recalculated": True,
+                    "verification_current": row.verification_current,
                     "run_ids": list(
                         session.scalars(
                             select(BenchmarkAggregationInput.run_id).where(
@@ -73,11 +82,17 @@ def main(argv: list[str] | None = None) -> None:
                         )
                     ),
                     "timing": {
-                        k: v for k, v in (aggregation.statistics or {}).items() if k != "files"
+                        k: v for k, v in timing_statistics(run_rows).items() if k != "files"
                     },
+                    "compression": compression_statistics(run_rows),
                 }
     finally:
         store.close()
+    if any(row.verification_current is False for row in rows):
+        print(
+            "Historical verification used for preview; current live-scoring eligibility "
+            "is not implied."
+        )
     result = scoring.score(rows, rows, config, eligible_hotkeys=eligible)
     print(f"method={config.method} points={len(rows)} frontier={len(result.frontier.frontier)}")
     if eligible is None:
@@ -87,11 +102,14 @@ def main(argv: list[str] | None = None) -> None:
     local = local_coefficients(front, 2.0, 0.0) if front else {}
     glob = global_coefficients(front, 2.0, 0.0) if front else {}
     output = []
+    telemetry = {row.submission_id: row.byte_weighted_ratio_pct for row in rows}
     previous = None
     for s in sorted(result.scores, key=lambda s: s.time_s):
         key = str(s.submission_id)
         label = s.baseline_key or s.hotkey or key
         row = dataclasses.asdict(s) | {
+            "ratio_pct": s.ratio_pct,
+            "byte_weighted_ratio_pct": telemetry[s.submission_id],
             "label": label,
             "local": local.get(key),
             "global": glob.get(key),
@@ -120,6 +138,7 @@ def main(argv: list[str] | None = None) -> None:
             "points": output,
             "context": rows[0].context if rows else None,
             "registration_eligibility_known": result.eligibility_known,
+            "preview_recalculated": True,
             "burn": result.burn_weight,
         }
         (args.out_dir / "scores.json").write_text(json.dumps(payload, indent=2, allow_nan=False))
@@ -243,7 +262,7 @@ def plot(result, directory, provenance=None, timings=None):
             ax.margins(x=0.15, y=0.15)
             ax.set(
                 xlabel="Sum of per-file median compression seconds",
-                ylabel="Compressed / raw (%)",
+                ylabel="Mean file compression ratio, equal corpus weights (%)",
                 title="Compression Pareto",
             )
         ax.grid(alpha=0.15)

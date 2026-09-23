@@ -251,3 +251,158 @@ def test_invalid_evidence_cannot_be_aggregated(store, problem):
         with pytest.raises(ValueError):
             reduce_runs([row])
         session.rollback()
+
+
+def test_balanced_compression_ratios(store):
+    from copy import deepcopy
+
+    from bench.storage import sha256
+    from db.aggregation import compression_statistics, reduce_runs
+
+    with store.sessions.begin() as session:
+        one = measured_row(session)
+        two = measured_row(session, "two")
+        large = deepcopy(one.raw_data[1])
+        large["file"] = "large.txt"
+        large["sha256"] = "e" * 64
+        large["raw_bytes"] = 10000
+        methods = large["methods"]
+        assert isinstance(methods, dict)
+        methods["candidate"]["output_bytes"] = 9000
+        methods["incumbent"]["output_bytes"] = 8000
+        one.raw_data.append(large)
+        methods = two.raw_data[1]["methods"]
+        assert isinstance(methods, dict)
+        methods["candidate"]["output_bytes"] = 10
+        for row in (one, two):
+            row.corpus_sha256 = sha256(
+                sorted((f["file"], f["sha256"], f["raw_bytes"]) for f in row.raw_data[1:])
+            )
+        values = reduce_runs([one, two])
+        # Corpus one: mean(30%, 90%) = 60%; corpus two: 10%.
+        assert values.ratio_pct == pytest.approx(35)
+        assert values.incumbent_ratio_pct == pytest.approx(57.5)
+        assert values.byte_weighted_ratio_pct == pytest.approx(100 * 9040 / 10200)
+        stats = compression_statistics([two, one])
+        assert stats["ratio_pct"] == values.ratio_pct
+        corpora = stats["corpora"]
+        assert isinstance(corpora, list)
+        assert [c["ratio_pct"] for c in corpora] == [60, 10]
+
+
+def test_empty_files_excluded_from_ratio(store):
+    from bench.storage import sha256
+    from db.aggregation import reduce_runs
+
+    with store.sessions.begin() as session:
+        row = measured_row(session)
+        row.raw_data[1]["raw_bytes"] = 0
+        row.corpus_sha256 = sha256([("a.txt", "c" * 64, 0)])
+        with pytest.raises(ValueError, match="nonempty files"):
+            reduce_runs([row])
+
+
+def test_recency_uses_balanced_ratio():
+    from dataclasses import replace
+
+    from db.scoring import ScoredSubmission
+    from scoring.improvement import improvement_events
+
+    baseline = ScoredSubmission(
+        submission_id=1,
+        hotkey=None,
+        bytes=10,
+        raw_bytes=100,
+        time_s=1,
+        incumbent_bytes=50,
+        incumbent_seconds=1,
+        submitted_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        baseline_key="baseline",
+        normalized_ratio_pct=40,
+        normalized_incumbent_ratio_pct=50,
+    )
+    candidate = replace(
+        baseline,
+        submission_id=2,
+        hotkey="miner",
+        baseline_key=None,
+        bytes=20,
+        normalized_ratio_pct=30,
+    )
+    # More total bytes, but a better balanced ratio: it improves the record.
+    events = improvement_events([baseline, candidate], 0.01)
+    assert len(events) == 1
+    assert events[0].relative_gain == pytest.approx(0.25)
+    assert events[0].metric == "ratio_pct"
+    assert candidate.ratio_pct == 30
+    assert candidate.byte_weighted_ratio_pct == 20
+
+
+@pytest.mark.parametrize("invalid", ["revoked", "source", "unverified", "context"])
+def test_preview_recalculates_historical_evidence_without_publication(store, invalid):
+    from sqlalchemy import func, select
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from bench.storage import sha256
+    from db.aggregation import CALCULATOR_VERSION, aggregate, publish
+    from db.models import BenchmarkAggregation, Submission
+    from verifier.identity import required_fingerprint
+
+    with store.sessions.begin() as session:
+        runs = [measured_row(session), measured_row(session, "two")]
+        runs[1].raw_data[1]["raw_bytes"] = 1000
+        flag_modified(runs[1], "raw_data")
+        runs[1].corpus_sha256 = sha256([("a.txt", "d" * 64, 1000)])
+        result = aggregate(session, runs)
+        sub = Submission(
+            hotkey="miner",
+            digest="f" * 64,
+            state="accepted",
+            source_sha256="b" * 64,
+            proof_sha256="e" * 64,
+            verifier_fingerprint=required_fingerprint(),
+            static_verified_at=datetime.now(timezone.utc),
+            lean_verified_at=datetime.now(timezone.utc),
+        )
+        session.add(sub)
+        session.flush()
+        publish(session, sub.id, result.id)
+        # Simulate a published pre-formula-change aggregation and its old verification.
+        result.calculator_version = "compression-median-v3"
+        assert result.context is not None
+        result.context = {
+            **{k: v for k, v in result.context.items() if k != "compression"},
+            "calculator": "compression-median-v3",
+        }
+        sub.verifier_fingerprint = "0" * 64
+        aid, sid, rid = result.id, sub.id, runs[0].id
+
+    assert store.scoring.scoring_inputs() == []
+    points = store.scoring.preview_inputs()
+    assert len(points) == 1
+    assert points[0].ratio_pct == pytest.approx((30 + 3) / 2)
+    assert points[0].byte_weighted_ratio_pct == pytest.approx(100 * 60 / 1100)
+    assert points[0].verification_current is False
+    assert points[0].context["calculator"] == CALCULATOR_VERSION
+    assert store.scoring.preview_inputs(aggregation_ids=[aid]) == points
+    with store.sessions.begin() as session:
+        # Preview neither rewrites historical results nor updates verification stamps.
+        assert session.scalar(select(func.count()).select_from(BenchmarkAggregation)) == 1
+        saved = session.get(BenchmarkAggregation, aid)
+        sub = session.get(Submission, sid)
+        assert saved.calculator_version == "compression-median-v3"
+        assert sub.verifier_fingerprint == "0" * 64
+        assert sub.aggregation_id == aid
+        if invalid == "revoked":
+            run = session.get(BenchmarkRun, rid)
+            run.invalidated_at = datetime.now(timezone.utc)
+            run.invalidation_reason = "unreliable measurement"
+        elif invalid == "source":
+            sub.source_sha256 = "a" * 64
+        elif invalid == "unverified":
+            sub.lean_verified_at = None
+        else:
+            saved.context = {**saved.context, "corpora": [["different", "c" * 64]]}
+    assert store.scoring.preview_inputs() == []
+    with pytest.raises(ValueError, match="requested aggregation"):
+        store.scoring.preview_inputs(aggregation_ids=[aid])

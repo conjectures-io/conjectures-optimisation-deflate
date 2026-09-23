@@ -112,6 +112,17 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
             == 1
         )
 
+    # Formula upgrades and a historical verifier stamp do not hide preview evidence.
+    with store.sessions.begin() as session:
+        row = session.scalar(select(Submission).where(Submission.baseline_active))
+        row.verifier_fingerprint = "0" * 64
+        aggregation = session.get(BenchmarkAggregation, row.aggregation_id)
+        aggregation.calculator_version = "compression-median-v3"
+        aggregation.context = {
+            **{k: v for k, v in aggregation.context.items() if k != "compression"},
+            "calculator": "compression-median-v3",
+        }
+
     # Reports are reconstructed from DB evidence even after all local JSONL is removed.
     for path in (tmp_path / "data/benchmark-runs/baselines").glob("*.jsonl"):
         path.unlink()
@@ -133,3 +144,10 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "report/scores.json").read_text())
     assert payload["burn"] == 1
     assert payload["sources"]
+    assert len(payload["points"]) == 1
+    assert payload["preview_recalculated"]
+    report_provenance = next(iter(payload["sources"].values()))
+    assert report_provenance["verification_current"] is False
+    assert report_provenance["source_calculator_version"] == "compression-median-v3"
+    assert report_provenance["calculator_version"] == "compression-balanced-v4"
+    assert report_provenance["compression"]["ratio_pct"] == payload["points"][0]["ratio_pct"]

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from db.aggregation import (
     CorpusIdentity,
     aggregate,
+    compression_statistics,
     publish,
     reduce_runs,
     select_runs,
@@ -66,7 +67,10 @@ def main(argv: list[str] | None = None) -> int:
             rows = select_runs(session, source, args.corpus, args.run_id)
             if args.preview:
                 output = dataclasses.asdict(reduce_runs(rows)) | {
-                    "statistics": timing_statistics(rows)
+                    "statistics": {
+                        **timing_statistics(rows),
+                        "compression": compression_statistics(rows),
+                    }
                 }
             else:
                 result = aggregate(session, rows)

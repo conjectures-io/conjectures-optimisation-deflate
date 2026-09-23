@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import statistics
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -147,7 +148,7 @@ def validate_evidence(row: BenchmarkRun) -> Run:
     return run
 
 
-CALCULATOR_VERSION = "compression-median-v3"
+CALCULATOR_VERSION = "compression-balanced-v4"
 
 
 @dataclass(frozen=True)
@@ -161,8 +162,11 @@ class Aggregated:
     compression_seconds: float
     run_ids: tuple[int, ...]
 
+    ratio_pct: float
+    incumbent_ratio_pct: float
+
     @property
-    def ratio_pct(self) -> float:
+    def byte_weighted_ratio_pct(self) -> float:
         return 100 * self.bytes / self.raw_bytes
 
     @property
@@ -197,8 +201,47 @@ def compatibility(run: Run) -> tuple[object, ...]:
     )
 
 
+def compression_statistics(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
+    """Equal weight per nonempty file, then equal weight per corpus."""
+    corpora = []
+    raw = output = incumbent_output = 0
+    for row in sorted(rows, key=lambda row: row.corpus):
+        run = validate_evidence(row)
+        files = [file for file in run.files if file.raw_bytes > 0]
+        if not files:
+            raise ValueError(f"{row.corpus}: compression ratio requires nonempty files")
+        ratios = {}
+        for role, method in (("candidate", row.candidate_method), ("incumbent", INCUMBENT)):
+            ratios[role] = statistics.mean(
+                100 * file.methods[method].output_bytes / file.raw_bytes for file in files
+            )
+        corpora.append(
+            {
+                "corpus": row.corpus,
+                "files": len(files),
+                "empty_files": len(run.files) - len(files),
+                "ratio_pct": ratios["candidate"],
+                "incumbent_ratio_pct": ratios["incumbent"],
+            }
+        )
+        totals = run.totals(row.candidate_method)
+        raw += totals.raw_bytes
+        output += totals.output_bytes
+        incumbent_output += run.totals(INCUMBENT).output_bytes
+    if not corpora:
+        raise ValueError("at least one corpus required")
+    return {
+        "method": "equal-corpus-mean-of-nonempty-file-ratios",
+        "corpora": corpora,
+        "ratio_pct": statistics.mean(c["ratio_pct"] for c in corpora),
+        "incumbent_ratio_pct": statistics.mean(c["incumbent_ratio_pct"] for c in corpora),
+        "byte_weighted_ratio_pct": 100 * output / raw,
+        "incumbent_byte_weighted_ratio_pct": 100 * incumbent_output / raw,
+    }
+
+
 def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
-    """Sum per-file median times and byte counts; never pool independent runs."""
+    """Sum median times; balance compression ratios across files and corpora."""
     if not rows or len({r.corpus for r in rows}) != len(rows):
         raise ValueError("exactly one run per requested corpus is required")
     if len({r.source_sha256 for r in rows}) != 1:
@@ -226,6 +269,7 @@ def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
         parse_seconds += candidate.parse_s
         seconds += candidate.total_s
         incumbent_seconds += incumbent.total_s
+    compression = compression_statistics(rows)
     if raw <= 0 or seconds <= 0 or incumbent_seconds <= 0:
         raise ValueError("positive input size and measured times required")
     if not math.isfinite(seconds) or not math.isfinite(incumbent_seconds):
@@ -239,6 +283,8 @@ def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
         parse_seconds,
         seconds,
         tuple(sorted(row.id for row in rows)),
+        compression["ratio_pct"],
+        compression["incumbent_ratio_pct"],
     )
 
 
@@ -344,6 +390,7 @@ def evaluation_context(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
         "protocol": list(compatibility(runs[0])),
         "calculator": CALCULATOR_VERSION,
         "timing": "lz77+encode; median of paired stage sums per file",
+        "compression": "equal-corpus-mean-of-nonempty-file-ratios",
     }
 
 
@@ -367,7 +414,7 @@ def aggregate(session: Session, rows: Sequence[BenchmarkRun]):
         calculator_version=CALCULATOR_VERSION,
         input_key=key,
         context=evaluation_context(rows),
-        statistics=timing_statistics(rows),
+        statistics={**timing_statistics(rows), "compression": compression_statistics(rows)},
         raw_bytes=values.raw_bytes,
         bytes=values.bytes,
         incumbent_bytes=values.incumbent_bytes,

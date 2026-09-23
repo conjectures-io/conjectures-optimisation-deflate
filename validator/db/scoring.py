@@ -24,9 +24,8 @@ class ScoredSubmission:
     """One accepted submission, reduced to what scoring actually uses.
 
     `time_s` and `ratio_pct` are the Pareto axes, both "lower is better". `ratio_pct` is
-    compressed bytes as a percentage of raw, which is why raw_bytes has to be recorded:
-    absolute bytes are not comparable across corpora, and the corpus changes between
-    rounds.
+    the equal-corpus mean of per-file compression percentages for current aggregations.
+    Raw byte totals remain telemetry. Legacy standalone inputs use byte-weighted ratios.
     """
 
     submission_id: int
@@ -45,16 +44,26 @@ class ScoredSubmission:
     baseline_key: str | None = None
     context: dict[str, object] | None = None
 
+    verification_current: bool | None = None
+    normalized_ratio_pct: float | None = None
+    normalized_incumbent_ratio_pct: float | None = None
+
     @property
     def point_id(self) -> str:
         return str(self.submission_id)
 
     @property
     def ratio_pct(self) -> float:
+        if self.normalized_ratio_pct is not None:
+            return self.normalized_ratio_pct
+        return self.byte_weighted_ratio_pct
+
+    @property
+    def byte_weighted_ratio_pct(self) -> float:
         return 100.0 * self.bytes / self.raw_bytes
 
 
-def _scorable(stmt):
+def _scorable(stmt, *, preview=False):
     # Only accepted submissions carrying every number the frontier needs. A row missing
     # one of them predates the columns or came from a harness that did not print it;
     # scoring it would put a fabricated point on the frontier.
@@ -63,7 +72,9 @@ def _scorable(stmt):
     return stmt.where(
         models.Submission.static_verified_at.is_not(None),
         models.Submission.lean_verified_at.is_not(None),
-        models.Submission.verifier_fingerprint == required_fingerprint(),
+        models.Submission.verifier_fingerprint.is_not(None)
+        if preview
+        else models.Submission.verifier_fingerprint == required_fingerprint(),
         models.Submission.measured_source_sha256 == models.Submission.source_sha256,
         models.Submission.state == SubmissionState.ACCEPTED.value,
         models.Submission.bytes.is_not(None),
@@ -104,15 +115,28 @@ class ScoringDb:
         self._sessions = sessions
 
     def scoring_inputs(self, corpora=None, aggregation_ids=None) -> list[ScoredSubmission]:
-        """All verified points in one published, comparable evaluation context.
+        """Current verified, published evidence for live scoring."""
+        return self._inputs(corpora, aggregation_ids, preview=False)
 
-        SCORING_CORPORA is a JSON object mapping corpus names to content hashes.
-        Without it, a single context is required; mixed contexts fail closed.
+    def preview_inputs(self, corpora=None, aggregation_ids=None) -> list[ScoredSubmission]:
+        """Recalculate historical verified evidence without publishing or re-verifying.
+
+        Use the runs linked to each submission's published aggregation (or explicit
+        aggregation IDs), never silently select different benchmark measurements.
+        Historical verification is sufficient for this operator-only preview.
         """
+        return self._inputs(corpora, aggregation_ids, preview=True)
+
+    def _inputs(self, corpora, aggregation_ids, *, preview) -> list[ScoredSubmission]:
+        """SCORING_CORPORA selects exact corpus hashes; mixed contexts fail closed."""
         import json
         import os
 
+        from verifier.identity import required_fingerprint
+
         from .aggregation import CALCULATOR_VERSION, evaluation_context, reduce_runs
+
+        current_fingerprint = required_fingerprint()
 
         requested = corpora
         if requested is None and os.getenv("SCORING_CORPORA"):
@@ -120,7 +144,7 @@ class ScoringDb:
         with session_scope(self._sessions) as session:
             rows = list(
                 session.scalars(
-                    _scorable(select(models.Submission))
+                    _scorable(select(models.Submission), preview=preview)
                     .where(
                         models.Submission.aggregation_id.is_not(None),
                         (
@@ -151,7 +175,9 @@ class ScoringDb:
                     if aggregation_ids is not None
                     else session.get(models.BenchmarkAggregation, row.aggregation_id)
                 )
-                if aggregation is None or aggregation.calculator_version != CALCULATOR_VERSION:
+                if aggregation is None or (
+                    not preview and aggregation.calculator_version != CALCULATOR_VERSION
+                ):
                     continue
                 runs = list(
                     session.scalars(
@@ -168,7 +194,20 @@ class ScoringDb:
                     context = evaluation_context(runs)
                 except ValueError:
                     continue  # Invalidated evidence removes the point, not only its payout.
-                if context != aggregation.context or values.source_sha256 != row.source_sha256:
+                # A formula change may alter only aggregation metadata. Corpus,
+                # timing definition and measurement protocol must still agree.
+                ignored = {"calculator", "compression"} if preview else set()
+                stored_context = {
+                    key: value for key, value in aggregation.context.items() if key not in ignored
+                }
+                computed_context = {
+                    key: value for key, value in context.items() if key not in ignored
+                }
+                if (
+                    stored_context != computed_context
+                    or values.source_sha256 != row.source_sha256
+                    or aggregation.source_sha256 != row.source_sha256
+                ):
                     continue
                 if requested is not None and dict(context["corpora"]) != requested:
                     continue
@@ -194,6 +233,9 @@ class ScoringDb:
                         time_s=aggregation.compression_seconds,
                         incumbent_bytes=aggregation.incumbent_bytes,
                         incumbent_seconds=aggregation.incumbent_seconds,
+                        verification_current=row.verifier_fingerprint == current_fingerprint,
+                        normalized_ratio_pct=values.ratio_pct,
+                        normalized_incumbent_ratio_pct=values.incumbent_ratio_pct,
                         context=context,
                         aggregation_id=aggregation.id,
                     )
@@ -202,7 +244,7 @@ class ScoringDb:
                 aggregation_ids
             ):
                 raise ValueError(
-                    "requested aggregation is invalid or lacks a currently verified "
+                    "requested aggregation is invalid or lacks the required verified "
                     "submission identity"
                 )
             if len({json.dumps(r.context, sort_keys=True) for r in result}) > 1:

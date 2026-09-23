@@ -316,8 +316,8 @@ submit at all.
 **Emission is 60% Pareto position, 40% recent improvement.** Sixty per cent follows the
 frontier, weighted by how much each point actually buys rather than by mere membership;
 forty follows the last ten improvements on the record, decaying, newest most. What neither
-claims burns. `just weights-preview` prints what the scorer would pay right now without
-touching the chain, `WEIGHT_DRY_RUN=1` runs the whole weight-setting path except the last
+claims burns. `just weights-preview` recalculates an operator preview using the current
+formula and stored benchmark evidence without touching the database or chain; `WEIGHT_DRY_RUN=1` runs the whole weight-setting path except the last
 call, and [docs/SCORING.md](docs/SCORING.md) is the argument for why the default weight
 function is the one it is.
 
@@ -527,6 +527,12 @@ just weights-preview --out-dir "$PWD/data/benchmark-reports/current"
 The incremental seeder detects the changed protocol and creates fresh runs; `--overwrite`
 is unnecessary. Earlier runs, aggregations and score snapshots remain available.
 The historical timing tables earlier in this README describe LZ77-only measurements.
+
+`just weights-preview` automatically reapplies the current aggregation formula to
+the runs linked to each submission's latest published aggregation. Formula changes
+need no new benchmark or proof run for this preview. Historical verification is
+labelled in the report and does not establish current live-payout eligibility.
+Use repeated `--aggregation-id ID` to choose earlier evidence explicitly.
 
 `just weights-preview` saves `scores.json` and four figures to
 `data/benchmark-reports/current/` by default (overwriting the previous preview).

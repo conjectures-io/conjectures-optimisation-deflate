@@ -63,8 +63,11 @@ Other methods, including elbow-sweetspot, remain selectable for comparisons.
 Local-global does not use the external speed limit in its formula. Acceptance still
 requires time no greater than 8 times the paired incumbent. Timing is the sum of per-file
 medians of the paired LZ77 + encoding times for each measured repetition, excluding
-warmups. Stage medians are kept for telemetry, but their sum is not the scored statistic. Output ratio is total compressed
-bytes divided by total raw bytes. Compare only identical corpus-content sets and compatible
+warmups. Stage medians are kept for telemetry, but their sum is not the scored statistic. The scored compression ratio is the arithmetic mean of per-file compressed/raw
+ratios within each corpus, then the equally weighted mean across corpora. Empty
+files are excluded from this ratio (an all-empty corpus is rejected), but their
+bytes and timings remain in telemetry. Total compressed/raw bytes is retained
+as byte-weighted telemetry. Recency improvements use the same balanced ratio. Compare only identical corpus-content sets and compatible
 measurement contexts, even when displaying percentages.
 
 Baseline allocations burn explicitly. With only baselines and no miner improvement,
@@ -142,12 +145,33 @@ between-run host drift and do not affect rewards.
 
 `just weights-preview --out-dir data/benchmark-reports/baselines` writes an operator-only
 aggregate report and plot. `--aggregation-id ID` may be repeated to inspect selected
-stored aggregations for currently eligible submission identities. Reports include exact
+stored evidence for previously verified, accepted submission identities. Reports include exact
 inputs and scoring configuration; historical weight-set snapshots remain unchanged.
 
-Current aggregation version is `compression-median-v3`, using schema-v4 measurements.
+Current aggregation version is `compression-balanced-v4`, using schema-v4 measurements.
 Encoding runs on every repetition, and hashing/decompression checks remain outside
 both stage timers. Per-file LZ77, encoding and total timing statistics are retained;
 bootstrap intervals apply to total compression time and the total-time ratio.
 Legacy LZ77-only aggregations cannot enter the current frontier; they require new
 measurements. No synthetic totals are backfilled from the old single encoding sample.
+
+Preview automatically recalculates from stored schema-v4 evidence with the current
+formula, including after an aggregation version change. It uses the runs linked to
+each submission's published aggregation (or explicit aggregation IDs), preserving
+the original records. It validates corpus/source identities, measurement compatibility
+and invalidation status. Successful historical static/Lean verification suffices
+for this operator-only report; `verification_current` records whether the stamp still
+matches. Neither verification nor benchmarks are executed by preview. The report
+records both the original and recalculated calculator versions.
+
+To update published evidence for live scoring after an aggregation version change,
+reaggregate retained schema-v4 runs with
+`just bench-aggregate --submission-id ID --corpus NAME:SHA256 --publish`
+(repeat --corpus for each corpus, optionally select --run-id). This does not
+rerun benchmarks. Old aggregations remain immutable and are excluded from live scoring.
+
+The current verifier fingerprint includes aggregation/scoring source files, so this
+update also requires refreshing static/Lean verification before publishing for live
+scoring. This restriction does not apply to the read-only preview.
+Incremental baseline seeding refreshes verification and reuses compatible benchmark
+evidence; it does not require rerunning compatible measurements.
