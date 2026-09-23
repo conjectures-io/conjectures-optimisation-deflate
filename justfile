@@ -265,24 +265,25 @@ db-import-sqlite DB="validator/.work/service.db" *ARGS="":
     {{python}} {{val}}/tools/import-sqlite.py {{DB}} {{ARGS}}
 
 # --- Submission service -----------------------------------------------------
+# Service commands accept --background (PM2 start) or --stop (PM2 stop).
 
 # Serve the API. The gate runs beside it as its own process -- see `just service-worker`.
-service:
-    cd {{val}} && {{python}} -m service.api
+service *ARGS:
+    {{python}} {{val}}/tools/service_start.py service {{ARGS}}
 
 # Drain the submission queue through the gate. Run one per machine with a toolchain.
-service-worker:
-    cd {{val}} && {{python}} -m service.worker
+service-worker *ARGS:
+    {{python}} {{val}}/tools/service_start.py service-worker {{ARGS}}
 
 # --- The chain --------------------------------------------------------------
 
 # Stream subnet registrations into the store. Without it nobody can submit.
-chain-watcher:
-    cd {{val}} && {{python}} -m workers.chain_watcher
+chain-watcher *ARGS:
+    {{python}} {{val}}/tools/service_start.py chain-watcher {{ARGS}}
 
 # Score the round and set weights, once an epoch. WEIGHT_DRY_RUN=1 records without setting.
-weight-setter:
-    cd {{val}} && {{python}} -m workers.weight_setter
+weight-setter *ARGS:
+    {{python}} {{val}}/tools/service_start.py weight-setter {{ARGS}}
 
 # What the scorer would pay right now: reads the store, touches neither chain nor wallet.
 weights-preview *ARGS:
@@ -371,3 +372,31 @@ admission-run *ARGS:
 # Explicitly replay admission after evidence/policy/order changes; --preview is read-only.
 admission-replay *ARGS:
     cd {{val}} && {{python}} -m workers.admission --replay {{ARGS}}
+
+# Start missing workers and database; --with-api includes the optional local API.
+up *ARGS:
+    {{python}} -m tools.services up {{ARGS}}
+
+# Stop this competition's PM2 processes and local database; --keep-db leaves DB running.
+down *ARGS:
+    {{python}} -m tools.services down {{ARGS}}
+
+# Show managed processes and local database status.
+status:
+    {{python}} -m tools.services status
+
+# Follow application logs, optionally restricted to a service recipe name or db.
+logs *ARGS:
+    {{python}} -m tools.services logs {{ARGS}}
+
+# Queue ownerless diagnostic files; excluded from competition scoring.
+submit-test DIR:
+    {{python}} -m tools.submission test {{quote(DIR)}}
+
+# Queue an operator baseline; participates in scoring but its allocation burns.
+submit-baseline DIR NAME="":
+    {{python}} -m tools.submission baseline {{quote(DIR)}} {{quote(NAME)}}
+
+# Show any submission's persisted milestones; --watch polls until Ctrl+C.
+submission-status ID *ARGS:
+    {{python}} -m tools.submission status {{quote(ID)}} {{ARGS}}

@@ -204,7 +204,7 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
         expected_attempt=sub.verification_attempt,
         **fields,
     )
-    if final == SubmissionState.ACCEPTED.value:
+    if final == SubmissionState.ACCEPTED.value and (sub.hotkey or sub.baseline_key):
         from db.admission import run as admit
 
         try:

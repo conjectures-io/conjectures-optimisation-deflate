@@ -82,7 +82,13 @@ class SubmissionsDb:
                 select(models.Submission)
                 .where(
                     models.Submission.state == SubmissionState.QUEUED.value,
-                    models.Submission.baseline_key.is_(None),
+                    (
+                        models.Submission.baseline_key.is_(None)
+                        | (
+                            models.Submission.baseline_key.startswith("local:")
+                            & models.Submission.baseline_active
+                        )
+                    ),
                 )
                 .order_by(models.Submission.submitted_at, models.Submission.id)
                 .limit(1)
@@ -128,7 +134,7 @@ class SubmissionsDb:
             for key, value in fields.items():
                 setattr(row, key, value)
             row.finished_at = clock.now()
-            if state is SubmissionState.ACCEPTED and row.baseline_key is None:
+            if state is SubmissionState.ACCEPTED and row.hotkey is not None:
                 assert row.hotkey is not None
                 try:
                     registration = self._registrations.claim_slot(session, row.hotkey, sub_id)
@@ -282,6 +288,10 @@ class SubmissionsDb:
                     .where(
                         models.Submission.state == SubmissionState.ACCEPTED.value,
                         models.Submission.bytes.is_not(None),
+                        (
+                            models.Submission.hotkey.is_not(None)
+                            | models.Submission.baseline_key.is_not(None)
+                        ),
                     )
                     .order_by(
                         models.Submission.hotkey,
@@ -304,7 +314,11 @@ class SubmissionsDb:
         with session_scope(self._sessions) as session:
             return session.execute(
                 select(models.Submission.incumbent_bytes)
-                .where(models.Submission.incumbent_bytes.is_not(None))
+                .where(
+                    models.Submission.incumbent_bytes.is_not(None),
+                    models.Submission.hotkey.is_not(None)
+                    | models.Submission.baseline_key.is_not(None),
+                )
                 .order_by(models.Submission.id.desc())
                 .limit(1)
             ).scalar_one_or_none()

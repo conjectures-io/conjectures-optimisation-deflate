@@ -141,9 +141,7 @@ class Submission(Base):
     __table_args__ = (
         UniqueConstraint("hotkey", "digest", name="uq_submissions_hotkey_digest"),
         UniqueConstraint("baseline_key", "digest", name="uq_submission_baseline_digest"),
-        CheckConstraint(
-            "(baseline_key IS NULL) = (hotkey IS NOT NULL)", name="ck_submission_owner"
-        ),
+        CheckConstraint("hotkey IS NULL OR baseline_key IS NULL", name="ck_submission_owner"),
         CheckConstraint(
             "NOT baseline_active OR baseline_key IS NOT NULL", name="ck_submission_baseline_active"
         ),
