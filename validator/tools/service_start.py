@@ -43,7 +43,7 @@ def process_list(output: str) -> list[dict]:
     raise ValueError("missing complete PM2 process list")
 
 
-def start_background(service: str, *, stop: bool = False) -> int:
+def start_background(service: str, *, stop: bool = False, restart: bool = False) -> int:
     pm2 = shutil.which("pm2")
     if pm2 is None:
         print(
@@ -95,12 +95,12 @@ def start_background(service: str, *, stop: bool = False) -> int:
             inactive = [
                 p for p in matches if p.get("pm2_env", {}).get("status") in {"stopped", "errored"}
             ]
-            if len(matches) == 1 and inactive:
-                pid = inactive[0].get("pm_id")
+            if len(matches) == 1 and (inactive or restart):
+                pid = matches[0].get("pm_id")
                 if type(pid) is not int or pid < 0:
                     print("Invalid PM2 process ID; no service restarted.", file=sys.stderr)
                     return 2
-                print(f"Resuming {inactive[0]['name']} (PM2 id={pid}).", flush=True)
+                print(f"Resuming {matches[0]['name']} (PM2 id={pid}).", flush=True)
                 return subprocess.run([pm2, "restart", str(pid)], check=False).returncode
             for process in matches:
                 status = process.get("pm2_env", {}).get("status", "unknown")
@@ -123,9 +123,10 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--background", action="store_true")
     mode.add_argument("--stop", action="store_true", help="stop this service under PM2")
+    mode.add_argument("--restart", action="store_true", help="restart this service under PM2")
     args = parser.parse_args()
-    if args.background or args.stop:
-        return start_background(args.service, stop=args.stop)
+    if args.background or args.stop or args.restart:
+        return start_background(args.service, stop=args.stop, restart=args.restart)
     os.chdir(ROOT / "validator")
     os.execv(sys.executable, [sys.executable, "-m", SERVICES[args.service][1]])
     return 0

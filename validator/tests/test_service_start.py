@@ -107,7 +107,7 @@ def test_stop_only_selected_service(monkeypatch, tmp_path, present):
         assert calls[-1] == ["/bin/pm2", "stop", "7"]
 
 
-@pytest.mark.parametrize("status", ["stopped", "errored"])
+@pytest.mark.parametrize("status", ["stopped", "errored", "online"])
 def test_background_resumes_existing_entry(monkeypatch, tmp_path, status):
     monkeypatch.setattr(service_start, "ROOT", tmp_path)
     monkeypatch.setattr(shutil, "which", installed_pm2)
@@ -130,6 +130,6 @@ def test_background_resumes_existing_entry(monkeypatch, tmp_path, status):
         )
 
     monkeypatch.setattr(subprocess, "run", run)
-    assert service_start.start_background("service-worker") == 0
+    assert service_start.start_background("service-worker", restart=status == "online") == 0
     assert calls[-1] == ["/bin/pm2", "restart", "7"]
     assert len(calls) == 2

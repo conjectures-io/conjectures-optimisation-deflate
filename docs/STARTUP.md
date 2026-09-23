@@ -55,8 +55,7 @@ make the gate benchmark both corpora. Do not treat startup defaults as resolving
 
 After database startup and migrations, start `just service`, `just service-worker`,
 `just chain-watcher` and `just weight-setter` separately, or use the existing
-`pm2 start pm2/service.config.js` configuration. Combined just lifecycle commands
-remain planned. Run one chain watcher and one weight setter.
+`pm2 start pm2/service.config.js` configuration. Combined commands are described below. Run one chain watcher and one weight setter.
 
 ## Optional background mode
 
@@ -93,3 +92,30 @@ just service --stop
 `--stop` and `--background` are mutually exclusive. A missing entry is a successful
 no-op. Stopping keeps its PM2 registration; resume with the same command and `--background`.
 This does not stop independently launched foreground processes or PostgreSQL.
+
+## Stack lifecycle
+
+```bash
+just up                         # local DB, migrations, then three workers
+just up --with-api              # also start the optional local submission API
+just up --external-db           # skip Docker startup; migrate configured external DB
+just status                     # PM2 process states and local Docker DB status
+just logs                       # follow only this competition's application logs
+just logs service-worker        # select by just recipe name
+just logs db                    # local PostgreSQL logs
+just logs --no-follow --lines 50 # print recent logs and exit
+just service-worker --restart   # restart existing entry, or start if absent
+just down                       # stop application processes, then local DB; preserve data
+just down --keep-db             # stop applications only; use with external DB
+```
+
+All four service recipes accept mutually exclusive `--background`, `--stop` and
+`--restart` flags. Restart/resume uses the entry's saved PM2 environment. `up` leaves
+already-running workers alone; a startup failure leaves earlier successful starts
+running and reports the failed step. `down` stops the optional API too, if present,
+and leaves the database running if any application stop fails. PM2 controls shutdown
+with its configured signal and timeout; it does not wait indefinitely for a running
+verification. Interrupted verification claims use the existing stale-claim recovery.
+Status reports process state, not proof that a worker is making progress. Application
+log following uses PM2's log files and never includes unrelated PM2 services.
+These commands do not install PM2, configure reboot persistence, or configure log rotation.

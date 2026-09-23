@@ -372,3 +372,19 @@ admission-run *ARGS:
 # Explicitly replay admission after evidence/policy/order changes; --preview is read-only.
 admission-replay *ARGS:
     cd {{val}} && {{python}} -m workers.admission --replay {{ARGS}}
+
+# Start missing workers and database; --with-api includes the optional local API.
+up *ARGS:
+    {{python}} -m tools.services up {{ARGS}}
+
+# Stop this competition's PM2 processes and local database; --keep-db leaves DB running.
+down *ARGS:
+    {{python}} -m tools.services down {{ARGS}}
+
+# Show managed processes and local database status.
+status:
+    {{python}} -m tools.services status
+
+# Follow application logs, optionally restricted to a service recipe name or db.
+logs *ARGS:
+    {{python}} -m tools.services logs {{ARGS}}
