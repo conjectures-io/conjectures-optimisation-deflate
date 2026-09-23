@@ -337,7 +337,8 @@ def test_report_payload_and_plots(store, tmp_path):
     result = score(points, points, ScoringConfig())
     plot_admission(result.scores, tmp_path)
     assert (tmp_path / "speed-admission.png").is_file()
-    assert len(list((tmp_path / "admission").glob("*.png"))) == 2
+    assert len(list((tmp_path / "admission").glob("submission-[0-9].png"))) == 2
+    assert len(list((tmp_path / "admission").glob("submission-*-files.png"))) == 2
     plot_admission([], tmp_path)
     assert not (tmp_path / "speed-admission.png").exists()
     assert not list((tmp_path / "admission").glob("*.png"))

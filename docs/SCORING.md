@@ -286,3 +286,7 @@ The per-file panel reports faster-on-X-of-Y files and ties. This is descriptive:
 legitimate aggregate win may include regressions, and aggregate gain is not the mean of
 per-file gain percentages. File hashes, corpus identities and run IDs in JSON support
 an API implementing the same views without requiring local benchmark files.
+
+Admission detail plots use stacked gain, normalized-time and Pareto panels. Per-file
+diagnostics are written separately as `admission/submission-<id>-files.png`.
+The proposed browser API is documented in [FRONTEND_API.md](FRONTEND_API.md).

@@ -461,6 +461,7 @@ aggregation schema, timing queries, and migration rollback commands.
 |---|---|
 | [miner/MANUAL.md](miner/MANUAL.md) | mining, start to finish: setup, the two files, the seven Rust rules, the contract, the ten proof rules, a worked example, submit |
 | [docs/SCORING.md](docs/SCORING.md) | how emission is scored: the 60/40 rule, worked on the real frontier |
+| [docs/FRONTEND_API.md](docs/FRONTEND_API.md) | proposed frontend read API: submissions, weights, Pareto and admission explanations |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | running a validator: the four processes, the store, the wallet, what to check |
 | [CORPUS-SOURCES.md](CORPUS-SOURCES.md) | every benchmark source, its licence, and what it feeds |
 

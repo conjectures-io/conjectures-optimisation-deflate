@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import textwrap
+
 
 def explanation(detail):
     status = detail["outcome"]
@@ -97,15 +99,29 @@ def plot_admission(scores, directory):
         stats = detail.get("statistics")
         if not stats:
             continue
-        fig, axes = plt.subplots(
-            1, 3, figsize=(22, max(6, len(stats["files"]) * 0.19)), layout="constrained"
+        fig, (gain_ax, time_ax, pareto_ax) = plt.subplots(
+            3, 1, figsize=(11, 12), height_ratios=[1, 1, 2], layout="constrained"
         )
         color = colors[score.submission_id]
-        gain_ax, pareto_ax, file_ax = axes
         gain_ax.axvline(0, color="black", linestyle="--")
         gain_ax.hlines(0, stats["lower_pct"], stats["upper_pct"], color=color, linewidth=3)
         gain_ax.scatter(stats["gain_pct"], 0, color=color)
-        gain_ax.set(yticks=[], xlabel="Gain over reference (%)", title=detail["outcome"])
+        gain_ax.set(
+            yticks=[],
+            ylim=(-0.6, 0.6),
+            xlabel="Gain over reference (%) — positive is faster",
+            title=f"{detail['outcome'].upper()}: measured {stats['gain_pct']:+.3f}% gain\n"
+            f"95% lower bound: {stats['lower_pct']:+.3f}% (must exceed 0%)",
+        )
+        gain_ax.text(
+            0.98,
+            0.85,
+            f"90% interval: [{stats['lower_pct']:+.3f}%, {stats['upper_pct']:+.3f}%]",
+            transform=gain_ax.transAxes,
+            ha="right",
+            fontsize=10,
+        )
+        gain_ax.grid(axis="x", alpha=0.25)
         before = detail["frontier_before"]
         candidate, reference = detail["candidate"], detail["reference"]
         pareto_ax.plot(
@@ -137,6 +153,23 @@ def plot_admission(scores, directory):
             label="Candidate: " + candidate["label"],
         )
         interval = comparison_range(detail)
+        time_ax.scatter(reference["time_ratio"], 1, marker="s", color="black", zorder=3)
+        time_ax.scatter(candidate["time_ratio"], 0, color=color, zorder=3)
+        time_ax.hlines(0, *interval, color=color, linewidth=3)
+        time_ax.plot(interval, [0, 0], "|", color=color, markersize=12)
+        for value, y in [(reference["time_ratio"], 1), (candidate["time_ratio"], 0)]:
+            time_ax.annotate(
+                f"{value:.6f}×", (value, y), xytext=(0, 12), textcoords="offset points", ha="center"
+            )
+        time_ax.set(
+            yticks=[0, 1],
+            yticklabels=["Candidate", "Reference"],
+            ylim=(-0.5, 1.6),
+            xlabel="Mean file time / incumbent — lower is faster",
+            title="Scored time comparison (normalized, not elapsed seconds)",
+        )
+        time_ax.grid(axis="x", alpha=0.25)
+        time_ax.margins(x=0.15)
         pareto_ax.hlines(
             candidate["compression_pct"],
             *interval,
@@ -155,22 +188,35 @@ def plot_admission(scores, directory):
             title="Historical comparison (zoomed)",
         )
         pareto_ax.legend(fontsize=7)
+        fig.suptitle(textwrap.fill(explanation(detail), 105), fontsize=11)
+        fig.supxlabel(
+            "Intervals: central 90%; admission uses one-sided 95% lower bound.\n"
+            "Time ranges anchor the reference at its measured value; "
+            "they are comparison intervals.\n"
+            "Uncertainty covers measured repetitions, not host drift. "
+            "Per-file diagnostics: separate image.",
+            fontsize=9,
+        )
+        fig.savefig(detail_dir / f"submission-{score.submission_id}.png", dpi=150)
+        plt.close(fig)
+
+        # Long file labels must not squeeze the aggregate comparison panels.
+        fig, file_ax = plt.subplots(
+            figsize=(11, max(5, len(stats["files"]) * 0.24)), layout="constrained"
+        )
         files = stats["files"]
         file_ax.axvline(0, color="black", linestyle="--")
         file_ax.scatter([f["gain_pct"] for f in files], range(len(files)), color=color, s=18)
         file_ax.set_yticks(
-            range(len(files)), [f"{f['corpus']}/{f['file']}" for f in files], fontsize=6
+            range(len(files)), [f"{f['corpus']}/{f['file']}" for f in files], fontsize=8
         )
         file_ax.invert_yaxis()
         file_ax.set(
             xlabel="Per-file gain in incumbent-normalized time (%)",
             title=f"Faster on {stats['file_wins']}/{len(files)} files; {stats['file_ties']} ties",
         )
-        fig.suptitle(explanation(detail), fontsize=11)
-        fig.supxlabel(
-            "Intervals: central 90%; admission uses one-sided 95% lower bound.\n"
-            "File wins are diagnostic. Aggregate gain is not the mean of file gain percentages.",
-            fontsize=9,
-        )
-        fig.savefig(detail_dir / f"submission-{score.submission_id}.png", dpi=150)
+        file_ax.grid(axis="x", alpha=0.25)
+        fig.suptitle(f"{candidate['label']} vs {reference['label']} — per-file diagnostics")
+        fig.supxlabel("File wins are diagnostic; aggregate gain is not their mean.", fontsize=9)
+        fig.savefig(detail_dir / f"submission-{score.submission_id}-files.png", dpi=150)
         plt.close(fig)
