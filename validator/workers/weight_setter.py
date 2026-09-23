@@ -1,6 +1,11 @@
-"""Score the round and set weights, once an epoch.
+"""Score the round and set the validator's weights, once an epoch.
 
     cd validator && python -m workers.weight_setter
+
+The only process on the validator that calls set_weights. The vector it sets is the whole
+validator's: the treasury's share to treasury uid 121 and the competition's share by score --
+see `scoring.split`, which also says why a failure pays the treasury rather than skipping.
+Run it with `WEIGHT_DRY_RUN=0` wherever this validator is expected to set weights at all.
 
 The cadence gate (`chain.schedule.should_set`) and the scoring rule (`scoring`) are both
 pure; `step` is the testable unit that puts them together with a `WeightChain`, and `run`
@@ -32,6 +37,7 @@ import scoring  # noqa: E402
 from chain.schedule import should_set  # noqa: E402
 from chain.types import BLOCK_SECONDS, FINNEY, NETUID, SubnetParams, WeightPlan  # noqa: E402
 from chain.weights import WeightChain  # noqa: E402
+from scoring.split import split, treasury_uid_for  # noqa: E402
 
 Action = Literal["wait", "skip", "set", "failed"]
 
@@ -66,14 +72,22 @@ class WeightSetterConfig:
     poll_seconds: float = 12.0
     # Compute and record the vector, but do not submit it.
     dry_run: bool = True
+    # Off mainnet only: where the treasury share goes (default: the burn uid). On netuid 66 the
+    # treasury uid is a code constant and a different value here refuses to start.
+    treasury_override: int | None = None
 
     def __post_init__(self) -> None:
         if self.burn_uid < 0:
             raise ValueError("burn_uid must be >= 0")
+        self.treasury_uid  # noqa: B018 - validates the override against the netuid now
         if self.set_margin < 0:
             raise ValueError("set_margin must be >= 0")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
+
+    @property
+    def treasury_uid(self) -> int:
+        return treasury_uid_for(self.netuid, self.treasury_override, burn_uid=self.burn_uid)
 
     @classmethod
     def from_env(cls) -> WeightSetterConfig:
@@ -90,6 +104,9 @@ class WeightSetterConfig:
             set_margin=int(env.get("WEIGHT_SET_MARGIN", str(d.set_margin))),
             poll_seconds=float(env.get("WEIGHT_POLL_SECONDS", str(d.poll_seconds))),
             dry_run=_dry_run(env.get("WEIGHT_DRY_RUN", "1")),
+            treasury_override=int(env["WEIGHT_TREASURY_UID"])
+            if env.get("WEIGHT_TREASURY_UID", "").strip()
+            else None,
         )
 
 
@@ -113,12 +130,28 @@ def plan_for(
     config: WeightSetterConfig,
     scoring_config: scoring.ScoringConfig,
 ) -> tuple[WeightPlan, scoring.Scoring | None]:
+    """The validator's vector: the treasury share, and the competition's by score.
+
+    Scoring that raises pays the treasury everything this epoch instead of failing the tick:
+    a failed tick sets nothing, and an epoch with no weight set cannot be made up later.
+    """
+    treasury = config.treasury_uid
     if config.burn_mode:
-        return scoring.to_vector({}, meta, burn_uid=config.burn_uid), None
-    points = store.scoring.scoring_inputs()
-    eligible = {hotkey for hotkey, uid in meta.uid_by_hotkey.items() if uid != config.burn_uid}
-    result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
-    return scoring.to_vector(result.weights, meta, burn_uid=config.burn_uid), result
+        competition = scoring.to_vector({}, meta, burn_uid=config.burn_uid)
+        return split(competition, meta, treasury_uid=treasury), None
+    try:
+        points = store.scoring.scoring_inputs()
+        eligible = {
+            hotkey
+            for hotkey, uid in meta.uid_by_hotkey.items()
+            if uid not in (config.burn_uid, treasury)
+        }
+        result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
+    except Exception as exc:  # noqa: BLE001 - any scoring failure pays the treasury
+        logger.exception(f"[weights] scoring failed; paying the treasury this epoch: {exc}")
+        return split(None, meta, treasury_uid=treasury, reason=f"scoring failed: {exc}"), None
+    competition = scoring.to_vector(result.weights, meta, burn_uid=config.burn_uid)
+    return split(competition, meta, treasury_uid=treasury), result
 
 
 def step(
@@ -245,6 +278,7 @@ def run(
         f"[weights] running netuid={config.netuid} uid={params.uid} tempo={params.tempo} "
         f"rate_limit={params.weights_rate_limit} margin={config.set_margin} "
         f"burn_mode={config.burn_mode} burn_uid={config.burn_uid} dry_run={config.dry_run} "
+        f"treasury_uid={config.treasury_uid} "
         f"method={scoring_config.method} "
         f"split={scoring_config.pareto_share:.2f}/{scoring_config.improvement_share:.2f}"
     )

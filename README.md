@@ -317,7 +317,11 @@ machine or on several -- each claims a different submission. Run exactly one cha
 and one weight setter; without the watcher no hotkey has a registration, and so nobody can
 submit at all.
 
-**Emission is 60% Pareto position, 40% recent improvement.** Sixty per cent follows the
+**The validator's weight is 80% treasury (uid 121), 20% this competition.** The weight
+setter is the validator's only `set_weights` caller, so it sets both parts
+([`validator/scoring/split.py`](validator/scoring/split.py)); a scoring failure pays the
+treasury everything that epoch rather than skipping it. **The competition's share is 60%
+Pareto position, 40% recent improvement.** Sixty per cent follows the
 frontier, weighted by how much each point actually buys rather than by mere membership;
 forty follows the last ten improvements on the record, decaying, newest most. What neither
 claims burns. `just weights-preview` recalculates an operator preview using the current

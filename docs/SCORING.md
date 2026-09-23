@@ -1,5 +1,11 @@
 # How emission is scored
 
+The validator's weight is split first: the treasury (uid 121) takes 80% and this
+competition 20% (`validator/scoring/split.py`, code constants). Everything below describes
+how the competition's 20% is shared out; "burns" means within that share. If scoring fails,
+or the competition's vector cannot be submitted, the treasury is paid everything for that
+epoch rather than the epoch being skipped.
+
 Two components, on every accepted submission the validator holds.
 
 | share | what it pays for | why it exists |

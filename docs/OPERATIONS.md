@@ -90,9 +90,11 @@ second, but neither gains anything from it either.
 
 ## Pausing a round
 
-`WEIGHT_BURN_MODE=1` emits everything to the burn uid and ignores the scores — a
+`WEIGHT_BURN_MODE=1` burns the competition's share and ignores the scores — a
 deliberate, restart-toggled switch for a round that is paused or not yet open. Submissions
-are still accepted and scored; nothing is paid out.
+are still accepted and scored; no miner is paid out. The treasury's share (uid 121) is
+paid either way: this weight setter is the validator's only `set_weights` caller, so it
+sets the whole vector, not just the competition's part (`validator/scoring/split.py`).
 
 To dial the whole competition down without pausing it, lower `SCORING_PARETO_SHARE` and
 `SCORING_IMPROVEMENT_SHARE`. What neither claims burns.

@@ -18,7 +18,8 @@ Credentials and existing local configuration are never reset by these defaults.
 | External reference compressors | Off |
 | Benchmark timeout / memory / build memory | 300 s / 2048 MB / 4096 MB |
 | Sandbox | bubblewrap; systemd user limits |
-| Weight setting | Dry-run; `WEIGHT_DRY_RUN=0` explicitly enables chain writes |
+| Weight setting | Dry-run; `WEIGHT_DRY_RUN=0` explicitly enables chain writes. The only `set_weights` caller on the validator: in dry-run, nothing sets weights |
+| Treasury / competition split | 80% to treasury uid 121 / 20% by score (code constants) |
 | Burn UID / burn-only mode | 0 / off |
 | Network / subnet | finney / 66 |
 | API | 0.0.0.0:9200 |
