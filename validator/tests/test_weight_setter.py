@@ -98,6 +98,9 @@ def accept(store, hotkey, byte_count, seconds, *, incumbent=2_153_387, digest=No
     from conftest import attach_aggregation
 
     attach_aggregation(store, sub_id)
+    from db.admission import run as admit
+
+    admit(store.scoring, persist=True)
     return sub_id
 
 
@@ -209,6 +212,7 @@ def test_every_outcome_is_written_down_with_its_reasoning(store):
     snaps = snapshots(store, require(result.weight_set_id))
     assert [s.hotkey for s in snaps] == ["alice"]
     assert snaps[0].on_frontier is True
+    assert snaps[0].admission_check_id is not None
     assert snaps[0].combined_weight == pytest.approx(
         snaps[0].pareto_weight + snaps[0].improvement_weight
     )

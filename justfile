@@ -363,3 +363,11 @@ bench-aggregate *ARGS:
 # Incrementally verify and seed operator baselines; --overwrite forces new measurements.
 baseline-seed *ARGS: build
     {{python}} -m bench.baselines {{ARGS}}
+
+# Admit newly published benchmark aggregations; changed existing contexts remain pending.
+admission-run *ARGS:
+    cd {{val}} && {{python}} -m workers.admission {{ARGS}}
+
+# Explicitly replay admission after evidence/policy/order changes; --preview is read-only.
+admission-replay *ARGS:
+    cd {{val}} && {{python}} -m workers.admission --replay {{ARGS}}

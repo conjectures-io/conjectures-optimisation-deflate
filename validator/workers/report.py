@@ -129,6 +129,11 @@ def main(argv: list[str] | None = None) -> None:
             f"recency={s.improvement_weight:.5f} payable={s.payable_weight:.5f} "
             f"{s.burn_reason or ''}"
         )
+    from workers.admission_report import explanation, plot_admission
+
+    for s in result.scores:
+        if s.admission:
+            print(f"  {s.baseline_key or s.submission_id}: {explanation(s.admission)}")
     print(f"burn={result.burn_weight:.5f}")
     if args.out_dir:
         args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -144,6 +149,7 @@ def main(argv: list[str] | None = None) -> None:
         }
         (args.out_dir / "scores.json").write_text(json.dumps(payload, indent=2, allow_nan=False))
         plot(result, args.out_dir, provenance, timings)
+        plot_admission(result.scores, args.out_dir)
 
 
 def timing_observations(runs):
@@ -240,7 +246,11 @@ def plot(result, directory, provenance=None, timings=None):
             ax.scatter(
                 x,
                 y,
-                color=color,
+                facecolors="none"
+                if getattr(s, "admission", None)
+                and s.admission["outcome"] not in {"passed", "not_required"}
+                else color,
+                edgecolors=color,
                 marker="s" if s.baseline_key else "o",
                 zorder=3,
                 clip_on=not normalize,

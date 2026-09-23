@@ -582,3 +582,13 @@ the combined variant; its local-global coefficients retain their linear definiti
 
 The default weight method is `local-global-improvement-space-log`. Set
 `SCORING_METHOD` to select a different registered method explicitly.
+
+
+Statistical speed admission runs after aggregation and before rewards. Use
+`just admission-run` for newly published evidence or `just admission-replay --preview`
+to inspect a changed context before explicit replay. `just admission-replay --historical`
+backfills retained historically verified benchmarks without rerunning them; it does not
+refresh live verification eligibility. `just baseline-seed` handles ordered baseline
+admission automatically. `just weights-preview` writes gain-interval and per-file
+admission plots alongside the Pareto report in `data/benchmark-reports/current/`.
+See [statistical admission and replay](docs/SCORING.md#statistical-speed-admission).

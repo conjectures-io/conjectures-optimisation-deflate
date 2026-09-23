@@ -146,10 +146,11 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
     assert uids == [0, 1, 2]
     assert sum(weights) == pytest.approx(1.0)
     # All three points contribute geometry. Alice receives the oldest point plus
-    # both recency events; her newer frontier allocation burns.
-    assert weights[1] == pytest.approx(0.4330168744977828)
-    assert weights[2] == pytest.approx((1 - weights[1]) / 2)
-    assert weights[0] == pytest.approx(weights[2])
+    # both recency events; her newer frontier allocation burns. Log improvement-space
+    # weighting gives the two endpoints different allocations.
+    assert weights[1] == pytest.approx(0.4122670669511427)
+    assert weights[2] == pytest.approx(0.3378419715198898)
+    assert weights[0] == pytest.approx(0.2498909615289675)
 
     # 9. And the vector is on the record with its per-hotkey reasoning.
     with store_pkg.session_scope(store.sessions) as session:
@@ -173,6 +174,7 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
             s.improvement_weight for s in snaps if s.hotkey == ALICE.ss58_address
         ) == pytest.approx(0.4)
         assert len(snaps) == 3
+        assert all(s.admission_check_id is not None for s in snaps)
         assert any(s.burn_reason == "duplicate-hotkey" for s in snaps)
         assert sum(s.combined_weight for s in snaps) == pytest.approx(1.0)
 

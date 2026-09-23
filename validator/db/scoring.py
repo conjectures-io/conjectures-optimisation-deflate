@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import dataclasses as dc
 import datetime as dt
+from contextlib import nullcontext
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -46,6 +48,8 @@ class ScoredSubmission:
     baseline_key: str | None = None
     context: dict[str, object] | None = None
 
+    admission_check_id: int | None = None
+    admission: dict[str, Any] | None = None
     normalized_time_ratio: float | None = None
     verification_current: bool | None = None
     normalized_ratio_pct: float | None = None
@@ -123,7 +127,12 @@ class ScoringDb:
 
     def scoring_inputs(self, corpora=None, aggregation_ids=None) -> list[ScoredSubmission]:
         """Current verified, published evidence for live scoring."""
-        return self._inputs(corpora, aggregation_ids, preview=False)
+        from .admission import evaluate, publication_lock
+
+        with self._sessions.begin() as session:
+            publication_lock(session)
+            points = self._inputs(corpora, aggregation_ids, preview=False, session=session)
+            return evaluate(session, points)
 
     def preview_inputs(self, corpora=None, aggregation_ids=None) -> list[ScoredSubmission]:
         """Recalculate historical verified evidence without publishing or re-verifying.
@@ -132,9 +141,14 @@ class ScoringDb:
         aggregation IDs), never silently select different benchmark measurements.
         Historical verification is sufficient for this operator-only preview.
         """
-        return self._inputs(corpora, aggregation_ids, preview=True)
+        from .admission import evaluate
 
-    def _inputs(self, corpora, aggregation_ids, *, preview) -> list[ScoredSubmission]:
+        with self._sessions.begin() as session:
+            session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+            points = self._inputs(corpora, aggregation_ids, preview=True, session=session)
+            return evaluate(session, points, compute=True, replay=True)
+
+    def _inputs(self, corpora, aggregation_ids, *, preview, session=None) -> list[ScoredSubmission]:
         """SCORING_CORPORA selects exact corpus hashes; mixed contexts fail closed."""
         import json
         import os
@@ -148,7 +162,9 @@ class ScoringDb:
         requested = corpora
         if requested is None and os.getenv("SCORING_CORPORA"):
             requested = json.loads(os.environ["SCORING_CORPORA"])
-        with session_scope(self._sessions) as session:
+        with (
+            nullcontext(session) if session is not None else session_scope(self._sessions)
+        ) as session:
             rows = list(
                 session.scalars(
                     _scorable(select(models.Submission), preview=preview)

@@ -23,7 +23,7 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
     monkeypatch.setattr(baselines, "ROOT", root)
     settings = Settings(files=tmp_path / "submissions")
     monkeypatch.setattr(baselines, "load", lambda: settings)
-    code = tmp_path / "example"
+    code = tmp_path / "template"
     code.mkdir()
     (code / "parse.rs").write_text("source")
     (code / "Parse.lean").write_text("proof")
@@ -61,11 +61,11 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
 
     def measure(config, candidates, corpus, **kwargs):
         measured.append(corpus.name)
-        raw = evidence("example")
+        raw = evidence("template")
         raw[0]["corpus"] = corpus.name
         raw[0]["measured_rounds"] = 2
         raw[0]["benchmark_provenance"] = prov
-        raw[0]["methods"]["example"]["source_sha256"] = hashlib.sha256(
+        raw[0]["methods"]["template"]["source_sha256"] = hashlib.sha256(
             (code / "parse.rs").read_bytes()
         ).hexdigest()
         payload = (corpus.path / "a.txt").read_bytes()
@@ -86,12 +86,12 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
 
     monkeypatch.setattr(baselines, "run", measure)
     config = Config(root, tmp_path, reps=2, warmup=0)
-    baselines.seed_one(store.engine, "example", code, datasets[:1], config)
-    baselines.seed_one(store.engine, "example", code, datasets[:1], config)
+    baselines.seed_one(store.engine, "template", code, datasets[:1], config)
+    baselines.seed_one(store.engine, "template", code, datasets[:1], config)
     assert verified == ["static", "lean"] and measured == ["first"]
-    baselines.seed_one(store.engine, "example", code, datasets, config)
+    baselines.seed_one(store.engine, "template", code, datasets, config)
     assert measured == ["first", "second"]
-    baselines.seed_one(store.engine, "example", code, datasets, config, True)
+    baselines.seed_one(store.engine, "template", code, datasets, config, True)
     assert measured == ["first", "second", "first", "second"]
     assert verified == ["static", "lean"]
     with store.sessions() as session:
@@ -100,9 +100,9 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
         row = session.scalar(select(Submission))
         assert row.baseline_active and row.hotkey is None and row.state == "accepted"
     points = store.scoring.scoring_inputs()
-    assert len(points) == 1 and points[0].baseline_key == "example"
+    assert len(points) == 1 and points[0].baseline_key == "template"
     (code / "parse.rs").write_text("new source")
-    baselines.seed_one(store.engine, "example", code, datasets, config)
+    baselines.seed_one(store.engine, "template", code, datasets, config)
     with store.sessions() as session:
         assert session.scalar(select(func.count()).select_from(Submission)) == 2
         assert (

@@ -155,8 +155,8 @@ Aggregations retain exact run IDs, source hash, calculator version, environment/
 provenance and timing statistics. Per-file sample standard deviation describes repetition
 spread. A deterministic paired per-file bootstrap provides percentile 95% intervals for
 summed median times, their ratio, and the balanced per-file time-ratio coordinate. Intervals with fewer than ten measured rounds are
-flagged sparse; fewer than two means no interval. They do not capture systematic bias or
-between-run host drift and do not affect rewards.
+flagged sparse; fewer than two means no interval. These telemetry intervals do not capture systematic bias or
+between-run host drift. Admission uses a separate candidate/reference comparison described below.
 
 `just weights-preview --out-dir data/benchmark-reports/baselines` writes an operator-only
 aggregate report and plot. `--aggregation-id ID` may be repeated to inspect selected
@@ -193,3 +193,96 @@ update also requires refreshing static/Lean verification before publishing for l
 scoring. This restriction does not apply to the read-only preview.
 Incremental baseline seeding refreshes verification and reuses compatible benchmark
 evidence; it does not require rerunning compatible measurements.
+
+
+## Statistical speed admission
+
+Aggregation publishes measurements; admission decides whether they may participate in
+rewards. A candidate that appears faster with equal or worse compression must establish
+its speed advantage against **one** point. An equal-compression point it would replace
+is the reference; otherwise the reference is the immediate slower, better-compressing
+neighbor on the hypothetical updated frontier. Exact duplicates and dominated candidates
+do not qualify. A new best compression ratio has no such neighbor and requires no speed
+test. Comparisons use full-precision balanced compression ratios, without a minimum
+compression improvement.
+
+The speed coordinate remains the equal-corpus mean of equal-file candidate/incumbent
+median total-compression time ratios. Positive gain is
+`100 * (1 - candidate_coordinate / reference_coordinate)`. Admission holds corpus files
+and weights fixed and resamples repetitions within each nonempty file, recomputing both
+complete coordinates per draw. It does not resample files or count per-file wins.
+Content hashes and corpus manifests must match; duplicate contents retain their manifest
+membership and existing weights. Three measured repetitions per file are the minimum;
+normal benchmarks use eleven.
+
+The reproducible comparison uses 2,000 bootstrap draws and a seed derived from immutable
+run evidence. Within a run, submission/incumbent repetitions are paired only when recorded
+execution-order indices establish interleaved round blocks. Separate runs are resampled
+independently; shared run observations reuse draws. LZ77 and encoding remain paired in
+each total-time observation. Quantiles use linear interpolation at `(n-1)*p`.
+
+The **5th percentile gain must be strictly positive**: a one-sided nominal 95% confidence
+rule. Plots show the central **90%** interval (5th–95th percentiles), whose lower endpoint
+is that decision boundary. This is not a 95% probability that the algorithm is faster,
+and does not control false acceptances across repeated submissions. Small-sample
+bootstrap coverage is approximate. Cross-file dependence, host drift between runs and
+corpus-composition uncertainty are not estimated. Fresh interleaved candidate/reference
+confirmation benchmarks remain a future improvement.
+
+Outcomes are `passed`, `not_required`, `inconclusive`, or `dominated`. Missing or invalid
+evidence is an evaluation error; missing predecessors or changed contexts are pending.
+Inconclusive, dominated, pending and invalid points receive zero allocation and do not
+change frontier geometry or recency record history. Admitted baselines participate in
+weighting and burn their allocations; registration and oldest-submission duplicate-hotkey
+payment rules apply after allocation as before.
+
+### Commands and replay
+
+```sh
+just db-migrate
+just admission-run                         # admit newly published evidence
+just admission-replay --preview            # inspect a changed context without writes
+just admission-replay                      # explicitly publish revised decisions
+just admission-replay --historical         # backfill historically verified evidence
+just weights-preview                       # read-only recalculation and plots
+```
+
+`--historical` permits existing successful verification stamps and recalculates from
+retained runs. It does not refresh verification, republish aggregations, or enable stale
+evidence for live scoring. Both admission commands accept `--out PATH` for decision JSON;
+relative paths are relative to `validator/`. `--preview` never writes decisions.
+
+`submission_admission_checks` is append-only, including database-enforced immutability.
+Each row stores candidate/reference aggregation IDs, policy, outcome and reason, plus
+JSONB statistics, historical frontier coordinates/membership, ordered decision-prefix
+keys and evidence hashes. `submissions.admission_check_id` selects the current decision;
+score snapshots retain the exact decision ID used. Decisions are reused only when the
+candidate, complete preceding context, policy and ordering agree. Ordinary weight
+recalculation reads these decisions and never chooses a new reference. A changed context
+requires explicit replay; there is no automatic admission of legacy rows. All older
+checks remain available after replay. Publication serializes pointer and evidence access
+in one transaction.
+
+Baselines use the explicit `examples-v1` order in `scoring/admission.py`:
+`template`, `hash-chains`, `hc-d4`, `hc-d64`, `lazy`, `mo-lazy`, `no-lz77`, `optimal`,
+`optimal-iter`. Baseline seeding benchmarks the selected names, then explicitly replays
+admission in this order. `--only` does not alter ordering; missing predecessors leave
+later entries pending. `--overwrite` appends benchmark evidence and replays affected
+successors while retaining earlier decisions. Adding/removing baseline names requires a
+manifest/version change and replay. Miner batches use submission timestamp then ID.
+Miner-only deployments are supported when no baseline set is active.
+
+### Miner-facing explanations
+
+Default output is `data/benchmark-reports/current/`. `scores.json` includes per-point
+admission status, reason, evidence IDs, policy and full statistical metadata. It labels
+read-only preview decisions separately from persisted results. `speed-admission.png`
+shows measured gain and uncertainty against zero. `admission/submission-ID.png` shows
+that interval, a zoomed historical Pareto comparison and per-file gains. Excluded points
+are hollow and never join the admitted frontier line. The horizontal comparison range
+is anchored to the reference, not a marginal timing interval for the candidate.
+
+The per-file panel reports faster-on-X-of-Y files and ties. This is descriptive: a
+legitimate aggregate win may include regressions, and aggregate gain is not the mean of
+per-file gain percentages. File hashes, corpus identities and run IDs in JSON support
+an API implementing the same views without requiring local benchmark files.
