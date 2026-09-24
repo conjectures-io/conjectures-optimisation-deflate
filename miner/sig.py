@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 from typing import Final, cast
 
-from bittensor_wallet import Keypair
+from bittensor_wallet import Keypair as Keypair  # re-exported: submit.py types its keypair with it
 
 COMPETITION_SUBMIT_PREFIX: Final = "conjectures-competition-submit-v1"
 # sr25519, as `bittensor_wallet.Keypair` numbers the curves. Named rather than passed as a

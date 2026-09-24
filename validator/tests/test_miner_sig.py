@@ -18,7 +18,7 @@ from __future__ import annotations
 import sys
 from argparse import Namespace
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
@@ -73,13 +73,13 @@ def test_the_digest_is_sha256_of_the_two_files_in_order():
 
 
 class _Response:
-    def __init__(self, status: int, body: dict[str, Any]) -> None:
+    def __init__(self, status: int, body: dict[str, object]) -> None:
         self.status_code = status
         self._body = body
         self.headers = {"content-type": "application/json"}
         self.text = str(body)
 
-    def json(self) -> dict[str, Any]:
+    def json(self) -> dict[str, object]:
         return self._body
 
 
@@ -92,11 +92,22 @@ def _submission(tmp_path: Path) -> Path:
 
 
 def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypatch, capsys):
-    sent: dict[str, Any] = {}
+    urls: list[str] = []
+    sent_headers: dict[str, str] = {}
+    sent_files: dict[str, tuple[str, bytes]] = {}
+    rest: dict[str, object] = {}
 
-    def post(url: str, **kwargs: Any) -> _Response:
-        sent["url"] = url
-        sent.update(kwargs)
+    def post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        files: dict[str, tuple[str, bytes]],
+        **kwargs: object,
+    ) -> _Response:
+        urls.append(url)
+        sent_headers.update(headers)
+        sent_files.update(files)
+        rest.update(kwargs)
         return _Response(
             201,
             {
@@ -109,8 +120,10 @@ def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypat
             },
         )
 
-    monkeypatch.setattr(submit.requests, "post", post)
-    monkeypatch.setattr(submit.time, "time", lambda: 1_700_000_000)
+    # By name: submit.py looks both up at call time, and reaching them through `submit.` would
+    # lean on its imports being part of its interface.
+    monkeypatch.setattr("requests.post", post)
+    monkeypatch.setattr(submit, "time", SimpleNamespace(time=lambda: 1_700_000_000))
     submit.cmd_submit(
         Namespace(
             dir=str(_submission(tmp_path)),
@@ -120,11 +133,11 @@ def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypat
         )
     )
 
-    assert sent["url"] == "https://api.example/v1/competitions/miniz-oxide/submissions"
+    assert urls == ["https://api.example/v1/competitions/miniz-oxide/submissions"]
     # Nothing scalar in the body: the form carries the two files and nothing else.
-    assert "data" not in sent
-    assert set(sent["files"]) == {"parse.rs", "Parse.lean"}
-    headers = sent["headers"]
+    assert "data" not in rest
+    assert set(sent_files) == {"parse.rs", "Parse.lean"}
+    headers = sent_headers
     kp = sig.load_keypair("//Alice")
     assert headers["X-Conjectures-Hotkey"] == kp.ss58_address
     assert headers["X-Conjectures-Timestamp"] == "1700000000"
@@ -140,10 +153,8 @@ def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypat
 
 
 def test_a_refusal_reports_the_platforms_reason_code(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        submit.requests,
-        "post",
-        lambda url, **kw: _Response(
+    def post(url: str, **kwargs: object) -> _Response:
+        return _Response(
             402,
             {
                 "type": "about:blank",
@@ -152,8 +163,9 @@ def test_a_refusal_reports_the_platforms_reason_code(tmp_path, monkeypatch):
                 "detail": "this hotkey is not registered on the subnet",
                 "reason_code": "NOT_REGISTERED",
             },
-        ),
-    )
+        )
+
+    monkeypatch.setattr("requests.post", post)
     with pytest.raises(SystemExit) as exited:
         submit.cmd_submit(
             Namespace(
@@ -168,7 +180,7 @@ def test_a_refusal_reports_the_platforms_reason_code(tmp_path, monkeypatch):
 
 
 def test_the_leaderboard_follows_every_page(monkeypatch, capsys):
-    pages = {
+    pages: dict[str | None, dict[str, object]] = {
         None: {
             "ranked_by": "bytes",
             "headline": {"incumbent_bytes": 2153387, "speed_floor": 8.0},
@@ -198,12 +210,12 @@ def test_the_leaderboard_follows_every_page(monkeypatch, capsys):
     }
     asked: list[str | None] = []
 
-    def get(url: str, params: dict[str, Any], **kw: Any) -> _Response:
+    def get(url: str, params: dict[str, str | None], **kw: object) -> _Response:
         assert url == "https://api.example/v1/competitions/miniz-oxide/leaderboard"
         asked.append(params.get("cursor"))
         return _Response(200, pages[params.get("cursor")])
 
-    monkeypatch.setattr(submit.requests, "get", get)
+    monkeypatch.setattr("requests.get", get)
     submit.cmd_leaderboard(Namespace(url="https://api.example", competition="miniz-oxide"))
     out = capsys.readouterr().out
     assert asked == [None, "page-two"]
