@@ -12,14 +12,15 @@ worker does the I/O around them.
 from __future__ import annotations
 
 import dataclasses as dc
+import json
 from collections.abc import Sequence
 
 from chain.types import MetagraphView, WeightPlan
-from db.scoring import ScoredSubmission
+from db.scored import ScoredSubmission
 
 from .config import ScoringConfig
 from .frontier import FrontierScore, score_frontier
-from .improvement import Improvement, score_improvements
+from .improvement import Improvement, decay_shares, score_improvements
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -39,19 +40,20 @@ class HotkeyScore:
     payable_weight: float = 0.0
     normalized_time_ratio: float | None = None
     admission_check_id: int | None = None
-    admission: dict | None = None
+    admission: dict[str, object] | None = None
 
     @property
     def combined_weight(self) -> float:
         return self.pareto_weight + self.improvement_weight
 
-    def as_snapshot(self) -> dict:
-        snapshot = dc.asdict(self)
+    def as_snapshot(self) -> dict[str, object]:
+        snapshot: dict[str, object] = dc.asdict(self)
         # The dimensionless coordinate is recoverable from aggregation evidence.
         # Keep the historical snapshot time_s column in actual seconds.
         snapshot.pop("normalized_time_ratio")
         snapshot.pop("admission")
-        return snapshot | {"combined_weight": self.combined_weight}
+        snapshot["combined_weight"] = self.combined_weight
+        return snapshot
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -73,7 +75,7 @@ class Scoring:
     def burn_weight(self) -> float:
         return max(0.0, 1.0 - sum(self.weights.values()))
 
-    def snapshots(self) -> list[dict]:
+    def snapshots(self) -> list[dict[str, object]]:
         return [s.as_snapshot() for s in self.scores]
 
     def summary(self) -> str:
@@ -96,8 +98,6 @@ def score(
     The oldest frontier submission per hotkey wins payout eligibility. Recency
     events remain independent: duplicate frontier exclusion does not erase history.
     """
-    import json
-
     if len({s.normalized_time_ratio is not None for s in [*submissions, *history]}) > 1:
         raise ValueError("cannot mix absolute and relative time coordinates")
     contexts = {json.dumps(s.context, sort_keys=True) for s in [*submissions, *history]}
@@ -109,8 +109,6 @@ def score(
 
     frontier = score_frontier([s for s in submissions if admitted(s)], config)
     _, improvements = score_improvements([s for s in history if admitted(s)], config)
-    from .improvement import decay_shares
-
     improvement_by_id = {
         event.submission_id: share * config.improvement_share
         for event, share in zip(
@@ -123,14 +121,15 @@ def score(
         if s.hotkey is not None and s.point_id in frontier.frontier:
             chosen.setdefault(s.hotkey, s.submission_id)
     by_id = {s.submission_id: s for s in [*history, *submissions]}
-    scores = []
+    scores: list[HotkeyScore] = []
     for sid, s in sorted(by_id.items()):
         pareto = frontier.weights.get(s.point_id, 0.0)
         improvement = improvement_by_id.get(sid, 0.0)
-        reason = None
+        reason: str | None = None
         payable = pareto + improvement
         if not admitted(s):
-            reason, payable = "admission-" + (s.admission or {"outcome": "pending"})["outcome"], 0.0
+            outcome = (s.admission or {"outcome": "pending"})["outcome"]
+            reason, payable = "admission-" + str(outcome), 0.0
         elif s.baseline_key is not None or s.hotkey is None:
             reason, payable = "baseline", 0.0
         elif eligible_hotkeys is not None and s.hotkey not in eligible_hotkeys:

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from db.scoring import ScoredSubmission
+from db.scored import ScoredSubmission
 from scoring.admission import advance, ordered_candidates, select_reference
 
 

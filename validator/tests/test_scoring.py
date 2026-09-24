@@ -18,7 +18,7 @@ sys.path.insert(0, str(VALIDATOR))
 
 import scoring  # noqa: E402
 from chain.types import MetagraphView  # noqa: E402
-from db.scoring import ScoredSubmission  # noqa: E402
+from db.scored import ScoredSubmission  # noqa: E402
 
 T0 = dt.datetime(2026, 10, 1, 12, 0, tzinfo=dt.timezone.utc)
 RAW = 8_060_939

@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses as dc
 from collections.abc import Sequence
 
-from db.scoring import ScoredSubmission
+from db.scored import ScoredSubmission
 
 from .config import ScoringConfig
 from .pareto import Boundaries, Point, pareto_front, weigh
