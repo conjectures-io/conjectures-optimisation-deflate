@@ -59,11 +59,17 @@ include = [
     "validator/bench",
     "validator/sandbox",
     "validator/service",
+    "validator/observability",
     "validator/tests",
+    "validator/db",
+    "validator/chain",
+    "validator/scoring",
+    "validator/workers",
+    "validator/tools",
     "miner/submit.py",
 ]
 # Mirrors the sys.path.insert() calls in miner/submit.py and validator/tests/*.py.
-extraPaths = ["validator", "validator/verifier"]
+extraPaths = ["validator", "validator/verifier", "miner"]
 venvPath = "."
 venv = ".venv"
 

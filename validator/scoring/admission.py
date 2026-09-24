@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import math
+from collections.abc import Sequence
+from typing import Literal, Protocol, TypeVar
 
 POLICY_VERSION = "fixed-corpus-speed-bounds-v2"
 BASELINE_ORDER_VERSION = "examples-slow-to-fast-v2"
@@ -22,7 +25,35 @@ BASELINE_ORDER = (
 ADMITTED = {"passed", "not_required"}
 
 
-def ordered_candidates(points):
+class Point(Protocol):
+    """The five fields this policy reads off a scored submission.
+
+    Structural rather than db.scoring.ScoredSubmission itself: this module is the
+    statistical policy, independent of the database (see the module docstring), so it
+    is written against the shape it needs, not the store's concrete type. Declared as
+    read-only properties, not plain fields, because ScoredSubmission is a frozen
+    dataclass -- a plain-field protocol would demand a *writable* attribute, which a
+    frozen dataclass structurally is not.
+    """
+
+    @property
+    def baseline_key(self) -> str | None: ...
+    @property
+    def submitted_at(self) -> dt.datetime: ...
+    @property
+    def submission_id(self) -> int: ...
+    @property
+    def pareto_time(self) -> float: ...
+    @property
+    def ratio_pct(self) -> float: ...
+
+
+Outcome = Literal["dominated", "test", "not_required"]
+
+P = TypeVar("P", bound=Point)
+
+
+def ordered_candidates(points: Sequence[P]) -> list[P]:
     unknown = {
         p.baseline_key for p in points if p.baseline_key and not p.baseline_key.startswith("local:")
     } - set(BASELINE_ORDER)
@@ -38,12 +69,12 @@ def ordered_candidates(points):
     )
 
 
-def dominates(a, b):
+def dominates(a: Point, b: Point) -> bool:
     # Equality preserves the previously admitted point, preventing duplicate rewards.
     return a.pareto_time <= b.pareto_time and a.ratio_pct <= b.ratio_pct
 
 
-def select_reference(frontier, candidate):
+def select_reference(frontier: Sequence[P], candidate: P) -> tuple[Outcome, P | None]:
     """Return (outcome, reference); `test` requires evidence before frontier changes."""
     for p in [*frontier, candidate]:
         if not math.isfinite(p.pareto_time) or p.pareto_time <= 0:
@@ -61,7 +92,7 @@ def select_reference(frontier, candidate):
     return ("test", neighbor) if neighbor is not None else ("not_required", None)
 
 
-def advance(frontier, candidate, outcome):
+def advance(frontier: Sequence[P], candidate: P, outcome: str) -> list[P]:
     if outcome not in ADMITTED:
         return list(frontier)
     return sorted(

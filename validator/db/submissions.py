@@ -5,15 +5,17 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import uuid
-from typing import Any, cast
+from typing import cast, final
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, func, select, true, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import clock, models
+import db.clock as clock
+import db.models as models
+
 from .engine import session_scope
-from .registrations import NoSlot, RegistrationsDb, _available_slots
+from .registrations import NoSlot, RegistrationsDb, available_slots_in_session
 from .status import PENDING, SubmissionState
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,7 @@ SCORE_FIELDS = frozenset(
 )
 
 
+@final
 class SubmissionsDb:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self._sessions = sessions
@@ -167,10 +170,10 @@ class SubmissionsDb:
                     models.Submission.id == sub_id,
                     models.Submission.claimed_at == expected_claim
                     if expected_claim is not None
-                    else True,
+                    else true(),
                     models.Submission.verification_attempt == expected_attempt
                     if expected_attempt is not None
-                    else True,
+                    else true(),
                 )
                 .values(
                     verification_attempt=None,
@@ -202,7 +205,7 @@ class SubmissionsDb:
                     claimed_at=None,
                 )
             )
-            return int(cast("CursorResult[Any]", result).rowcount or 0)
+            return int(cast(CursorResult[tuple[object, ...]], result).rowcount or 0)
 
     # --- reading --------------------------------------------------------------
     def get(self, sub_id: int) -> models.Submission | None:
@@ -211,6 +214,19 @@ class SubmissionsDb:
             if row is not None:
                 session.expunge(row)
             return row
+
+    def files(self, sub_id: int) -> dict[str, bytes]:
+        """The submission's files as stored in the database, by name; empty if it has none.
+
+        Only submissions queued through the conjectures platform API have any: that API runs
+        apart from the gate host, so it cannot write the gate's submission directory. This
+        repository's own service writes the directory instead.
+        """
+        with session_scope(self._sessions) as session:
+            rows = session.scalars(
+                select(models.SubmissionFile).where(models.SubmissionFile.submission_id == sub_id)
+            ).all()
+            return {row.name: bytes(row.content) for row in rows}
 
     def pending_from(self, hotkey: str) -> int:
         # How many of this hotkey's submissions are queued or being verified.
@@ -234,7 +250,7 @@ class SubmissionsDb:
         service. The slot is not taken here -- only acceptance spends one.
         """
         with session_scope(self._sessions) as session:
-            slots = _available_slots(session, hotkey)
+            slots = available_slots_in_session(session, hotkey)
             pending = int(
                 session.execute(
                     select(func.count())

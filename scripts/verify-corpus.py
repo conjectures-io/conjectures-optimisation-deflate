@@ -90,15 +90,16 @@ def expected_names():
         if r["kind"] == "tar":
             want[f"tar/{r['name']}.tar.gz"] = r
         elif r["kind"] == "html":
-            want["html/"] = r          # a directory of pages, checked by count
+            want["html/"] = r  # a directory of pages, checked by count
         else:
             want[f"file/{r['name']}"] = r
     return want
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--quick", action="store_true", help="skip the rebuild check")
     args = ap.parse_args()
 
@@ -115,8 +116,10 @@ def main():
     want = expected_names()
     missing = [n for n in want if not n.endswith("/") and n not in have]
     html_n = sum(1 for k in have if k.startswith("html/"))
-    print(f"presence     {len(have)} files on disk for {len(want)} manifest entries "
-          f"(the Wikipedia pages are one entry)")
+    print(
+        f"presence     {len(have)} files on disk for {len(want)} manifest entries "
+        f"(the Wikipedia pages are one entry)"
+    )
     if missing:
         bad = 1
         print(f"  MISSING {len(missing)}:")
@@ -145,9 +148,20 @@ def main():
             # --repool is required, not an optimisation: the category pools are
             # cached, so without it a drifted tarball would still rebuild from the
             # old cache and this check would pass while the pool had moved.
-            r = subprocess.run([sys.executable, str(BUILDER), "--stage", "1",
-                                "--out", str(tmp), "--force", "--repool"],
-                               capture_output=True, text=True)
+            r = subprocess.run(
+                [
+                    sys.executable,
+                    str(BUILDER),
+                    "--stage",
+                    "1",
+                    "--out",
+                    str(tmp),
+                    "--force",
+                    "--repool",
+                ],
+                capture_output=True,
+                text=True,
+            )
             if r.returncode != 0:
                 print("reproduction builder failed:")
                 print("  " + (r.stderr.strip().splitlines() or ["?"])[-1])
@@ -155,9 +169,9 @@ def main():
             else:
                 published = {p.name: sha(p) for p in STAGE1.iterdir() if p.is_file()}
                 rebuilt = {p.name: sha(p) for p in tmp.iterdir() if p.is_file()}
-                diff = sorted(set(published) ^ set(rebuilt)) + \
-                    sorted(n for n in set(published) & set(rebuilt)
-                           if published[n] != rebuilt[n])
+                diff = sorted(set(published) ^ set(rebuilt)) + sorted(
+                    n for n in set(published) & set(rebuilt) if published[n] != rebuilt[n]
+                )
                 if diff:
                     drift = 1
                     print(f"reproduction {len(diff)} of {len(published)} files DIFFER")

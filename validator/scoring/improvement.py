@@ -18,7 +18,7 @@ import dataclasses as dc
 import datetime as dt
 from collections.abc import Sequence
 
-from db.scoring import ScoredSubmission
+from db.scored import ScoredSubmission
 
 from .config import ScoringConfig
 
@@ -54,7 +54,7 @@ def improvement_events(history: Sequence[ScoredSubmission], threshold: float) ->
     ):
         raise ValueError("mixed compression metrics")
 
-    def metric(s):
+    def metric(s: ScoredSubmission) -> float:
         return s.ratio_pct if normalized else float(s.bytes)
 
     events: list[Improvement] = []
@@ -64,6 +64,9 @@ def improvement_events(history: Sequence[ScoredSubmission], threshold: float) ->
     for s in sorted(history, key=lambda s: (s.submitted_at, s.submission_id)):
         if s.baseline_key is not None:
             continue
+        # hotkey IS NULL OR baseline_key IS NULL is a database check constraint
+        # (ck_submission_owner): baseline_key is None here, so hotkey cannot be.
+        assert s.hotkey is not None
         # The incumbent is the floor the round starts from and re-floors on promotion.
         incumbent = s.normalized_incumbent_ratio_pct if normalized else s.incumbent_bytes
         best = min(best, float(incumbent)) if incumbent else best

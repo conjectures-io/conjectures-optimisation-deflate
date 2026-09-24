@@ -14,7 +14,7 @@ git clone <repo> && cd conjectures-miniz-oxide-competition
 cp -r miner/examples/lazy my-submission     # the incumbent's parser, with its proof
 just bench my-submission                    # bytes, time, verdict, seconds
 just check my-submission                    # the gate; stage 4 is your proof
-python miner/submit.py submit my-submission --hotkey <hotkey file> --url http://<validator>:9200
+python miner/submit.py submit my-submission --hotkey <hotkey file> --url https://<api>
 ```
 
 ## 1. Set up
@@ -225,7 +225,7 @@ just check my-submission
 #   0 intake ok   1 policy ok   3 extract ok   4 statement ok   5 axioms ok
 #   submission  2143847  0.99557x  0.206s  1.20x  ACCEPTED - 0.443% smaller than the incumbent.
 
-python miner/submit.py submit my-submission --hotkey <hotkey file> --url http://<validator>:9200
+python miner/submit.py submit my-submission --hotkey <hotkey file> --url https://<api>
 ```
 
 Zero Lean edits, because the proof's loop measure reads the depth from the extracted constant, `slot.MAX_PROBES.val - probes`. Submission directories may live anywhere; the recipes take absolute paths. The day before, the proof carried `32` as a literal in two lines and the same run failed at stage 4 with `Tactic rfl failed`; that is proof rule 8 in one incident.
@@ -237,12 +237,12 @@ Zero Lean edits, because the proof's loop measure reads the depth from the extra
 ## 10. Submit
 
 ```bash
-python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url http://<validator>:9200
+python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url https://<api>
 python miner/submit.py status <id> --url ...         # the stage report, bytes, time ratio, minutes later
 python miner/submit.py leaderboard --url ...         # every hotkey's best accepted submission, ranked
 ```
 
-The two files are signed with your hotkey over their hash, your address and the current time; the validator refuses a timestamp more than five minutes from its own clock, so keep your clock right. Submissions are verified as they arrive; the same files twice return the same id.
+`--url` is the conjectures platform API's origin; it serves every competition, and this one at `/v1/competitions/miniz-oxide` (`--competition` picks another). The two files are signed with your hotkey over the competition, their hash, your address and the current time, so a signature for one competition cannot be replayed against another; the platform refuses a timestamp more than five minutes from its own clock, so keep your clock right. Submissions are verified as they arrive; the same files twice return the same id.
 
 **Submitting costs one registration on the subnet.** Register, submit, and the slot is spent when the gate accepts. A rejection costs nothing, so fix the proof and resubmit on the same registration; `submit` prints how many slots you have left.
 

@@ -54,7 +54,9 @@ class Boundaries:
     ratio_pct: float = BOUNDARY_RATIO_PCT
 
     @classmethod
-    def from_incumbent(cls, incumbent_seconds: float, speed_floor: float = SPEED_FLOOR):
+    def from_incumbent(
+        cls, incumbent_seconds: float, speed_floor: float = SPEED_FLOOR
+    ) -> Boundaries:
         if incumbent_seconds <= 0:
             return cls()
         return cls(time_s=speed_floor * incumbent_seconds)
@@ -90,7 +92,11 @@ def default_reference(ordered: Sequence[Point]) -> tuple[float, float]:
 # ── The eight methods ─────────────────────────────────────────────────────
 
 
-def hypervolume_weights(front, bounds=None, reference=None) -> Weights:
+def hypervolume_weights(
+    front: Sequence[Point],
+    bounds: Boundaries | None = None,
+    reference: tuple[float, float] | None = None,
+) -> Weights:
     """Each frontier point's share of the dominated area, normalized to sum to 1.
 
     Sorted by time, the frontier tiles the region between it and `reference` into
@@ -107,7 +113,7 @@ def hypervolume_weights(front, bounds=None, reference=None) -> Weights:
         return {}
     ordered = sorted(front, key=lambda p: p.time_s)
     ref_time, ref_ratio = reference or default_reference(ordered)
-    areas = {}
+    areas: dict[str, float] = {}
     for i, p in enumerate(ordered):
         next_time = ordered[i + 1].time_s if i + 1 < len(ordered) else ref_time
         width = max(next_time - p.time_s, 0.0)
@@ -117,7 +123,7 @@ def hypervolume_weights(front, bounds=None, reference=None) -> Weights:
     return {name: area / total for name, area in areas.items()}
 
 
-def normalized_hypervolume_weights(front, bounds: Boundaries) -> Weights:
+def normalized_hypervolume_weights(front: Sequence[Point], bounds: Boundaries) -> Weights:
     """The same tiling on axes rescaled to comparable [0, 1] units first.
 
     Fixes the seconds-versus-percent mismatch, but keeps the "credit the gap to your
@@ -129,7 +135,7 @@ def normalized_hypervolume_weights(front, bounds: Boundaries) -> Weights:
         return {}
     ordered = sorted(front, key=lambda p: p.time_s)
     ref_t, ref_r = 1.0, 1.0
-    areas = {}
+    areas: dict[str, float] = {}
     for i, p in enumerate(ordered):
         nt_i, nr_i = bounds.normalize(p.time_s, p.ratio_pct)
         nt_next = bounds.normalize(ordered[i + 1].time_s, 0.0)[0] if i + 1 < len(ordered) else ref_t
@@ -138,7 +144,7 @@ def normalized_hypervolume_weights(front, bounds: Boundaries) -> Weights:
     return {name: area / total for name, area in areas.items()}
 
 
-def neighbor_improvement_weights(front, bounds: Boundaries) -> Weights:
+def neighbor_improvement_weights(front: Sequence[Point], bounds: Boundaries) -> Weights:
     """Weight = the ratio a point recovers over the previous frontier point.
 
     Time never enters the formula: a point that buys a big ratio drop over its neighbour
@@ -151,7 +157,7 @@ def neighbor_improvement_weights(front, bounds: Boundaries) -> Weights:
         return {}
     ordered = sorted(front, key=lambda p: p.time_s)
     prev_ratio = bounds.ratio_pct
-    improvements = {}
+    improvements: dict[str, float] = {}
     for p in ordered:
         improvements[p.name] = max(prev_ratio - p.ratio_pct, 0.0)
         prev_ratio = p.ratio_pct
@@ -159,7 +165,7 @@ def neighbor_improvement_weights(front, bounds: Boundaries) -> Weights:
     return {name: v / total for name, v in improvements.items()}
 
 
-def elbow_sweetspot_weights(front, bounds: Boundaries) -> Weights:
+def elbow_sweetspot_weights(front: Sequence[Point], bounds: Boundaries) -> Weights:
     """Reward points where the trade-off curve genuinely bends. The default.
 
     In normalized [0, 1] space each point has a rate coming in (ratio recovered per unit
@@ -186,7 +192,7 @@ def elbow_sweetspot_weights(front, bounds: Boundaries) -> Weights:
     # always the normalized origin, and divide by ~0) and never derived from the data
     # (which would let who else submitted this round shift everyone's score).
     boundary_start = bounds.normalize(0.0, bounds.ratio_pct)
-    scores = {}
+    scores: dict[str, float] = {}
     for i, p in enumerate(ordered):
         nt_i, nr_i = bounds.normalize(p.time_s, p.ratio_pct)
         nt_prev, nr_prev = (
@@ -208,7 +214,7 @@ def elbow_sweetspot_weights(front, bounds: Boundaries) -> Weights:
     return {name: s / total for name, s in scores.items()}
 
 
-def diagonal_sweep_weights(front, bounds: Boundaries, k: float = 1.0) -> Weights:
+def diagonal_sweep_weights(front: Sequence[Point], bounds: Boundaries, k: float = 1.0) -> Weights:
     """Rank the frontier by a swept diagonal line; weight by that rank alone.
 
     In normalized space a family of parallel lines `nr = -k*nt + c` sweeps up from the
@@ -232,7 +238,12 @@ def diagonal_sweep_weights(front, bounds: Boundaries, k: float = 1.0) -> Weights
     return {p.name: (n - rank) / denom for rank, p in enumerate(ranked)}
 
 
-def local_global_weights(front, bounds=None, coef_max: float = 2.0, coef_min: float = 0.0):
+def local_global_weights(
+    front: Sequence[Point],
+    bounds: Boundaries | None = None,
+    coef_max: float = 2.0,
+    coef_min: float = 0.0,
+) -> Weights:
     """Two multiplicative coefficients: how a point sits locally, and globally.
 
     Take any two frontier points A (faster, worse ratio) and B (slower, better ratio) and
@@ -262,10 +273,12 @@ def local_global_weights(front, bounds=None, coef_max: float = 2.0, coef_min: fl
     return {name: v / total for name, v in raw.items()}
 
 
-def local_coefficients(ordered, coef_max, coef_min):
+def local_coefficients(
+    ordered: Sequence[Point], coef_max: float, coef_min: float
+) -> dict[str, float]:
     # 1.0 for the two points with no local neighbour pair to sit between.
     n = len(ordered)
-    coefs = {ordered[0].name: 1.0, ordered[-1].name: 1.0}
+    coefs: dict[str, float] = {ordered[0].name: 1.0, ordered[-1].name: 1.0}
     for i in range(1, n - 1):
         coefs[ordered[i].name] = corner_coefficient(
             ordered[i - 1], ordered[i + 1], ordered[i], coef_max, coef_min
@@ -273,14 +286,16 @@ def local_coefficients(ordered, coef_max, coef_min):
     return coefs
 
 
-def global_coefficients(ordered, coef_max, coef_min):
+def global_coefficients(
+    ordered: Sequence[Point], coef_max: float, coef_min: float
+) -> dict[str, float]:
     # Every point measured against the same pair: the frontier's own two extremes. They
     # plug in as A and B themselves, so they land exactly on the line and come out 1.0.
     a, b = ordered[0], ordered[-1]
     return {p.name: corner_coefficient(a, b, p, coef_max, coef_min) for p in ordered}
 
 
-def corner_coefficient(a, b, m, coef_max, coef_min):
+def corner_coefficient(a: Point, b: Point, m: Point, coef_max: float, coef_min: float) -> float:
     # a = the faster, worse-ratio boundary point; b = the slower, better-ratio one;
     # m = the point being scored.
     nt = (m.time_s - a.time_s) / (b.time_s - a.time_s) if b.time_s > a.time_s else 0.0
@@ -295,7 +310,9 @@ def corner_coefficient(a, b, m, coef_max, coef_min):
     return 1.0 - d * (1.0 - coef_min)
 
 
-def improvement_factors(front, *, incremental=False, logarithmic=False):
+def improvement_factors(
+    front: Sequence[Point], *, incremental: bool = False, logarithmic: bool = False
+) -> dict[str, float]:
     """Two equal axis budgets; no external reference or compression threshold.
 
     Total: each point's gain from the worst time / ratio, divided by the sum
@@ -318,7 +335,7 @@ def improvement_factors(front, *, incremental=False, logarithmic=False):
     if len(ordered) == 1:
         return {ordered[0].name: 1.0}
 
-    def gain(worse, better):
+    def gain(worse: float, better: float) -> float:
         difference = max(0.0, worse - better)
         if not logarithmic:
             return difference
@@ -328,7 +345,8 @@ def improvement_factors(front, *, incremental=False, logarithmic=False):
             math.log1p(relative) if math.isfinite(relative) else math.log(worse) - math.log(better)
         )
 
-    times, ratios = {}, {}
+    times: dict[str, float] = {}
+    ratios: dict[str, float] = {}
     for i, point in enumerate(ordered):
         slower = ordered[i + 1] if incremental and i + 1 < len(ordered) else ordered[-1]
         worse = ordered[i - 1] if incremental and i > 0 else ordered[0]
@@ -342,7 +360,13 @@ def improvement_factors(front, *, incremental=False, logarithmic=False):
     }
 
 
-def adjusted_local_global(front, bounds=None, *, incremental=False, logarithmic=False):
+def adjusted_local_global(
+    front: Sequence[Point],
+    bounds: Boundaries | None = None,
+    *,
+    incremental: bool = False,
+    logarithmic: bool = False,
+) -> Weights:
     base = local_global_weights(front, bounds)
     factors = improvement_factors(front, incremental=incremental, logarithmic=logarithmic)
     raw = {name: weight * factors[name] for name, weight in base.items()}
@@ -350,7 +374,9 @@ def adjusted_local_global(front, bounds=None, *, incremental=False, logarithmic=
     return {name: value / total for name, value in raw.items()} if total else base
 
 
-def local_global_improvement_space_log_weights(front, bounds=None) -> Weights:
+def local_global_improvement_space_log_weights(
+    front: Sequence[Point], bounds: Boundaries | None = None
+) -> Weights:
     """Local-global multiplied by equally weighted log time and ratio gap budgets."""
     return adjusted_local_global(front, bounds, incremental=True, logarithmic=True)
 
@@ -373,7 +399,7 @@ METHODS: dict[str, WeightFn] = {
 DEFAULT_METHOD = "local-global-improvement-space-log"
 
 
-def weigh(front, bounds: Boundaries, method: str = DEFAULT_METHOD) -> Weights:
+def weigh(front: Sequence[Point], bounds: Boundaries, method: str = DEFAULT_METHOD) -> Weights:
     # Apply one named method. An unknown name is a configuration error, not a fallback:
     # silently scoring a round with the wrong function is worse than refusing to start.
     try:

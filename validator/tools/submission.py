@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import datetime as dt
 import hashlib
 import json
 import re
@@ -10,16 +12,18 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import TypedDict, cast
 
 from sqlalchemy import select, text
 
 import db
 from db import models
+from db.admission_statistics import AdmissionComparison
 from service.settings import MAX_FILE_BYTES, load
 from service.storage import write_submission
 
 
-def enqueue(store, directory: Path, files: Path, baseline: str | None = None) -> int:
+def enqueue(store: db.Store, directory: Path, files: Path, baseline: str | None = None) -> int:
     source, proof = ((directory / name).read_bytes() for name in ("parse.rs", "Parse.lean"))
     if any(not data or len(data) > MAX_FILE_BYTES for data in (source, proof)):
         raise ValueError(f"Each file must be nonempty and at most {MAX_FILE_BYTES} bytes")
@@ -57,7 +61,69 @@ def enqueue(store, directory: Path, files: Path, baseline: str | None = None) ->
         raise
 
 
-def status(store, sid: int) -> dict:
+class MetricsPayload(TypedDict):
+    total_s: float | None
+    lz77_s: float | None
+    byte_weighted_compression_pct: float | None
+
+
+class ScorePayload(TypedDict):
+    allocated: float
+    payable: float
+    frontier: bool
+    burn_reason: str | None
+    weight_set_id: int
+    dry_run: bool
+    chain_accepted: bool
+
+
+class AggregationPayload(TypedDict):
+    id: int | None
+    statistics: dict[str, object] | None
+
+
+class MilestonePayload(TypedDict):
+    passed_at: dt.datetime | None
+
+
+class BenchmarkPayload(TypedDict):
+    measured_source_sha256: str | None
+
+
+class AdmissionPayload(TypedDict):
+    id: int | None
+    # Ad hoc statuses this tool synthesizes itself (e.g. "stale-verification") carry
+    # extra keys (like "message") that db.admission's own detail shape doesn't, so this
+    # stays a plain dict rather than db.admission.AdmissionDetailExtra.
+    details: dict[str, object] | None
+    recorded_details: dict[str, object] | None
+    excluded_test: bool
+
+
+class StatusPayload(TypedDict):
+    identical_source_submissions: list[int]
+    metrics: MetricsPayload
+    score: ScorePayload | None
+    id: int
+    kind: str
+    hotkey: str | None
+    baseline_key: str | None
+    state: str
+    worker: str | None
+    submitted_at: dt.datetime
+    claimed_at: dt.datetime | None
+    finished_at: dt.datetime | None
+    preverification: MilestonePayload
+    lean_verification: MilestonePayload
+    benchmark: BenchmarkPayload
+    aggregation: AggregationPayload
+    admission: AdmissionPayload
+    exit_code: int | None
+    report: str | None
+    note: str
+
+
+def status(store: db.Store, sid: int) -> StatusPayload:
     with store.sessions() as session:
         row = session.get(models.Submission, sid)
         if row is None:
@@ -73,7 +139,7 @@ def status(store, sid: int) -> dict:
             if row.admission_check_id
             else None
         )
-        live_detail = None
+        live_detail: dict[str, object] | None = None
         if not test and row.state == "accepted":
             from db.admission import evaluate
             from verifier.identity import required_fingerprint
@@ -86,7 +152,7 @@ def status(store, sid: int) -> dict:
                 }
             else:
                 try:
-                    points = store.scoring._inputs(None, None, preview=False, session=session)
+                    points = store.scoring.inputs_for_admission(preview=False, session=session)
                     current = next(
                         (p for p in evaluate(session, points) if p.submission_id == sid), None
                     )
@@ -193,7 +259,7 @@ def status(store, sid: int) -> dict:
         }
 
 
-def summary(payload: dict) -> str:
+def summary(payload: StatusPayload) -> str:
     terminal = payload["state"] in {"accepted", "rejected", "error"}
     missing = "not recorded" if terminal else "pending"
     state = "gate passed" if payload["state"] == "accepted" else payload["state"]
@@ -212,33 +278,34 @@ def summary(payload: dict) -> str:
     elif detail:
         outcome = detail["outcome"]
         if outcome in {"pending", "invalid_evidence"}:
-            result = "pending — " + detail.get("message", detail.get("reason_code", outcome))
+            result = "pending — " + str(detail.get("message", detail.get("reason_code", outcome)))
         else:
             result = "admitted" if outcome in {"passed", "not_required"} else "not admitted"
             result += f" ({outcome})"
     else:
         result = "no decision recorded" if terminal else "pending"
     lines.append(f"  Speed admission: {result}")
-    duplicates = payload.get("identical_source_submissions", [])
+    duplicates = payload["identical_source_submissions"]
     if duplicates:
         lines.append("  Identical source: submission " + ", ".join(map(str, duplicates)))
-    stats = detail.get("statistics")
+    stats = cast("AdmissionComparison | None", detail.get("statistics"))
     if stats:
         lines.append(
             f"  Speed gain: {stats['gain_pct']:+.3f}%; 95% lower bound: {stats['lower_pct']:+.3f}%"
         )
-    metrics = payload.get("metrics", {})
-    values = []
+    metrics = payload["metrics"]
+    values: list[str] = []
     for key, label, suffix in (
         ("total_s", "total", "s"),
         ("lz77_s", "LZ77", "s"),
         ("byte_weighted_compression_pct", "compression (byte-weighted)", "%"),
     ):
-        if metrics.get(key) is not None:
-            values.append(f"{label} {metrics[key]:.3f}{suffix}")
+        value = cast("float | None", metrics[key])
+        if value is not None:
+            values.append(f"{label} {value:.3f}{suffix}")
     if values:
         lines.append("  Measurements: " + ", ".join(values))
-    score = payload.get("score")
+    score = payload["score"]
     if score:
         mode = (
             "dry-run"
@@ -279,6 +346,16 @@ def summary(payload: dict) -> str:
     return "\n".join(lines)
 
 
+@dataclasses.dataclass
+class Args:
+    command: str = ""
+    directory: Path = Path()
+    name: str | None = None
+    id: int = 0
+    watch: bool = False
+    verbose: bool = False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     commands = ap.add_subparsers(dest="command", required=True)
@@ -291,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     cmd.add_argument("id", type=int)
     cmd.add_argument("--watch", action="store_true")
     cmd.add_argument("--verbose", action="store_true", help="full stored JSON and gate report")
-    args = ap.parse_args(argv)
+    args = ap.parse_args(argv, namespace=Args())
     store = db.connect()
     try:
         if args.command != "status":
@@ -306,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Queued {args.command} submission {sid}.")
             print(f"Track: just submission-status {sid} --watch")
             return 0
-        previous = None
+        previous: str | None = None
         while True:
             payload = status(store, args.id)
             rendered = (

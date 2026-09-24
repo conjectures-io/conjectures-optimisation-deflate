@@ -131,3 +131,35 @@ def test_the_same_files_from_one_hotkey_are_one_submission(store):
     first, fresh = store.submissions.add("5" * 47, "a" * 64)
     second, again = store.submissions.add("5" * 47, "a" * 64)
     assert (fresh, again) == (True, False) and first == second
+
+
+def test_submission_files_precede_scoring_bounds(migrated):
+    """Main's 0009 remains stable; only 0010 adds the exclusion outcome."""
+    config = _alembic_config(migrated)
+    engine = sa.create_engine(migrated)
+    try:
+        with engine.connect() as conn:
+            assert (
+                conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
+                == "0010"
+            )
+            constraint = conn.execute(
+                sa.text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'ck_admission_outcome'"
+                )
+            ).scalar_one()
+            assert "'excluded'" in constraint
+        command.downgrade(config, "0009")
+        with engine.connect() as conn:
+            assert "submission_files" in sa.inspect(conn).get_table_names()
+            constraint = conn.execute(
+                sa.text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'ck_admission_outcome'"
+                )
+            ).scalar_one()
+            assert "'excluded'" not in constraint
+        command.upgrade(config, "head")
+    finally:
+        engine.dispose()

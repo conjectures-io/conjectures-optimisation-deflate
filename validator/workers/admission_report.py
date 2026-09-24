@@ -1,14 +1,49 @@
+# Matplotlib leaves **kwargs untyped on plotting methods; retain checks on our data.
+# pyright: reportUnknownMemberType=false
+
 """Human explanations and visualizations from the stored admission contract."""
 
 from __future__ import annotations
 
 import textwrap
+from collections.abc import Sequence
+from pathlib import Path
+from typing import TypedDict, cast
+
+from db.admission import PointPayload
+from db.admission_statistics import AdmissionComparison
+from scoring.combine import HotkeyScore
+from scoring.eligibility import BoundsDetail
 
 
-def explanation(detail):
+class AdmissionDetail(TypedDict):
+    """The stored admission contract (db.admission.evaluate's `detail`), as read back
+    here for reporting. Every outcome sets these three -- see AdmissionDetailExtra for
+    the rest, which only a fully evaluated point (not pending/invalid_evidence) has.
+    """
+
+    outcome: str
+    reason_code: str
+    candidate: PointPayload
+
+
+class AdmissionDetailExtra(AdmissionDetail, total=False):
+    error: str
+    reference: PointPayload | None
+    frontier_before: list[PointPayload]
+    statistics: AdmissionComparison | None
+    preview: bool
+    admission_check_id: int | None
+    decision_key: str
+    scoring_bounds: BoundsDetail
+
+
+def explanation(detail: AdmissionDetailExtra) -> str:
     status = detail["outcome"]
     if status == "excluded":
-        b = detail["scoring_bounds"]
+        b = detail.get("scoring_bounds")
+        if b is None:
+            return "Outside scoring bounds. Recorded boundary details unavailable. No rewards."
         return (
             f"Outside scoring bounds: balanced slowdown {b['time_ratio']:.3f}x "
             f"(maximum {b['max_time_ratio']:g}x), compression {b['compression_pct']:.3f}% "
@@ -17,7 +52,8 @@ def explanation(detail):
     stats = detail.get("statistics")
     if stats:
         gain, lower = stats["gain_pct"], stats["lower_pct"]
-        reference = detail["reference"]
+        reference = detail.get("reference")
+        assert reference is not None
         delta = detail["candidate"]["compression_pct"] - reference["compression_pct"]
         compression = (
             "equal compression"
@@ -43,19 +79,29 @@ def explanation(detail):
     }.get(status, status)
 
 
-def comparison_range(detail):
+def comparison_range(detail: AdmissionDetailExtra) -> tuple[float, float] | None:
     stats = detail.get("statistics")
     if not stats:
         return None
-    anchor = detail["reference"]["time_ratio"]
-    return [anchor * (1 - stats["upper_pct"] / 100), anchor * (1 - stats["lower_pct"] / 100)]
+    reference = detail.get("reference")
+    assert reference is not None
+    anchor = reference["time_ratio"]
+    return anchor * (1 - stats["upper_pct"] / 100), anchor * (1 - stats["lower_pct"] / 100)
 
 
-def plot_admission(scores, directory):
+def _detail(score: HotkeyScore) -> AdmissionDetailExtra:
+    # Callers only reach this on scores selected for having a truthy `.admission`.
+    assert score.admission is not None
+    return cast(AdmissionDetailExtra, cast(object, score.admission))
+
+
+def plot_admission(scores: Sequence[HotkeyScore], directory: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
 
     # A current report must not retain plots for comparisons that no longer apply.
     detail_dir = directory / "admission"
@@ -72,9 +118,9 @@ def plot_admission(scores, directory):
         for i, s in enumerate(selected)
     }
     fig, ax = plt.subplots(figsize=(12, max(4, len(selected) * 0.55)), layout="constrained")
-    labels = []
+    labels: list[str] = []
     for i, score in enumerate(selected):
-        detail = score.admission
+        detail = _detail(score)
         labels.append(f"{detail['candidate']['label']} — {detail['outcome']}")
         stats = detail.get("statistics")
         color = colors[score.submission_id]
@@ -90,7 +136,7 @@ def plot_admission(scores, directory):
     ax.set(
         xlabel="Speed gain over the selected reference (%) — positive is faster",
         title="Statistical speed admission"
-        + (" (read-only preview)" if any(s.admission.get("preview") for s in selected) else ""),
+        + (" (read-only preview)" if any(_detail(s).get("preview") for s in selected) else ""),
     )
     ax.grid(axis="x", alpha=0.2)
     fig.supxlabel(
@@ -102,12 +148,19 @@ def plot_admission(scores, directory):
     plt.close(fig)
     detail_dir.mkdir(exist_ok=True)
     for score in selected:
-        detail = score.admission
+        detail = _detail(score)
         stats = detail.get("statistics")
         if not stats:
             continue
-        fig, (gain_ax, time_ax, pareto_ax) = plt.subplots(
-            3, 1, figsize=(11, 12), height_ratios=[1, 1, 2], layout="constrained"
+        # plt.subplots' stub can't size a 3-row unpack, so it types the tuple Any;
+        # pre-declaring each axes' real type gets everything past this line typed
+        # properly (same as the single-axes plot above).
+        gain_ax: Axes
+        time_ax: Axes
+        pareto_ax: Axes
+        fig, (gain_ax, time_ax, pareto_ax) = cast(
+            "tuple[Figure, tuple[Axes, Axes, Axes]]",
+            plt.subplots(3, 1, figsize=(11, 12), height_ratios=[1, 1, 2], layout="constrained"),
         )
         color = colors[score.submission_id]
         gain_ax.axvline(0, color="black", linestyle="--")
@@ -129,8 +182,10 @@ def plot_admission(scores, directory):
             fontsize=10,
         )
         gain_ax.grid(axis="x", alpha=0.25)
-        before = detail["frontier_before"]
-        candidate, reference = detail["candidate"], detail["reference"]
+        before = detail.get("frontier_before")
+        reference = detail.get("reference")
+        assert before is not None and reference is not None
+        candidate = detail["candidate"]
         pareto_ax.plot(
             [p["time_ratio"] for p in before],
             [p["compression_pct"] for p in before],
@@ -160,6 +215,9 @@ def plot_admission(scores, directory):
             label="Candidate: " + candidate["label"],
         )
         interval = comparison_range(detail)
+        # comparison_range returns None only when detail lacks "statistics", which this
+        # branch (stats truthy, same detail) already ruled out.
+        assert interval is not None
         time_ax.scatter(reference["time_ratio"], 1, marker="s", color="black", zorder=3)
         time_ax.scatter(candidate["time_ratio"], 0, color=color, zorder=3)
         time_ax.hlines(0, *interval, color=color, linewidth=3)

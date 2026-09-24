@@ -25,8 +25,11 @@ from loguru import logger
 
 import db
 from db import SubmissionState, models
+from observability.axiom import config_error, get_events, init
+from observability.gate import verdict_fields, vs_incumbent
 
 from .settings import Settings, load
+from .storage import NAMES, write_submission
 
 VALIDATOR = Path(__file__).resolve().parent.parent
 VERIFY = VALIDATOR / "verifier/verify.py"
@@ -135,6 +138,27 @@ def run_gate(
             )
 
 
+def materialize(store: db.Store, sub_id: int, directory: Path) -> bool:
+    """Write a submission's database-held files into its submission directory.
+
+    verify.py reads the directory `service.settings` names for the id, whichever path queued
+    the submission. A submission queued through the platform API arrives with its files in
+    `submission_files` and no directory, since that API shares no disk with this host; one
+    queued through this repository's own service already has its directory and nothing in the
+    table. Returns whether anything was written.
+
+    The database copy wins when both exist: it is the one the submitter's signature covers,
+    through the digest, and a directory left over from an earlier run must not stand in for it.
+    """
+    files = store.submissions.files(sub_id)
+    if not files:
+        return False
+    if set(files) != set(NAMES):
+        raise ValueError(f"submission {sub_id} stores {sorted(files)}, not {list(NAMES)}")
+    write_submission(directory, files["parse.rs"], files["Parse.lean"])
+    return True
+
+
 def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> str:
     """Verify one claimed submission and record the outcome. Returns its final state.
 
@@ -144,12 +168,27 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
     """
     label = sub.hotkey or sub.baseline_key or "unknown"
     logger.info(f"[worker] verifying submission {sub.id} ({label[:8]}…)")
+    events = get_events()
+    who = {"submission_id": sub.id, "hotkey": sub.hotkey, "baseline_key": sub.baseline_key}
+    directory = settings.submission_dir(sub.id)
+    try:
+        materialize(store, sub.id, directory)
+    except ValueError as exc:
+        # A row the platform wrote wrongly is the validator's problem, not the miner's: back
+        # on the queue uncharged, and the loop stops so an operator sees it.
+        logger.error(f"[worker] submission {sub.id}: {exc}")
+        store.submissions.requeue(
+            sub.id, expected_claim=sub.claimed_at, expected_attempt=sub.verification_attempt
+        )
+        events.error("gate_verdict", **who, state="error", stage="materialize", reason=str(exc))
+        events.warning("submission_requeued", submission_id=sub.id, reason=f"files: {exc}")
+        return SubmissionState.ERROR.value
+    started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix=f"score-{sub.id}-") as tmp:
         results = Path(tmp) / "results.json"
-        result = run_gate(
-            settings.submission_dir(sub.id), results, sub.claimed_at, sub.verification_attempt
-        )
+        result = run_gate(directory, results, sub.claimed_at, sub.verification_attempt)
         measured = scored(results) if result.returncode == 0 else {}
+    duration = round(time.monotonic() - started, 3)
     report = result.stdout
     state = STATE_OF_EXIT.get(result.returncode)
 
@@ -160,6 +199,19 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
         )
         store.submissions.requeue(
             sub.id, expected_claim=sub.claimed_at, expected_attempt=sub.verification_attempt
+        )
+        verdict = verdict_fields(report, state="error")
+        events.error("gate_verdict", **who, state="error", **verdict, duration_seconds=duration)
+        events.error(
+            "gate_validator_error",
+            submission_id=sub.id,
+            exit_code=result.returncode,
+            error=verdict["reason"] or result.stderr[-1500:] or report[-1500:],
+        )
+        events.warning(
+            "submission_requeued",
+            submission_id=sub.id,
+            reason=f"validator error (exit {result.returncode})",
         )
         return SubmissionState.ERROR.value
 
@@ -172,6 +224,18 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
         expected_claim=sub.claimed_at,
         expected_attempt=sub.verification_attempt,
         **fields,
+    )
+    events.emit(
+        "info" if final == SubmissionState.ACCEPTED.value else "warning",
+        "gate_verdict",
+        **who,
+        state=final,
+        **verdict_fields(report, state=final, gate_state=state.value),
+        bytes=measured.get("bytes") if state is SubmissionState.ACCEPTED else None,
+        vs_incumbent=vs_incumbent(measured) if state is SubmissionState.ACCEPTED else None,
+        time_ratio=measured.get("time_ratio") if state is SubmissionState.ACCEPTED else None,
+        exit_code=result.returncode,
+        duration_seconds=duration,
     )
     if final == SubmissionState.ACCEPTED.value and (sub.hotkey or sub.baseline_key):
         from db.admission import run as admit
@@ -197,6 +261,13 @@ def drain(store: db.Store, settings: Settings) -> int:
     # Verify every claimable submission in arrival order; stop on a validator error.
     done = 0
     while (sub := store.submissions.claim_next(settings.worker_id)) is not None:
+        get_events().info(
+            "submission_claimed",
+            submission_id=sub.id,
+            hotkey=sub.hotkey,
+            baseline_key=sub.baseline_key,
+            worker_id=settings.worker_id,
+        )
         if score_one(store, settings, sub) == SubmissionState.ERROR.value:
             break
         done += 1
@@ -208,6 +279,9 @@ def sweep(store: db.Store, settings: Settings) -> None:
     # rate-limit counters for windows that can no longer be current.
     if requeued := store.submissions.requeue_stale(settings.stale_claim_seconds):
         logger.info(f"[worker] requeued {requeued} submission(s) abandoned mid-gate")
+        get_events().warning(
+            "submission_requeued", count=requeued, reason="stale claim: abandoned mid-gate"
+        )
     store.rate.prune()
 
 
@@ -228,13 +302,28 @@ def run_forever(store: db.Store, settings: Settings) -> None:
 
 
 def main() -> None:
-    settings = load()
+    events = init("competition-gate-worker")
+    try:
+        settings = load()
+    except Exception as exc:
+        events.error("service_misconfigured", error=config_error(exc))
+        raise
     store = db.connect()
+    events.info(
+        "service_started",
+        worker_id=settings.worker_id,
+        total_timeout_seconds=TOTAL_TIMEOUT,
+        stale_claim_seconds=settings.stale_claim_seconds,
+        corpus=os.environ.get("VERIFY_CORPUS") or None,
+    )
+    reason = "crashed"
     try:
         run_forever(store, settings)
     except KeyboardInterrupt:
+        reason = "interrupted"
         logger.info("[worker] interrupted")
     finally:
+        events.info("service_stopped", reason=reason)
         store.close()
 
 

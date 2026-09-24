@@ -1,5 +1,12 @@
 # How emission is scored
 
+The validator's weight is split first: the treasury (uid 121) takes 80% and this
+competition 20% (`validator/scoring/split.py`, code constants on netuid 66). Everything below
+describes how the competition's 20% is shared out; "burns" means *is unpaid* within that
+share, and the unpaid part goes to the treasury, not the burn uid (see "Treasury and
+competition budget" at the end). If scoring fails the treasury is paid everything for that
+epoch rather than the epoch being skipped.
+
 Two components, on every accepted submission the validator holds.
 
 | share | what it pays for | why it exists |
@@ -291,38 +298,41 @@ diagnostics are written separately as `admission/submission-<id>-files.png`.
 The proposed browser API is documented in [FRONTEND_API.md](FRONTEND_API.md).
 
 
-## Conjectures collector and compression budget
+## Treasury and competition budget
 
-The weight setter reserves 80% for the Conjectures collector and allocates up to
-20% through compression scoring. Configure `WEIGHT_COMPETITION_SHARE=0.20`;
-the fixed collector share is `1 - WEIGHT_COMPETITION_SHARE`.
-`WEIGHT_COLLECTOR_UID=121` matches the treasury in
-`conjectures-validator/emissions_worker/worker.py`. Prefer setting
-`WEIGHT_COLLECTOR_HOTKEY` to the collector's registered SS58 hotkey: it overrides
-UID configuration and follows metagraph UID changes. An absent collector causes a
-recorded skip, with no fallback to a different recipient.
+The weight setter is the validator's only `set_weights` caller and sets the whole vector
+(`validator/scoring/split.py`): the treasury takes 80% and the competition allocates up to
+20% by score. On netuid 66 the treasury uid (121) and the 20% are code constants; a
+`WEIGHT_TREASURY_UID` or `WEIGHT_COMPETITION_SHARE` that disagrees refuses to start. Off
+mainnet both are configurable (`WEIGHT_TREASURY_UID` defaults to `WEIGHT_BURN_UID`,
+`WEIGHT_COMPETITION_SHARE` to 0.20). `WEIGHT_COLLECTOR_UID` and `WEIGHT_COLLECTOR_HOTKEY`
+are accepted as older names for `WEIGHT_TREASURY_UID` and `WEIGHT_TREASURY_HOTKEY`.
 
-Scoring and speed admission still include baselines in the frontier. Miner scores
-are multiplied by the compression budget without renormalization. Baseline,
-deregistered, duplicate-hotkey and otherwise unpaid allocations go to the collector.
-For example, a miner allocated 25% of the compression budget receives 5% overall;
-the collector receives 95% if there are no other payable miners. An empty or
-baseline-only round sends 100% to the collector. The reserved burn UID remains
-ineligible for miner payment.
+Setting `WEIGHT_TREASURY_HOTKEY` to the treasury's registered SS58 hotkey guards against uid
+reassignment: an absent hotkey causes a recorded skip, with no fallback to a different
+recipient. Off mainnet it also locates the treasury uid and follows it if it changes; on
+netuid 66 it must sit at uid 121, or the epoch is skipped. A treasury uid absent from the
+metagraph is likewise a recorded skip.
 
-`SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within**
-the compression budget (defaults 0.60/0.40). Set them to 1/0 for Pareto-only rewards.
-Score snapshots and weights-preview report competition-local fractions; the
-weight-set audit vector contains actual subnet fractions and its summary records
-the budget and collector allocation. Historical `burn` labels in score reports
-mean unpaid competition allocation; normal weight setting now routes it to the
-collector. No schema migration is required.
+Scoring and speed admission still include baselines in the frontier. Miner scores are
+multiplied by the competition's share without renormalization. Baseline, deregistered,
+duplicate-hotkey and otherwise unpaid allocations go to the treasury. For example, a miner
+allocated 25% of the competition budget receives 5% overall; the treasury receives 95% if
+there are no other payable miners. An empty or baseline-only round, or one whose scoring
+raises, sends 100% to the treasury. The burn uid is never eligible for miner payment.
 
-`WEIGHT_DRY_RUN=1` remains the default. `WEIGHT_BURN_MODE=1` is an explicit emergency
-override: it sends everything to `WEIGHT_BURN_UID`, bypassing normal collector routing.
-Restart the weight setter after configuration changes. Run only one weight-setting
-worker for a validator wallet: this worker constructs the complete subnet vector,
-so do not feed that already scaled vector through the platform's 80/20 allocator.
+`SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within** the
+competition budget (defaults 0.60/0.40). Set them to 1/0 for Pareto-only rewards. Score
+snapshots and weights-preview report competition-local fractions; the weight-set audit
+vector contains actual subnet fractions and its summary records the budget and treasury
+allocation. Historical `burn` labels in score reports mean unpaid competition allocation;
+normal weight setting routes it to the treasury. No schema migration is required.
+
+`WEIGHT_DRY_RUN=1` remains the default. `WEIGHT_BURN_MODE=1` pauses the competition: its
+share goes to `WEIGHT_BURN_UID` (to the treasury if that uid is absent) and the treasury's
+share is paid as usual. Restart the weight setter after configuration changes. Run only one
+weight-setting worker for a validator wallet, and do not also run conjectures-validator's
+retired emissions worker: this worker constructs the complete subnet vector.
 
 
 ### Scoring boundaries and benchmark timeouts
@@ -340,7 +350,7 @@ remains the wall-clock cap per build/measurement process; a measurement includes
 one corpus and all repetitions. `VERIFY_TOTAL_TIMEOUT=2700` caps the worker gate.
 The deprecated benchmark `--speed-floor` option is metadata only.
 
-Apply migration 0009 with `just db-migrate`. Changed scoring bounds invalidate old
+Apply migration 0010 with `just db-migrate`. Changed scoring bounds invalidate old
 admission decisions: use `just admission-replay` for current verified evidence, or
 `just admission-replay --historical` for an operator's historical baseline replay.
 `just weights-preview` recalculates historical decisions without rebenchmarking.
