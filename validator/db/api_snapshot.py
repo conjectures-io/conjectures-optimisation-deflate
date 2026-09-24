@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import cast
@@ -11,11 +13,11 @@ from sqlalchemy.orm import Session
 
 from verifier.identity import required_fingerprint
 
-from . import models
+from .models import BenchmarkAggregation, Submission, SubmissionAdmissionCheck
 from .scored import ScoredSubmission
 
 
-def public_aggregation(row: models.BenchmarkAggregation | None) -> dict[str, object] | None:
+def public_aggregation(row: BenchmarkAggregation | None) -> dict[str, object] | None:
     if row is None:
         return None
     stats = dict(row.statistics or {})
@@ -57,17 +59,27 @@ def build_snapshot(
     by_id = {p.submission_id: p for p in points}
     items: list[dict[str, object]] = []
     rows = session.scalars(
-        select(models.Submission)
-        .where(models.Submission.hotkey.is_not(None) | models.Submission.baseline_active)
-        .order_by(models.Submission.id)
+        select(Submission)
+        .where(Submission.hotkey.is_not(None) | Submission.baseline_active)
+        .order_by(Submission.id)
     )
     corpora: set[str] = set()
+    observed: list[list[object]] = []
     for row in rows:
+        observed.append(
+            [
+                row.id,
+                row.state,
+                row.aggregation_id,
+                row.admission_check_id,
+                row.source_sha256,
+                row.verifier_fingerprint,
+                row.baseline_active,
+            ]
+        )
         point = by_id.get(row.id)
         aggregation = (
-            session.get(models.BenchmarkAggregation, row.aggregation_id)
-            if row.aggregation_id
-            else None
+            session.get(BenchmarkAggregation, row.aggregation_id) if row.aggregation_id else None
         )
         decision = (
             public_admission(dict(point.admission or {}))
@@ -78,9 +90,16 @@ def build_snapshot(
             pairs = cast(list[list[str]], point.context.get("corpora", []))
             corpora.update(pair[0] for pair in pairs)
         if point and point.admission_check_id:
-            check = session.get(models.SubmissionAdmissionCheck, point.admission_check_id)
+            check = session.get(SubmissionAdmissionCheck, point.admission_check_id)
             if check:
                 decision["created_at"] = check.created_at.isoformat()
+        reference = cast(dict[str, object], decision.get("reference") or {})
+        reference_id = reference.get("aggregation_id")
+        reference_aggregation = (
+            session.get(BenchmarkAggregation, reference_id)
+            if isinstance(reference_id, int)
+            else None
+        )
         items.append(
             {
                 "submission": {
@@ -97,14 +116,27 @@ def build_snapshot(
                     "verifier_fingerprint": row.verifier_fingerprint,
                 },
                 "aggregation": public_aggregation(aggregation),
+                "reference_aggregation": public_aggregation(reference_aggregation),
                 "admission": decision,
                 "scoring_input": point is not None,
             }
         )
+    effective = {**policy, "required_corpora": sorted(corpora)}
+    effective["admission_policy_version"] = policy["version"]
+    effective["version"] = (
+        "compression-policy-"
+        + hashlib.sha256(
+            json.dumps(
+                [effective, sorted({json.dumps(p.context, sort_keys=True) for p in points})],
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()[:16]
+    )
     return {
         "schema_version": 1,
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "verifier_fingerprint": required_fingerprint(),
+        "observed_submissions": observed,
         "items": items,
-        "policy": {**policy, "required_corpora": sorted(corpora)},
+        "policy": effective,
     }

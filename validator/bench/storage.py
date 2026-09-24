@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import math
 import re
 import sys
@@ -22,6 +20,8 @@ from db.models import BenchmarkCompressionResult, BenchmarkRun, BenchmarkSpeedSa
 
 from .corpora import Corpus
 from .errors import Malformed
+from .hashing import canonical as canonical
+from .hashing import sha256 as sha256
 from .results import INCUMBENT, Run, parse
 
 
@@ -31,14 +31,6 @@ def preflight(engine: sa.Engine) -> None:
         conn.execute(sa.select(BenchmarkRun).limit(0))
         conn.execute(sa.select(BenchmarkCompressionResult).limit(0))
         conn.execute(sa.select(BenchmarkSpeedSample).limit(0))
-
-
-def canonical(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-
-
-def sha256(value: object) -> str:
-    return hashlib.sha256(canonical(value)).hexdigest()
 
 
 def read_artifact(path: Path) -> tuple[Run, list[dict[str, object]]]:

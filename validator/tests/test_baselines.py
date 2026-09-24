@@ -3,16 +3,19 @@
 import hashlib
 import json
 import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
-from sqlalchemy import func, select
+import pytest
+from sqlalchemy import delete, func, select
 from test_bench_storage import evidence
 
 from bench import baselines
 from bench.corpora import Corpus
 from bench.driver import Config, Measurement
 from bench.results import parse
-from db.models import BenchmarkAggregation, BenchmarkRun, Submission
+from db.models import BenchmarkAggregation, BenchmarkRun, Submission, SubmissionFile
 from service.settings import Settings
 from verifier.identity import required_fingerprint
 
@@ -87,7 +90,20 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
     monkeypatch.setattr(baselines, "run", measure)
     config = Config(root, tmp_path, reps=2, warmup=0)
     baselines.seed_one(store.engine, "template", code, datasets[:1], config)
+    with store.sessions.begin() as session:
+        sid = session.scalar(select(Submission.id))
+        assert store.submissions.files(sid) == {"parse.rs": b"source", "Parse.lean": b"proof"}
+        # Historical baselines have no DB source copies. Resume backfills them without tools.
+        session.execute(delete(SubmissionFile).where(SubmissionFile.submission_id == sid))
     baselines.seed_one(store.engine, "template", code, datasets[:1], config)
+    assert store.submissions.files(sid) == {"parse.rs": b"source", "Parse.lean": b"proof"}
+    with store.sessions.begin() as session:
+        session.get(SubmissionFile, (sid, "Parse.lean")).content = b"different proof"
+    with pytest.raises(ValueError, match="immutable revision"):
+        baselines.seed_one(store.engine, "template", code, datasets[:1], config)
+    assert store.submissions.files(sid)["Parse.lean"] == b"different proof"
+    with store.sessions.begin() as session:
+        session.get(SubmissionFile, (sid, "Parse.lean")).content = b"proof"
     assert verified == ["static", "lean"] and measured == ["first"]
     baselines.seed_one(store.engine, "template", code, datasets, config)
     assert measured == ["first", "second"]
@@ -105,6 +121,10 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
     baselines.seed_one(store.engine, "template", code, datasets, config)
     with store.sessions() as session:
         assert session.scalar(select(func.count()).select_from(Submission)) == 2
+        assert session.scalar(select(func.count()).select_from(SubmissionFile)) == 4
+        assert store.submissions.files(sid)["parse.rs"] == b"source"
+        newest = session.scalar(select(Submission.id).where(Submission.baseline_active))
+        assert store.submissions.files(newest)["parse.rs"] == b"new source"
         assert (
             session.scalar(
                 select(func.count()).select_from(Submission).where(Submission.baseline_active)
@@ -151,3 +171,15 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
     assert report_provenance["source_calculator_version"] == "compression-median-v3"
     assert report_provenance["calculator_version"] == "compression-relative-time-v5"
     assert report_provenance["compression"]["ratio_pct"] == payload["points"][0]["ratio_pct"]
+
+
+def test_baseline_cli_starts_in_fresh_process():
+    result = subprocess.run(
+        [sys.executable, "-m", "bench.baselines", "--help"],
+        cwd=Path(baselines.__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "default: both competition stages" in result.stdout

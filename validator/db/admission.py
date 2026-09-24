@@ -15,7 +15,7 @@ from typing import Protocol, TypedDict, cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from bench.storage import sha256
+from bench.hashing import sha256
 from scoring.admission import (
     ADMITTED,
     BASELINE_ORDER,

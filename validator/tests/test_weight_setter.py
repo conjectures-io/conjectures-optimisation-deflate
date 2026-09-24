@@ -506,6 +506,7 @@ def test_api_snapshot_captures_public_membership_without_changing_scores(store):
     assert payload is not None
     assert payload["schema_version"] == 1
     import json
+
     saved = json.dumps(payload, sort_keys=True)
     # Diagnostic submissions never enter public snapshot membership.
     items = payload["items"]

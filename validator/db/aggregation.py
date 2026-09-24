@@ -16,8 +16,8 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from bench.corpora import Corpus
+from bench.hashing import sha256
 from bench.results import INCUMBENT, SCHEMA_VERSION, FileResult, Run, parse
-from bench.storage import sha256
 from verifier.identity import required_fingerprint
 
 from .locks import publication_lock
