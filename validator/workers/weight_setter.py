@@ -30,7 +30,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import db  # noqa: E402
 import scoring  # noqa: E402
 from chain.schedule import should_set  # noqa: E402
-from chain.types import BLOCK_SECONDS, FINNEY, NETUID, SubnetParams, WeightPlan  # noqa: E402
+from chain.types import (  # noqa: E402
+    BLOCK_SECONDS,
+    FINNEY,
+    NETUID,
+    MetagraphView,
+    SubnetParams,
+    WeightPlan,
+)
 from chain.weights import WeightChain  # noqa: E402
 
 Action = Literal["wait", "skip", "set", "failed"]
@@ -109,7 +116,7 @@ class StepResult:
 
 def plan_for(
     store: db.Store,
-    meta,
+    meta: MetagraphView,
     config: WeightSetterConfig,
     scoring_config: scoring.ScoringConfig,
 ) -> tuple[WeightPlan, scoring.Scoring | None]:
