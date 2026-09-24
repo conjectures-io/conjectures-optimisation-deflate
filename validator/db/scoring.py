@@ -16,7 +16,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import models
+import db.models as models
+
 from .engine import session_scope
 from .status import SubmissionState
 

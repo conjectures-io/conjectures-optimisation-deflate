@@ -17,9 +17,9 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
+import db.models as models
 from chain.types import ChainHead, MetagraphSnapshot
 
-from . import models
 from .engine import session_scope
 
 logger = logging.getLogger(__name__)

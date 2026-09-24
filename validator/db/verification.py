@@ -9,7 +9,9 @@ from typing import final
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import clock, models
+import db.clock as clock
+import db.models as models
+
 from .engine import session_scope
 
 

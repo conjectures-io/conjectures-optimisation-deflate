@@ -11,7 +11,9 @@ from sqlalchemy import CursorResult, func, select, true, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import clock, models
+import db.clock as clock
+import db.models as models
+
 from .engine import session_scope
 from .registrations import NoSlot, RegistrationsDb, available_slots_in_session
 from .status import PENDING, SubmissionState
