@@ -19,7 +19,8 @@ from .clock import iso, now
 from .engine import create_db_engine, database_url, session_factory, session_scope
 from .ratelimit import RateLimiter
 from .registrations import NoSlot, RegistrationsDb
-from .scoring import ScoredSubmission, ScoringDb
+from .scored import ScoredSubmission
+from .scoring import ScoringDb
 from .status import PENDING, TERMINAL, SubmissionState
 from .submissions import SubmissionsDb
 from .verification import VerificationDb

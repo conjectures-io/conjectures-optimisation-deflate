@@ -9,11 +9,10 @@ reasoning behind it.
 from __future__ import annotations
 
 import dataclasses as dc
-import datetime as dt
 import json
 import os
 from collections.abc import Mapping, Sequence
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from typing import cast, final
 
 from sqlalchemy import Select, select, true
@@ -24,60 +23,9 @@ from verifier.identity import required_fingerprint
 
 from .aggregation import CALCULATOR_VERSION, evaluation_context, reduce_runs
 from .engine import session_scope
+from .locks import publication_lock
+from .scored import ScoredSubmission
 from .status import SubmissionState
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ScoredSubmission:
-    """One accepted submission, reduced to what scoring actually uses.
-
-    `pareto_time` and `ratio_pct` are the Pareto axes, both "lower is better".
-    `time_s` retains absolute seconds; current evidence supplies normalized_time_ratio.
-    `ratio_pct` is
-    the equal-corpus mean of per-file compression percentages for current aggregations.
-    Raw byte totals remain telemetry. Legacy standalone inputs use byte-weighted ratios.
-    """
-
-    submission_id: int
-    hotkey: str | None
-    bytes: int
-    raw_bytes: int
-    time_s: float
-    # The incumbent as this submission's own run measured it. Both are needed: the bytes
-    # are the record the improvement component measures progress against (and they move
-    # when an operator promotes a new incumbent), and the seconds set the speed floor
-    # that is the frontier's time boundary.
-    incumbent_bytes: int
-    incumbent_seconds: float
-    submitted_at: dt.datetime
-    aggregation_id: int | None = None
-    baseline_key: str | None = None
-    context: dict[str, object] | None = None
-
-    admission_check_id: int | None = None
-    admission: dict[str, object] | None = None
-    normalized_time_ratio: float | None = None
-    verification_current: bool | None = None
-    normalized_ratio_pct: float | None = None
-    normalized_incumbent_ratio_pct: float | None = None
-
-    @property
-    def pareto_time(self) -> float:
-        return self.normalized_time_ratio if self.normalized_time_ratio is not None else self.time_s
-
-    @property
-    def point_id(self) -> str:
-        return str(self.submission_id)
-
-    @property
-    def ratio_pct(self) -> float:
-        if self.normalized_ratio_pct is not None:
-            return self.normalized_ratio_pct
-        return self.byte_weighted_ratio_pct
-
-    @property
-    def byte_weighted_ratio_pct(self) -> float:
-        return 100.0 * self.bytes / self.raw_bytes
 
 
 def _scorable(
@@ -134,13 +82,24 @@ class ScoringDb:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self._sessions = sessions
 
+    def transaction(self) -> AbstractContextManager[Session, bool | None]:
+        """A new transaction on this repository's sessions -- what `admission.run`
+        needs to hold across its lock, its inputs read and its evaluate() call,
+        without reaching into `_sessions` from outside the class."""
+        return self._sessions.begin()
+
+    def inputs_for_admission(self, *, preview: bool, session: Session) -> list[ScoredSubmission]:
+        """The same inputs `scoring_inputs`/`preview_inputs` compute, for a caller
+        (`admission.run`) that already holds the session and the publication lock."""
+        return self._inputs(None, None, preview=preview, session=session)
+
     def scoring_inputs(
         self,
         corpora: Mapping[str, str] | None = None,
         aggregation_ids: Sequence[int] | None = None,
     ) -> list[ScoredSubmission]:
         """Current verified, published evidence for live scoring."""
-        from .admission import evaluate, publication_lock
+        from .admission import evaluate
 
         with self._sessions.begin() as session:
             publication_lock(session)

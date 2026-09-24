@@ -20,6 +20,7 @@ from bench.results import INCUMBENT, SCHEMA_VERSION, FileResult, Run, parse
 from bench.storage import sha256
 from verifier.identity import required_fingerprint
 
+from .locks import publication_lock
 from .models import BenchmarkAggregation, BenchmarkAggregationInput, BenchmarkRun, Submission
 
 
@@ -547,8 +548,6 @@ def publish(
     session: Session, submission_id: int, aggregation_id: int, *, speed_floor: float = 8.0
 ) -> None:
     """Bind verified source to selected evidence; acceptance/registration stay separate."""
-    from .admission import publication_lock
-
     publication_lock(session)
     submission = session.get(Submission, submission_id, with_for_update=True)
     aggregation = session.get(BenchmarkAggregation, aggregation_id)
