@@ -1,4 +1,4 @@
-"""Score the round and set the validator's weights, once an epoch.
+"""Score each cycle, then set the validator's weights when the epoch permits.
 
     cd validator && python -m workers.weight_setter
 
@@ -9,7 +9,7 @@ Run it with `WEIGHT_DRY_RUN=0` wherever this validator is expected to set weight
 
 The cadence gate (`chain.schedule.should_set`) and the scoring rule (`scoring`) are both
 pure; `step` is the testable unit that puts them together with a `WeightChain`, and `run`
-is the loop around it. Every outcome -- set, skipped or refused by the chain -- writes a
+is the loop around it. Each cycle saves scoring before checking registration or timing in a
 `weight_sets` row with the per-hotkey reasoning beside it, so a disputed epoch can be
 reconstructed from the validator's own records.
 
@@ -229,10 +229,41 @@ def step(
     store: db.Store,
     config: WeightSetterConfig,
     scoring_config: scoring.ScoringConfig,
-    params: SubnetParams,
+    params: SubnetParams | None = None,
 ) -> StepResult:
-    """One tick: gate on the cadence, then score, record and submit."""
-    poll = chain.poll(config.netuid, params.uid)
+    """Score and persist first, then check whether chain submission is possible."""
+    block = chain.current_block()
+    meta = chain.metagraph(config.netuid)
+    plan, result = plan_for(store, meta, config, scoring_config)
+    weight_set_id = record(
+        store,
+        config,
+        block,
+        plan,
+        result,
+        False,
+        "chain submission not attempted: eligibility checks pending",
+    )
+
+    def finish(action: Action, reason: str, *, accepted: bool = False) -> StepResult:
+        store.scoring.weight_set_outcome(
+            weight_set_id, accepted=accepted, error=None if accepted else reason
+        )
+        return StepResult(
+            action, reason, block=block, plan=plan, scoring=result, weight_set_id=weight_set_id
+        )
+
+    try:
+        params = params if params is not None else chain.params(config.netuid)
+    except Exception as exc:  # noqa: BLE001 - registration failure must not discard scoring
+        reason = f"scores saved; chain submission skipped: {exc}"
+        logger.warning(f"[weights] {reason}")
+        return finish("skip", reason)
+
+    try:
+        poll = chain.poll(config.netuid, params.uid)
+    except Exception as exc:  # noqa: BLE001 - preserve evidence through chain outages
+        return finish("skip", f"scores saved; chain timing unavailable: {exc}")
     decision = should_set(
         current_block=poll.current_block,
         tempo=params.tempo,
@@ -242,79 +273,35 @@ def step(
         set_margin=config.set_margin,
     )
     if not decision.proceed:
-        return StepResult(
-            "wait",
-            "",
+        outcome = finish("wait", "scores saved; waiting for chain submission window")
+        return dc.replace(
+            outcome,
             epoch_blocks=decision.epoch_blocks,
             rate_off_blocks=decision.rate_off_blocks,
             next_try_block=decision.next_try_block,
             next_try_blocks=decision.next_try_block - poll.current_block,
         )
-
-    meta = chain.metagraph(config.netuid)
-    plan, result = plan_for(store, meta, config, scoring_config)
-    summary = plan.summary + (f" | {result.summary()}" if result else " | burn mode")
-
-    block = poll.current_block
     if not plan.submittable:
-        weight_set_id = record(
-            store, config, poll.current_block, plan, result, False, plan.skip_reason
-        )
-        emit_plan("warning", "weights_skipped", config, meta, block, plan, plan.skip_reason)
-        return StepResult(
-            "skip",
-            plan.skip_reason or "unsubmittable vector",
-            block=poll.current_block,
-            plan=plan,
-            scoring=result,
-            weight_set_id=weight_set_id,
-        )
-
+        reason = plan.skip_reason or "unsubmittable vector"
+        emit_plan("warning", "weights_skipped", config, meta, block, plan, reason)
+        return finish("skip", reason)
+    summary = plan.summary + (f" | {result.summary()}" if result else " | burn mode")
     if config.dry_run:
-        weight_set_id = record(
-            store, config, poll.current_block, plan, result, False, "dry run: not submitted"
-        )
         emit_plan("info", "weights_planned", config, meta, block, plan)
-        return StepResult(
-            "skip",
-            f"dry run: {summary}",
-            block=poll.current_block,
-            plan=plan,
-            scoring=result,
-            weight_set_id=weight_set_id,
-        )
-
-    accepted = chain.set_weights(config.netuid, list(plan.uids), list(plan.weights))
-    weight_set_id = record(
-        store,
-        config,
-        poll.current_block,
-        plan,
-        result,
-        accepted,
-        None if accepted else "the chain refused the vector",
-    )
+        return finish("skip", f"dry run: not submitted | {summary}")
+    try:
+        accepted = chain.set_weights(config.netuid, list(plan.uids), list(plan.weights))
+    except Exception as exc:  # noqa: BLE001 - an RPC error may have an unknown chain outcome
+        return finish("failed", f"chain submission outcome unknown: {exc}")
     if not accepted:
         emit_plan(
             "error", "weights_failed", config, meta, block, plan, "the chain refused the vector"
         )
-        return StepResult(
-            "failed",
-            "set_weights rejected",
-            block=poll.current_block,
-            plan=plan,
-            scoring=result,
-            weight_set_id=weight_set_id,
-        )
+        return finish("failed", "the chain refused the vector")
     emit_plan("info", "weights_set", config, meta, block, plan)
-    return StepResult(
-        "set",
-        f"block {poll.current_block}: {summary}",
+    return dc.replace(
+        finish("set", f"block {block}: {summary}", accepted=True),
         epoch_blocks=decision.epoch_blocks,
-        block=poll.current_block,
-        plan=plan,
-        scoring=result,
-        weight_set_id=weight_set_id,
     )
 
 
@@ -391,48 +378,17 @@ def run(
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     events = get_events()
-    try:
-        params = chain.params(config.netuid)
-    except Exception as exc:
-        # Most often a hotkey that is not a registered validator on this netuid.
-        events.error("service_misconfigured", error=config_error(exc))
-        raise
-    events.info(
-        "service_started",
-        uid=params.uid,
-        tempo=params.tempo,
-        weights_rate_limit=params.weights_rate_limit,
-        set_margin=config.set_margin,
-        dry_run=config.dry_run,
-        burn_mode=config.burn_mode,
-        burn_uid=config.burn_uid,
-        treasury_uid=config.treasury_uid,
-        treasury_hotkey=config.treasury_hotkey,
-        competition_share=config.competition_share,
-        wallet_name=config.wallet_name,
-        wallet_hotkey=config.wallet_hotkey,
-        scoring_method=scoring_config.method,
-        pareto_share=scoring_config.pareto_share,
-        improvement_share=scoring_config.improvement_share,
-    )
+    events.info("service_started", dry_run=config.dry_run, scoring_method=scoring_config.method)
     logger.info(
-        f"[weights] running netuid={config.netuid} uid={params.uid} tempo={params.tempo} "
-        f"rate_limit={params.weights_rate_limit} margin={config.set_margin} "
-        f"burn_mode={config.burn_mode} burn_uid={config.burn_uid} dry_run={config.dry_run} "
-        f"treasury_uid={config.treasury_uid} treasury_hotkey={config.treasury_hotkey} "
-        f"competition_share={config.competition_share:.3f} "
-        f"method={scoring_config.method} "
-        f"split={scoring_config.pareto_share:.2f}/{scoring_config.improvement_share:.2f}"
+        f"[weights] sequential scoring -> weight setting; netuid={config.netuid} "
+        f"poll_seconds={config.poll_seconds} dry_run={config.dry_run}"
     )
     ticks = TickLog()
     try:
         while True:
             try:
-                result = step(chain, store, config, scoring_config, params)
-                ticks.report(result)
-                if result.action == "set":
-                    # Re-read tempo and the rate limit: both can change between epochs.
-                    params = chain.params(config.netuid)
+                # Registration is checked inside step, after scoring has been persisted.
+                ticks.report(step(chain, store, config, scoring_config))
             except Exception as exc:  # noqa: BLE001 - a bad tick must not end the worker
                 logger.exception(f"[weights] tick failed: {exc}")
                 events.error("weights_failed", dry_run=config.dry_run, error=config_error(exc))

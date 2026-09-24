@@ -7,7 +7,7 @@ Four processes, one database, one wallet.
 | `submission-api` | serves `/submit`, `/submissions/{id}`, `/leaderboard` | Postgres |
 | `gate-worker` | drains the queue through the six-stage gate | Postgres, the Lean/Charon/Aeneas toolchain, bubblewrap |
 | `chain-watcher` | streams subnet registrations into the store | Postgres, the bittensor SDK |
-| `weight-setter` | scores the round and sets weights, once an epoch | Postgres, the bittensor SDK, a registered validator hotkey |
+| `weight-setter` | saves scores each cycle, then sets weights when permitted | Postgres, chain access; registered validator hotkey only for setting weights |
 
 Without the chain watcher **nobody can submit at all**: a registration row is what admits
 a hotkey, and the watcher is the only thing that writes one.
@@ -110,8 +110,15 @@ improvement to whoever submits next.
 
 `BITTENSOR_WALLET_NAME` / `BITTENSOR_WALLET_HOTKEY` under `BITTENSOR_WALLET_PATH`
 (`~/.bittensor/wallets` by default). The hotkey must be a registered validator on `NETUID`,
-or the weight setter refuses to start — which is the correct failure, loudly at startup
-rather than silently at the first epoch.
+to submit weights. The worker first calculates and saves scoring evidence, then checks
+registration and epoch timing. An unregistered hotkey produces a warning and a saved
+skip reason; the next cycle still runs and rechecks registration. No separate scoring
+worker or migration is needed.
+
+The loop runs sequentially at `WEIGHT_POLL_SECONDS` (12 seconds by default). Each cycle
+saves a `weight_sets` row and its `score_snapshots`/`api_snapshot` before attempting chain
+submission. Waiting, dry-run and failed registration leave `accepted=false` with a reason.
+Live miner eligibility still comes from the metagraph, so scoring requires chain access.
 
 Registration block times come from an archive node (`BITTENSOR_ARCHIVE_NETWORK`), because
 a registration block is usually older than a lite node's pruned-state window. The lookup

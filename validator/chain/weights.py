@@ -14,6 +14,10 @@ from .types import MetagraphView, PollState, SubnetParams
 
 @runtime_checkable
 class WeightChain(Protocol):
+    def current_block(self) -> int:
+        """Read the chain tip without requiring validator registration."""
+        ...
+
     def params(self, netuid: int) -> SubnetParams:
         """Our uid plus the subnet's tempo and rate limit. Raises if not registered."""
         ...

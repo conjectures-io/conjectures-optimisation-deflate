@@ -509,8 +509,13 @@ reference samples. Importing requires neither corpus/source files nor a Rust bui
 
 ### Baseline frontier and database aggregation
 
-`just baseline-seed --corpus corpus-stage1 --corpus corpus-stage2` incrementally verifies
-and benchmarks the reference submissions into the database. Use `--overwrite` for fresh
+`just baseline-seed` defaults to both `corpus-stage1` and `corpus-stage2`. Repeat
+`--corpus NAME` to select corpora explicitly. The command incrementally verifies
+and benchmarks the reference submissions into the database. Both `parse.rs` and `Parse.lean`
+are stored in `submission_files` alongside each baseline revision. Reruns fill missing source
+copies for existing revisions even when benchmarks are reused; conflicting stored bytes are
+rejected rather than overwritten. Local copies remain available for verification.
+Use `--overwrite` for fresh
 measurements, preserving history. `just weights-preview --out-dir data/benchmark-reports/baselines`
 plots the resulting frontier and baseline burn allocations. See [operations](docs/OPERATIONS.md)
 and [scoring](docs/SCORING.md) for aggregation inputs, timing uncertainty and payout eligibility.

@@ -13,7 +13,7 @@
   "db/admission_statistics.py": "6f83c9d6c5278c4e15d99719803742c6fa57beadf68ffeb7de88e8416b0bf021",
   "db/aggregation.py": "da04ca32f054ce529095ed5a93a72d92862399e721519132b231d6ad1eda9f60",
   "db/models.py": "ae6b0a52c59e957fcab68634a4e9f9de051f63dc317114c3caa96f3b58f1d485",
-  "db/scoring.py": "fc6a1820bbb8f460d21db4df0aa78cfecb0eaa7cef43f076e057613796831a5a",
+  "db/scoring.py": "7f598f289ab23a7469fbc8d49c509b355266b7c673f8b20e7074e43eca38f9d8",
   "db/submissions.py": "4e00df8678ff907fe5a787d653e887cb8d4fac094ef8687192a592ad5bb7a266",
   "db/verification.py": "297b2204ec5ea2b6bac71286a01876606e9cfb3eae575abf3fb949d5379cdf72",
   "incumbent/parse.rs": "b9e0d844baf5958cf0c1c66bfb9fd1f89663fa30f21a99c3c116b3dd2e771361",

@@ -238,6 +238,9 @@ class BittensorWeightChain:
         )
         logger.info(f"[chain] connected to {network} as wallet {wallet_name}/{wallet_hotkey}")
 
+    def current_block(self) -> int:
+        return int(self._subtensor.get_current_block())
+
     def params(self, netuid: int) -> SubnetParams:
         uid = self._subtensor.get_uid_for_hotkey_on_subnet(self._wallet.hotkey.ss58_address, netuid)
         if uid is None:

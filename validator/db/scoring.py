@@ -350,3 +350,12 @@ class ScoringDb:
             for snap in snapshots or []:
                 session.add(models.ScoreSnapshot(weight_set_id=row.id, **snap))
             return int(row.id)
+
+    def weight_set_outcome(self, weight_set_id: int, *, accepted: bool, error: str | None) -> None:
+        """Complete the chain stage without changing its already-persisted scoring evidence."""
+        with session_scope(self._sessions) as session:
+            row = session.get(models.WeightSet, weight_set_id)
+            if row is None:
+                raise ValueError(f"unknown weight set {weight_set_id}")
+            row.accepted = accepted
+            row.error = error
