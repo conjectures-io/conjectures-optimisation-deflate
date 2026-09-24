@@ -1,3 +1,6 @@
+# Matplotlib leaves **kwargs untyped on plotting methods; retain checks on our data.
+# pyright: reportUnknownMemberType=false
+
 """Operator-only database scoring preview and reproducible plots; never sets weights."""
 
 from __future__ import annotations
@@ -5,6 +8,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -256,6 +260,27 @@ def normalize_frontier(ordered: Sequence[ScoredPoint]) -> dict[int, tuple[float,
     }
 
 
+def elbow_region(points: list[ScoredPoint]) -> list[ScoredPoint]:
+    """Find the lower-left cluster using unit-range Euclidean distance.
+
+    Include distances within 0.25 of the nearest point to the ideal corner.
+    Degenerate axes contribute zero. Plot limits include full intervals.
+    """
+    if not points:
+        return []
+    x0, x1 = min(map(time_coordinate, points)), max(map(time_coordinate, points))
+    y0, y1 = min(s.ratio_pct for s in points), max(s.ratio_pct for s in points)
+    distances = [
+        math.hypot(
+            (time_coordinate(s) - x0) / (x1 - x0) if x1 > x0 else 0,
+            (s.ratio_pct - y0) / (y1 - y0) if y1 > y0 else 0,
+        )
+        for s in points
+    ]
+    cutoff = min(distances) + 0.25
+    return [s for s, d in zip(points, distances, strict=True) if d <= cutoff]
+
+
 def plot(
     result: ScoringResult,
     directory: Path,
@@ -288,8 +313,26 @@ def plot(
         fig.savefig(directory / name, dpi=160)
         plt.close(fig)
 
-    def pareto(ax: Axes, *, normalize: bool = False, uncertainty: bool = False) -> None:
+    def interval_for(s: ScoredPoint) -> list[float] | None:
+        stats = cast(
+            "dict[str, object]", provenance.get(str(s.submission_id), {}).get("timing", {})
+        )
+        return (cast("dict[str, list[float]] | None", stats.get("intervals")) or {}).get(
+            "balanced_time_ratio" if relative_time else "compression_seconds"
+        )
+
+    def pareto(
+        ax: Axes,
+        *,
+        normalize: bool = False,
+        uncertainty: bool = False,
+        subset: list[ScoredPoint] | None = None,
+    ) -> None:
         selected = front if normalize else ordered
+        if subset is not None:
+            selected = subset
+        if uncertainty:
+            selected = [s for s in selected if interval_for(s)]
         coordinates = (
             normalized
             if normalize
@@ -299,29 +342,25 @@ def plot(
             x, y = coordinates[s.submission_id]
             color = colors[s.submission_id]
             if uncertainty:
-                stats = cast(
-                    "dict[str, object]", provenance.get(str(s.submission_id), {}).get("timing", {})
+                interval = interval_for(s)
+                assert interval is not None
+                # A percentile interval need not contain the estimate.
+                ax.hlines(y, interval[0], interval[1], color=color, linewidth=2)
+                ax.plot(interval, [y, y], "|", color=color, markersize=8)
+                x = (interval[0] + interval[1]) / 2
+            else:
+                admission = getattr(s, "admission", None)
+                ax.scatter(
+                    x,
+                    y,
+                    facecolors="none"
+                    if admission and admission["outcome"] not in {"passed", "not_required"}
+                    else color,
+                    edgecolors=color,
+                    marker="s" if s.baseline_key else "o",
+                    zorder=3,
+                    clip_on=not normalize,
                 )
-                intervals = cast("dict[str, list[float]] | None", stats.get("intervals"))
-                interval = (intervals or {}).get(
-                    "balanced_time_ratio" if relative_time else "compression_seconds"
-                )
-                if interval:
-                    # Draw endpoints directly: a percentile interval need not contain the estimate.
-                    ax.hlines(y, interval[0], interval[1], color=color, linewidth=2)
-                    ax.plot(interval, [y, y], "|", color=color, markersize=8)
-            admission = getattr(s, "admission", None)
-            ax.scatter(
-                x,
-                y,
-                facecolors="none"
-                if admission and admission["outcome"] not in {"passed", "not_required"}
-                else color,
-                edgecolors=color,
-                marker="s" if s.baseline_key else "o",
-                zorder=3,
-                clip_on=not normalize,
-            )
             ax.annotate(
                 s.baseline_key or f"{s.hotkey}:{s.submission_id}",
                 (x, y),
@@ -330,12 +369,13 @@ def plot(
                 textcoords="offset points",
                 fontsize=8,
             )
-        ax.plot(
-            [coordinates[s.submission_id][0] for s in front],
-            [coordinates[s.submission_id][1] for s in front],
-            "--",
-            color="gray",
-        )
+        if not uncertainty:
+            ax.plot(
+                [coordinates[s.submission_id][0] for s in front],
+                [coordinates[s.submission_id][1] for s in front],
+                "--",
+                color="gray",
+            )
         if normalize:
             ax.plot([0, 1], [1, 0], ":", color="lightgray")
             ax.set(
@@ -357,9 +397,17 @@ def plot(
             )
         ax.grid(alpha=0.15)
         if not selected:
-            ax.text(0.5, 0.5, "No current scoring evidence", transform=ax.transAxes, ha="center")
+            ax.text(
+                0.5,
+                0.5,
+                "No timing intervals" if uncertainty else "No current scoring evidence",
+                transform=ax.transAxes,
+                ha="center",
+            )
 
-    fig, axes = plt.subplots(1, 3, figsize=(20, 6), layout="constrained")
+    fig, axes = cast(
+        "tuple[Figure, Sequence[Axes]]", plt.subplots(1, 3, figsize=(20, 6), layout="constrained")
+    )
     pareto(axes[0])
     paid = [s.payable_weight for s in ordered]
     burned = [max(0.0, s.combined_weight - s.payable_weight) for s in ordered]
@@ -390,19 +438,29 @@ def plot(
     pareto(axes[2], normalize=True)
     save(fig, "pareto.png")
 
-    fig, ax = plt.subplots(figsize=(10, 6), layout="constrained")
-    pareto(ax, uncertainty=True)
-    ax.set_title("Compression Pareto with 95% bootstrap timing intervals")
+    fig, axes = cast(
+        "tuple[Figure, Sequence[Axes]]", plt.subplots(1, 2, figsize=(18, 7), layout="constrained")
+    )
+    pareto(axes[0], uncertainty=True)
+    axes[0].set_title("Full range")
+    elbow = elbow_region([s for s in ordered if interval_for(s)])
+    pareto(axes[1], uncertainty=True, subset=elbow)
+    axes[1].set_title("Automatic elbow zoom")
+    fig.suptitle("Compression Pareto with 95% bootstrap timing intervals")
     fig.supxlabel(
         "Within recorded runs only; excludes host drift and systematic bias. "
-        "Missing intervals are omitted.",
+        "Missing intervals are omitted.\n"
+        "Zoom: normalized distance to lower-left within 0.25 of nearest.",
         fontsize=9,
     )
     save(fig, "pareto-uncertainty.png")
 
     import statistics
 
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10), layout="constrained")
+    fig, box_axes = cast(
+        "tuple[Figure, Sequence[Sequence[Axes]]]",
+        plt.subplots(2, 2, figsize=(15, 10), layout="constrained"),
+    )
     for column, (field, title) in enumerate(
         (("total_s", "Total compression"), ("lz77_s", "LZ77 stage"))
     ):
@@ -413,7 +471,7 @@ def plot(
             median = statistics.median(values)
             std = statistics.stdev(values) if len(values) > 1 else None
             for row in (0, 1):
-                ax = axes[row, column]
+                ax = box_axes[row][column]
                 plotted = (
                     values
                     if row == 0
@@ -435,7 +493,7 @@ def plot(
                         "markeredgecolor": colors[s.submission_id],
                     },
                 )
-                boxes["boxes"][0].set_facecolor(colors[s.submission_id])
+                cast(Patch, boxes["boxes"][0]).set_facecolor(colors[s.submission_id])
                 ax.scatter(
                     [index] * len(plotted),
                     plotted,
@@ -446,7 +504,7 @@ def plot(
                     zorder=3,
                 )
             std_label = f"{std:.3g}s" if std is not None else "n/a"
-            axes[0, column].annotate(
+            box_axes[0][column].annotate(
                 f"n={len(values)}; SD={std_label}",
                 (index, max(values)),
                 xytext=(0, 10),
@@ -455,7 +513,7 @@ def plot(
                 fontsize=7,
             )
         for row in (0, 1):
-            ax = axes[row, column]
+            ax = box_axes[row][column]
             ax.set_xticks(range(len(ordered)), labels, rotation=60, ha="right")
             ax.set(
                 title=title if row == 0 else f"{title}: relative variability",

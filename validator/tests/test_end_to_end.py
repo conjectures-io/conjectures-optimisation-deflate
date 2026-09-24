@@ -18,7 +18,7 @@ from conftest import post_submission, submission_files
 VALIDATOR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(VALIDATOR))
 
-from test_weight_setter import FakeChain, at_epoch_boundary  # noqa: E402
+from test_weight_setter import SHARE, FakeChain, at_epoch_boundary  # noqa: E402
 
 import db as store_pkg  # noqa: E402
 import scoring  # noqa: E402
@@ -129,7 +129,7 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
 
     # 8. The weight setter pays it out.
     chain = FakeChain(
-        uids=(0, 1, 2),
+        uids=(0, 1, 2, 121),
         hotkeys={"burn": 0, ALICE.ss58_address: 1, BOB.ss58_address: 2},
         block=at_epoch_boundary(),
         since=1000,
@@ -137,20 +137,24 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
     result = step(
         chain,
         store,
-        WeightSetterConfig(netuid=NETUID, burn_uid=0),
+        # Explicitly not a dry run, which has been the default since 74edc83.
+        WeightSetterConfig(netuid=NETUID, burn_uid=0, dry_run=False),
         scoring.ScoringConfig(),
         chain.params(NETUID),
     )
     assert result.action == "set", result.reason
     uids, weights = chain.submitted[0]
-    assert uids == [0, 1, 2]
+    assert uids == [0, 1, 2, 121]
     assert sum(weights) == pytest.approx(1.0)
     # All three points contribute geometry. Alice receives the oldest point plus
-    # both recency events; her newer frontier allocation burns. Log improvement-space
-    # weighting gives the two endpoints different allocations.
-    assert weights[1] == pytest.approx(0.4122670669511427)
-    assert weights[2] == pytest.approx(0.3378419715198898)
-    assert weights[0] == pytest.approx(0.2498909615289675)
+    # both recency events; her newer frontier allocation is unpaid. Log improvement-space
+    # weighting gives the two endpoints different allocations. Miners are paid their score
+    # times the competition's share; the treasury, uid 121, has its own share plus the
+    # competition's unpaid allocation, and nothing burns.
+    assert weights[1] == pytest.approx(0.4122670669511427 * SHARE)
+    assert weights[2] == pytest.approx(0.3378419715198898 * SHARE)
+    assert weights[0] == 0
+    assert weights[3] == pytest.approx(1.0 - SHARE + 0.2498909615289675 * SHARE)
 
     # 9. And the vector is on the record with its per-hotkey reasoning.
     with store_pkg.session_scope(store.sessions) as session:

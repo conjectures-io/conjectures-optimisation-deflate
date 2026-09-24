@@ -7,7 +7,7 @@ val    := root / "validator"
 python := root / ".venv/bin/python"
 
 # Every Python file the linter and the type checker cover.
-py_paths := val / "bench " + val / "verifier " + val / "sandbox " + val / "service " + val / "tests " + val / "db " + val / "chain " + val / "scoring " + val / "workers " + val / "tools " + root / "deploy/migrate/alembic " + root / "miner/submit.py"
+py_paths := val / "bench " + val / "verifier " + val / "sandbox " + val / "service " + val / "observability " + val / "tests " + val / "db " + val / "chain " + val / "scoring " + val / "workers " + val / "tools " + root / "deploy/migrate/alembic " + root / "miner/submit.py " + root / "miner/sig.py"
 
 # One-off scripts, run by hand rather than imported by the service: linted and
 # formatted like everything else, but not held to the basedpyright bar.

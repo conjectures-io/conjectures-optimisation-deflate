@@ -50,14 +50,14 @@ def process_list(output: str) -> list[Pm2Process]:
         if not line.lstrip().startswith("["):
             continue
         try:
-            value = json.loads("".join(lines[index:]))
+            value = cast(object, json.loads("".join(lines[index:])))
         except ValueError:
             continue
         if not isinstance(value, list) or any(
             not isinstance(item, dict)
-            or not isinstance(item.get("name"), str)
-            or not isinstance(item.get("pm2_env"), dict)
-            for item in value
+            or not isinstance(cast("dict[str, object]", item).get("name"), str)
+            or not isinstance(cast("dict[str, object]", item).get("pm2_env"), dict)
+            for item in cast("list[object]", value)
         ):
             raise ValueError("invalid PM2 process records")
         return cast("list[Pm2Process]", value)

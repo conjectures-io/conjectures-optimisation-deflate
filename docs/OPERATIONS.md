@@ -90,12 +90,14 @@ second, but neither gains anything from it either.
 
 ## Pausing a round
 
-`WEIGHT_BURN_MODE=1` emits everything to the burn uid and ignores the scores — a
+`WEIGHT_BURN_MODE=1` burns the competition's share and ignores the scores — a
 deliberate, restart-toggled switch for a round that is paused or not yet open. Submissions
-are still accepted and scored; nothing is paid out.
+are still accepted and scored; no miner is paid out. The treasury's share (uid 121) is
+paid either way: this weight setter is the validator's only `set_weights` caller, so it
+sets the whole vector, not just the competition's part (`validator/scoring/split.py`).
 
 To dial the whole competition down without pausing it, lower `SCORING_PARETO_SHARE` and
-`SCORING_IMPROVEMENT_SHARE`. What neither claims burns.
+`SCORING_IMPROVEMENT_SHARE`. What neither claims goes to the treasury.
 
 ## Promoting a new incumbent
 
@@ -123,12 +125,38 @@ subnet costs nothing.
 | miners get 402 "not registered" | is `chain-watcher` running? `SELECT count(*) FROM registrations;` |
 | nothing is being verified | is `gate-worker` running, and does it have the toolchain? `just doctor` |
 | the queue is stuck in `verifying` | a worker died; the next one's sweep reclaims it after `SERVICE_STALE_CLAIM_SECONDS` |
-| weights are all burn | `WEIGHT_BURN_MODE`, or nothing accepted yet: `just weights-preview` |
+| the treasury gets everything | `WEIGHT_BURN_MODE` absent a burn uid, scoring failed (the `weight_sets` summary says), or nothing accepted yet: `just weights-preview` |
 | the API is up but refusing everything | `/ready` reports the store; `/health` only reports the process |
 | a miner disputes their weight | `just db-weights`, and `score_snapshots` for the epoch in question |
 
 Every API refusal carries a one-line reason and an `X-Request-Id`; the matching traceback
 is in the API log under the same id.
+
+## Observability (Axiom)
+
+Set `AXIOM_TOKEN` and `AXIOM_DATASET` (and optionally `AXIOM_ENVIRON`, `AXIOM_URL`) in `.env`
+and restart the four processes; with either unset nothing is sent and nothing changes. The
+records use the conjectures platform's envelope exactly -- `_time` (UTC, stamped at emit),
+`severity` (`debug`/`info`/`warning`/`error`/`critical`), `source`, `event_type`, `environ` --
+so they can share the platform's dataset and dashboards. Every event also carries
+`competition: "miniz-oxide"`, and the chain watcher's and weight setter's carry `netuid` and
+`network`. Ingestion is batched on a background thread, flushed at exit, and drops (never
+blocks or raises) when Axiom is slow or down. Module: `validator/observability/axiom.py`.
+
+| source | event_type | fields |
+|---|---|---|
+| all four | `service_started` | a config summary (never secrets) |
+| all four | `service_stopped` | `reason` |
+| all four | `service_misconfigured` | `error`: the process refused to start |
+| all four | `log_error` | any loguru or `logging` record at ERROR+, or an uncaught exception: `message`, `logger`, `module`, `function`, `line`, `exception` |
+| `competition-gate-worker` | `submission_claimed` | `submission_id`, `hotkey`, `baseline_key`, `worker_id` |
+| `competition-gate-worker` | `gate_verdict` | `submission_id`, `hotkey`, `baseline_key`, `state` (accepted/rejected/error), `stage`, `reason`, `bytes`, `vs_incumbent`, `time_ratio`, `exit_code`, `duration_seconds` |
+| `competition-gate-worker` | `submission_requeued` | `submission_id` (or `count` for the stale-claim sweep), `reason` |
+| `competition-gate-worker` | `gate_validator_error` | `submission_id`, `exit_code`, `error`: the gate itself is broken |
+| `competition-chain-watcher` | `registrations_recorded` | `count`, `initial_load`, `block`, `uids` |
+| `competition-chain-watcher` | `chain_read_failed` | `error`, `last_block` |
+| `competition-weight-setter` | `weights_set`, `weights_planned` (dry run), `weights_skipped`, `weights_failed` | `block`, `dry_run`, `burn_mode`, `uids`/`weights` (nonzero entries), `treasury_uid`, `treasury_share`, `competition_share`, `burn_uid`, `burn_share`, `miners`, `summary`, `error` |
+| `competition-submission-api` | lifecycle and `log_error` only | |
 
 ## Seed and inspect the reference frontier
 

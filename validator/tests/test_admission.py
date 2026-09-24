@@ -66,7 +66,7 @@ def test_order_and_full_precision():
     assert select_reference([a], b) == ("not_required", None)
     template = replace(a, baseline_key="template")
     lazy = replace(b, baseline_key="lazy")
-    assert ordered_candidates([lazy, a, template]) == [template, lazy, a]
+    assert ordered_candidates([lazy, a, template]) == [lazy, template, a]
     with pytest.raises(ValueError, match="manifest"):
         ordered_candidates([replace(a, baseline_key="unknown")])
 

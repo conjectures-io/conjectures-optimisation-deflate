@@ -12,6 +12,8 @@ from collections.abc import Callable
 
 from loguru import logger
 
+from observability.axiom import config_error, get_events
+
 from .sink import SnapshotSink
 from .source import ChainSource
 from .types import NETUID, POLL_INTERVAL_SECONDS
@@ -55,6 +57,9 @@ def run(
                 last_block = step(source, sink, netuid, last_block)
             except Exception as exc:  # noqa: BLE001 - one bad tick must not kill the watcher
                 logger.exception(f"[watcher] poll failed: {exc}")
+                get_events().error(
+                    "chain_read_failed", error=config_error(exc), last_block=last_block
+                )
             sleep(poll_interval)
     except KeyboardInterrupt:
         logger.info("[watcher] interrupted")

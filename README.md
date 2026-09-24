@@ -56,13 +56,15 @@ cp -r miner/template my-submission          # a passing submission to start from
 just bench my-submission                    # ratio and time only, seconds - measure before proving
 just check my-submission                    # the six-stage gate, then the score
 
-python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url http://<validator>:9200
+python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url https://<api>
 python miner/submit.py status <id> --url ...                            # the stage report, bytes, time ratio, minutes later
 python miner/submit.py leaderboard --url ...                            # every hotkey's best accepted submission, ranked
 ```
 
-A submission is exactly two files, `parse.rs` and `Parse.lean`, signed with the hotkey over
-their hash, your address and the current time; the nine references above are complete,
+Submissions go to the conjectures platform API (`--url` is its origin), which serves this
+competition at `/v1/competitions/miniz-oxide`. A submission is exactly two files, `parse.rs`
+and `Parse.lean`, signed with the hotkey over the competition, their hash, your address and
+the current time; the nine references above are complete,
 passing examples to start from. Submissions are verified as they arrive and the same files
 twice return the same id.
 
@@ -317,10 +319,15 @@ machine or on several -- each claims a different submission. Run exactly one cha
 and one weight setter; without the watcher no hotkey has a registration, and so nobody can
 submit at all.
 
-**Emission is 60% Pareto position, 40% recent improvement.** Sixty per cent follows the
+**The validator's weight is 80% treasury (uid 121), 20% this competition.** The weight
+setter is the validator's only `set_weights` caller, so it sets both parts
+([`validator/scoring/split.py`](validator/scoring/split.py)); a scoring failure pays the
+treasury everything that epoch rather than skipping it. **The competition's share is 60%
+Pareto position, 40% recent improvement.** Sixty per cent follows the
 frontier, weighted by how much each point actually buys rather than by mere membership;
 forty follows the last ten improvements on the record, decaying, newest most. What neither
-claims burns. `just weights-preview` recalculates an operator preview using the current
+claims -- and baselines' or deregistered hotkeys' allocations -- goes to the treasury, never
+renormalized onto the other miners. `just weights-preview` recalculates an operator preview using the current
 formula and stored benchmark evidence without touching the database or chain; `WEIGHT_DRY_RUN=1` runs the whole weight-setting path except the last
 call, and [docs/SCORING.md](docs/SCORING.md) is the argument for why the default weight
 function is the one it is.
@@ -361,7 +368,8 @@ deploy/
   migrate/               Alembic: the schema's deploy path, and the image that applies it
 miner/
   MANUAL.md              the one document a miner reads: setup, rules, contract, proof rules, worked example, submit
-  submit.py              submit, status, leaderboard
+  submit.py              submit, status, leaderboard -- against the conjectures platform API
+  sig.py                 the platform's signing contract, pinned by tests/test_miner_sig.py
   template/              the simplest passing submission, with its proof
   examples/              no-lz77, hash-chains, hc-d4, hc-d64, lazy (the incumbent), mo-lazy, optimal, optimal-iter: all proven
 validator/

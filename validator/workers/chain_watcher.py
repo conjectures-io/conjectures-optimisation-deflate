@@ -27,6 +27,7 @@ import db  # noqa: E402
 from chain.types import ARCHIVE, FINNEY, NETUID, POLL_INTERVAL_SECONDS  # noqa: E402
 from chain.watcher import run  # noqa: E402
 from db.adapters import DatabaseSnapshotSink  # noqa: E402
+from observability.axiom import config_error, init  # noqa: E402
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,8 +53,15 @@ class ChainWatcherConfig:
 def main() -> None:
     from chain.finney import BittensorChainSource
 
-    config = ChainWatcherConfig.from_env()
+    events = init("competition-chain-watcher")
+    try:
+        config = ChainWatcherConfig.from_env()
+    except Exception as exc:
+        events.error("service_misconfigured", error=config_error(exc))
+        raise
+    events.bind(netuid=config.netuid, network=config.network)
     store = db.connect()
+    reason = "crashed"
     try:
         source = BittensorChainSource(
             network=config.network, archive_network=config.archive_network
@@ -66,8 +74,15 @@ def main() -> None:
             f"[watcher] starting network={config.network} archive={config.archive_network} "
             f"netuid={config.netuid} poll={config.poll_interval:.1f}s"
         )
+        events.info(
+            "service_started",
+            archive_network=config.archive_network,
+            poll_interval_seconds=config.poll_interval,
+        )
         run(source, sink, netuid=config.netuid, poll_interval=config.poll_interval)
+        reason = "interrupted"  # run() returns only on KeyboardInterrupt
     finally:
+        events.info("service_stopped", reason=reason)
         store.close()
 
 

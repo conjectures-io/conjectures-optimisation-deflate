@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     Text,
     UniqueConstraint,
     func,
@@ -206,6 +207,32 @@ class EntitlementClaim(Base):
 
     registration: Mapped[Registration] = relationship(back_populates="claim")
     submission: Mapped[Submission] = relationship(back_populates="claim")
+
+
+class SubmissionFile(Base):
+    """One uploaded file of a submission, kept in the database beside its row.
+
+    What lets a submission arrive through the conjectures platform API, which runs apart from
+    the gate host and shares no filesystem with it. The gate worker writes these into its own
+    submission directory before running verify.py (`service.worker.materialize`). A submission
+    queued through this repository's own service keeps its files on disk instead and has none.
+    """
+
+    __tablename__: str = "submission_files"
+
+    submission_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("submissions.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The submission's own file name, "parse.rs" or "Parse.lean".
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__: tuple[SchemaItem, ...] = (
+        CheckConstraint("name IN ('parse.rs', 'Parse.lean')", name="ck_submission_files_name"),
+    )
 
 
 class WeightSet(Base):
@@ -521,7 +548,7 @@ class SubmissionAdmissionCheck(Base):
     )
     __table_args__: tuple[SchemaItem, ...] = (
         CheckConstraint(
-            "outcome IN ('passed', 'inconclusive', 'not_required', 'dominated')",
+            "outcome IN ('passed', 'inconclusive', 'not_required', 'dominated', 'excluded')",
             name="ck_admission_outcome",
         ),
         CheckConstraint(

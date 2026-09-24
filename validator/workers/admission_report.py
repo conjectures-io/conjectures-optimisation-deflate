@@ -1,3 +1,6 @@
+# Matplotlib leaves **kwargs untyped on plotting methods; retain checks on our data.
+# pyright: reportUnknownMemberType=false
+
 """Human explanations and visualizations from the stored admission contract."""
 
 from __future__ import annotations
@@ -87,6 +90,7 @@ def plot_admission(scores: Sequence[HotkeyScore], directory: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
 
     # A current report must not retain plots for comparisons that no longer apply.
     detail_dir = directory / "admission"
@@ -143,8 +147,9 @@ def plot_admission(scores: Sequence[HotkeyScore], directory: Path) -> None:
         gain_ax: Axes
         time_ax: Axes
         pareto_ax: Axes
-        fig, (gain_ax, time_ax, pareto_ax) = plt.subplots(
-            3, 1, figsize=(11, 12), height_ratios=[1, 1, 2], layout="constrained"
+        fig, (gain_ax, time_ax, pareto_ax) = cast(
+            "tuple[Figure, tuple[Axes, Axes, Axes]]",
+            plt.subplots(3, 1, figsize=(11, 12), height_ratios=[1, 1, 2], layout="constrained"),
         )
         color = colors[score.submission_id]
         gain_ax.axvline(0, color="black", linestyle="--")
