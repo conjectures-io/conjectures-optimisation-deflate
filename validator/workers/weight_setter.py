@@ -1,6 +1,11 @@
-"""Score the round and set weights, once an epoch.
+"""Score the round and set the validator's weights, once an epoch.
 
     cd validator && python -m workers.weight_setter
+
+The only process on the validator that calls set_weights. The vector it sets is the whole
+validator's: the treasury's share to treasury uid 121 and the competition's share by score --
+see `scoring.split`, which also says why a failure pays the treasury rather than skipping.
+Run it with `WEIGHT_DRY_RUN=0` wherever this validator is expected to set weights at all.
 
 The cadence gate (`chain.schedule.should_set`) and the scoring rule (`scoring`) are both
 pure; `step` is the testable unit that puts them together with a `WeightChain`, and `run`
@@ -19,7 +24,7 @@ import dataclasses as dc
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -30,8 +35,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import db  # noqa: E402
 import scoring  # noqa: E402
 from chain.schedule import should_set  # noqa: E402
-from chain.types import BLOCK_SECONDS, FINNEY, NETUID, SubnetParams, WeightPlan  # noqa: E402
+from chain.types import (  # noqa: E402
+    BLOCK_SECONDS,
+    FINNEY,
+    NETUID,
+    MetagraphView,
+    SubnetParams,
+    WeightPlan,
+)
 from chain.weights import WeightChain  # noqa: E402
+from observability.axiom import EventType, Severity, config_error, get_events, init  # noqa: E402
+from scoring.split import (  # noqa: E402
+    burn,
+    competition_share_for,
+    resolve_treasury,
+    split,
+    treasury_uid_for,
+)
 
 Action = Literal["wait", "skip", "set", "failed"]
 
@@ -53,16 +73,11 @@ class WeightSetterConfig:
     wallet_hotkey: str = "default"
     wallet_path: str = "~/.bittensor/wallets"
 
-    # Match conjectures-validator/emissions_worker/worker.py by default.
-    collector_uid: int = 121
-    # Prefer a stable hotkey when configured; never fall back if it deregisters.
-    collector_hotkey: str | None = None
-    competition_share: float = 0.20
-
-    # Only used by the explicit emergency burn mode.
+    # Burn mode's destination for the competition's share, and, off mainnet with no
+    # WEIGHT_TREASURY_UID, the treasury's. Never eligible for miner payment.
     burn_uid: int = 0
-    # Emit everything to the burn uid, ignoring the scores. A deliberate, restart-toggled
-    # switch for a round that is paused or not yet open.
+    # Burn the competition's share, ignoring the scores; the treasury is still paid its share.
+    # A deliberate, restart-toggled switch for a round that is paused or not yet open.
     burn_mode: bool = False
 
     # Set this many blocks (or fewer) before each epoch boundary, so the vector lands
@@ -72,40 +87,73 @@ class WeightSetterConfig:
     poll_seconds: float = 12.0
     # Compute and record the vector, but do not submit it.
     dry_run: bool = True
+    # Off mainnet only: where the treasury share goes (default: the burn uid). On netuid 66 the
+    # treasury uid is a code constant and a different value here refuses to start.
+    treasury_override: int | None = None
+    # The treasury's registered hotkey. When set, the epoch is skipped unless it is in the
+    # metagraph -- off mainnet it also locates the treasury uid; on mainnet it must sit at the
+    # constant uid, so a reassigned uid 121 is never paid.
+    treasury_hotkey: str | None = None
+    # Off mainnet only: the competition's fraction of the validator's weight (default 0.20).
+    # On netuid 66 it is a code constant and a different value here refuses to start.
+    competition_share_override: float | None = None
 
     def __post_init__(self) -> None:
-        if self.collector_uid < 0:
-            raise ValueError("collector_uid must be >= 0")
-        if not 0 <= self.competition_share <= 1:
-            raise ValueError("competition_share must be between 0 and 1")
-        if self.collector_hotkey is not None and not self.collector_hotkey.strip():
-            raise ValueError("collector_hotkey must not be blank")
         if self.burn_uid < 0:
             raise ValueError("burn_uid must be >= 0")
+        if self.treasury_override is not None and self.treasury_override < 0:
+            raise ValueError("WEIGHT_TREASURY_UID must be >= 0")
+        if self.treasury_hotkey is not None and not self.treasury_hotkey.strip():
+            raise ValueError("WEIGHT_TREASURY_HOTKEY must not be blank")
+        self.treasury_uid  # noqa: B018 - validates the override against the netuid now
+        self.competition_share  # noqa: B018 - likewise
         if self.set_margin < 0:
             raise ValueError("set_margin must be >= 0")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
 
+    @property
+    def treasury_uid(self) -> int:
+        return treasury_uid_for(self.netuid, self.treasury_override, burn_uid=self.burn_uid)
+
+    @property
+    def competition_share(self) -> float:
+        return competition_share_for(self.netuid, self.competition_share_override)
+
     @classmethod
     def from_env(cls) -> WeightSetterConfig:
         d = cls()
         env = os.environ
+        share = env.get("WEIGHT_COMPETITION_SHARE", "").strip()
         return cls(
             network=env.get("BITTENSOR_NETWORK", d.network),
             netuid=int(env.get("NETUID", str(d.netuid))),
             wallet_name=env.get("BITTENSOR_WALLET_NAME", d.wallet_name),
             wallet_hotkey=env.get("BITTENSOR_WALLET_HOTKEY", d.wallet_hotkey),
             wallet_path=env.get("BITTENSOR_WALLET_PATH", d.wallet_path),
-            collector_uid=int(env.get("WEIGHT_COLLECTOR_UID", str(d.collector_uid))),
-            collector_hotkey=env.get("WEIGHT_COLLECTOR_HOTKEY", "").strip() or None,
-            competition_share=float(env.get("WEIGHT_COMPETITION_SHARE", str(d.competition_share))),
             burn_uid=int(env.get("WEIGHT_BURN_UID", str(d.burn_uid))),
             burn_mode=env.get("WEIGHT_BURN_MODE", "").lower() in ("1", "true", "yes"),
             set_margin=int(env.get("WEIGHT_SET_MARGIN", str(d.set_margin))),
             poll_seconds=float(env.get("WEIGHT_POLL_SECONDS", str(d.poll_seconds))),
             dry_run=_dry_run(env.get("WEIGHT_DRY_RUN", "1")),
+            treasury_override=_aliased_int(env, "WEIGHT_TREASURY_UID", "WEIGHT_COLLECTOR_UID"),
+            treasury_hotkey=_aliased(env, "WEIGHT_TREASURY_HOTKEY", "WEIGHT_COLLECTOR_HOTKEY"),
+            competition_share_override=float(share) if share else None,
         )
+
+
+def _aliased(env: Mapping[str, str], name: str, alias: str) -> str | None:
+    """`name`, or the earlier `alias` for it; both set and disagreeing refuses to start."""
+    value = env.get(name, "").strip() or None
+    legacy = env.get(alias, "").strip() or None
+    if value is not None and legacy is not None and value != legacy:
+        raise ValueError(f"{name}={value} and {alias}={legacy} disagree; set only {name}")
+    return value if value is not None else legacy
+
+
+def _aliased_int(env: Mapping[str, str], name: str, alias: str) -> int | None:
+    value = _aliased(env, name, alias)
+    return None if value is None else int(value)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -128,36 +176,36 @@ def plan_for(
     config: WeightSetterConfig,
     scoring_config: scoring.ScoringConfig,
 ) -> tuple[WeightPlan, scoring.Scoring | None]:
-    if config.burn_mode:
-        return scoring.to_vector({}, meta, burn_uid=config.burn_uid), None
-    collector_uid = (
-        meta.uid_by_hotkey.get(config.collector_hotkey)
-        if config.collector_hotkey is not None
-        else config.collector_uid
-    )
-    if collector_uid not in meta.uids:
-        return WeightPlan(
-            (),
-            (),
-            False,
-            "reward collector absent from the metagraph",
-            f"collector_hotkey={config.collector_hotkey!r} collector_uid={collector_uid}",
-        ), None
-    points = store.scoring.scoring_inputs()
-    eligible = {
-        hotkey
-        for hotkey, uid in meta.uid_by_hotkey.items()
-        if uid in meta.uids and uid not in (config.burn_uid, collector_uid)
-    }
-    result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
-    from scoring.routing import reward_vector
+    """The validator's vector: the treasury share, and the competition's by score.
 
-    return reward_vector(
-        result.weights,
+    Scoring that raises pays the treasury everything this epoch instead of failing the tick:
+    a failed tick sets nothing, and an epoch with no weight set cannot be made up later.
+    """
+    treasury, missing = resolve_treasury(
         meta,
-        collector_uid=collector_uid,
-        competition_share=config.competition_share,
-    ), result
+        netuid=config.netuid,
+        treasury_uid=config.treasury_uid,
+        treasury_hotkey=config.treasury_hotkey,
+    )
+    if treasury is None:
+        return WeightPlan((), (), False, missing, f"treasury_hotkey={config.treasury_hotkey}"), None
+    share = config.competition_share
+    if config.burn_mode:
+        return burn(
+            meta, treasury_uid=treasury, burn_uid=config.burn_uid, competition_share=share
+        ), None
+    try:
+        points = store.scoring.scoring_inputs()
+        eligible = {
+            hotkey
+            for hotkey, uid in meta.uid_by_hotkey.items()
+            if uid in meta.uids and uid not in (config.burn_uid, treasury)
+        }
+        result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
+    except Exception as exc:  # noqa: BLE001 - any scoring failure pays the treasury
+        logger.exception(f"[weights] scoring failed; paying the treasury this epoch: {exc}")
+        return split(None, meta, treasury_uid=treasury, reason=f"scoring failed: {exc}"), None
+    return split(result.weights, meta, treasury_uid=treasury, competition_share=share), result
 
 
 def step(
@@ -191,10 +239,12 @@ def step(
     plan, result = plan_for(store, meta, config, scoring_config)
     summary = plan.summary + (f" | {result.summary()}" if result else " | burn mode")
 
+    block = poll.current_block
     if not plan.submittable:
         weight_set_id = record(
             store, config, poll.current_block, plan, result, False, plan.skip_reason
         )
+        emit_plan("warning", "weights_skipped", config, meta, block, plan, plan.skip_reason)
         return StepResult(
             "skip",
             plan.skip_reason or "unsubmittable vector",
@@ -208,6 +258,7 @@ def step(
         weight_set_id = record(
             store, config, poll.current_block, plan, result, False, "dry run: not submitted"
         )
+        emit_plan("info", "weights_planned", config, meta, block, plan)
         return StepResult(
             "skip",
             f"dry run: {summary}",
@@ -228,6 +279,9 @@ def step(
         None if accepted else "the chain refused the vector",
     )
     if not accepted:
+        emit_plan(
+            "error", "weights_failed", config, meta, block, plan, "the chain refused the vector"
+        )
         return StepResult(
             "failed",
             "set_weights rejected",
@@ -236,6 +290,7 @@ def step(
             scoring=result,
             weight_set_id=weight_set_id,
         )
+    emit_plan("info", "weights_set", config, meta, block, plan)
     return StepResult(
         "set",
         f"block {poll.current_block}: {summary}",
@@ -244,6 +299,43 @@ def step(
         plan=plan,
         scoring=result,
         weight_set_id=weight_set_id,
+    )
+
+
+def emit_plan(
+    severity: Severity,
+    event_type: EventType,
+    config: WeightSetterConfig,
+    meta: MetagraphView,
+    block: int,
+    plan: WeightPlan,
+    error: str | None = None,
+) -> None:
+    """One Axiom event for a tick's outcome: the vector's nonzero entries and its split."""
+    treasury, _ = resolve_treasury(
+        meta,
+        netuid=config.netuid,
+        treasury_uid=config.treasury_uid,
+        treasury_hotkey=config.treasury_hotkey,
+    )
+    paid = {uid: w for uid, w in zip(plan.uids, plan.weights, strict=True) if w > 0}
+    get_events().emit(
+        severity,
+        event_type,
+        block=block,
+        dry_run=config.dry_run,
+        burn_mode=config.burn_mode,
+        uids=list(paid),
+        weights=list(paid.values()),
+        treasury_uid=treasury,
+        treasury_share=paid.get(treasury, 0.0) if treasury is not None else None,
+        competition_share=config.competition_share,
+        burn_uid=config.burn_uid,
+        # Off mainnet the treasury may be the burn uid; the two shares are then one number.
+        burn_share=paid.get(config.burn_uid, 0.0) if config.burn_uid != treasury else None,
+        miners=sum(1 for uid in paid if uid not in (treasury, config.burn_uid)),
+        summary=plan.summary,
+        error=error,
     )
 
 
@@ -279,12 +371,36 @@ def run(
     *,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    params = chain.params(config.netuid)
+    events = get_events()
+    try:
+        params = chain.params(config.netuid)
+    except Exception as exc:
+        # Most often a hotkey that is not a registered validator on this netuid.
+        events.error("service_misconfigured", error=config_error(exc))
+        raise
+    events.info(
+        "service_started",
+        uid=params.uid,
+        tempo=params.tempo,
+        weights_rate_limit=params.weights_rate_limit,
+        set_margin=config.set_margin,
+        dry_run=config.dry_run,
+        burn_mode=config.burn_mode,
+        burn_uid=config.burn_uid,
+        treasury_uid=config.treasury_uid,
+        treasury_hotkey=config.treasury_hotkey,
+        competition_share=config.competition_share,
+        wallet_name=config.wallet_name,
+        wallet_hotkey=config.wallet_hotkey,
+        scoring_method=scoring_config.method,
+        pareto_share=scoring_config.pareto_share,
+        improvement_share=scoring_config.improvement_share,
+    )
     logger.info(
         f"[weights] running netuid={config.netuid} uid={params.uid} tempo={params.tempo} "
         f"rate_limit={params.weights_rate_limit} margin={config.set_margin} "
         f"burn_mode={config.burn_mode} burn_uid={config.burn_uid} dry_run={config.dry_run} "
-        f"collector={config.collector_hotkey or config.collector_uid} "
+        f"treasury_uid={config.treasury_uid} treasury_hotkey={config.treasury_hotkey} "
         f"competition_share={config.competition_share:.3f} "
         f"method={scoring_config.method} "
         f"split={scoring_config.pareto_share:.2f}/{scoring_config.improvement_share:.2f}"
@@ -300,6 +416,7 @@ def run(
                     params = chain.params(config.netuid)
             except Exception as exc:  # noqa: BLE001 - a bad tick must not end the worker
                 logger.exception(f"[weights] tick failed: {exc}")
+                events.error("weights_failed", dry_run=config.dry_run, error=config_error(exc))
             sleep(config.poll_seconds)
     except KeyboardInterrupt:
         logger.info("[weights] interrupted")
@@ -349,8 +466,14 @@ class TickLog:
 def main() -> None:
     from chain.finney import BittensorWeightChain
 
-    config = WeightSetterConfig.from_env()
-    scoring_config = scoring.ScoringConfig.from_env()
+    events = init("competition-weight-setter")
+    try:
+        config = WeightSetterConfig.from_env()
+        scoring_config = scoring.ScoringConfig.from_env()
+    except Exception as exc:
+        events.error("service_misconfigured", error=config_error(exc))
+        raise
+    events.bind(netuid=config.netuid, network=config.network)
     chain = BittensorWeightChain(
         network=config.network,
         wallet_name=config.wallet_name,
@@ -358,9 +481,12 @@ def main() -> None:
         wallet_path=config.wallet_path,
     )
     store = db.connect()
+    reason = "crashed"
     try:
         run(chain, store, config, scoring_config)
+        reason = "interrupted"  # run() returns only on KeyboardInterrupt
     finally:
+        events.info("service_stopped", reason=reason)
         store.close()
 
 

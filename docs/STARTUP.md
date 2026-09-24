@@ -18,8 +18,9 @@ Credentials and existing local configuration are never reset by these defaults.
 | External reference compressors | Off |
 | Benchmark timeout / memory / build memory | 300 s / 2048 MB / 4096 MB |
 | Sandbox | bubblewrap; systemd user limits |
-| Weight setting | Dry-run; `WEIGHT_DRY_RUN=0` explicitly enables chain writes |
-| Burn UID / burn-only mode | 0 / off |
+| Weight setting | Dry-run; `WEIGHT_DRY_RUN=0` explicitly enables chain writes. The only `set_weights` caller on the validator: in dry-run, nothing sets weights |
+| Treasury / competition split | 80% to treasury uid 121 / 20% by score (code constants) |
+| Burn UID / burn-only mode | 0 (burn mode only; unpaid competition allocation goes to the treasury) / off |
 | Network / subnet | finney / 66 |
 | API | 0.0.0.0:9200 |
 
@@ -184,35 +185,38 @@ not refresh verification or enable live scoring. Future order changes require a
 version bump and explicit replay.
 
 
-## Conjectures collector and compression budget
+## Treasury and competition budget
 
-The weight setter reserves 80% for the Conjectures collector and allocates up to
-20% through compression scoring. Configure `WEIGHT_COMPETITION_SHARE=0.20`;
-the fixed collector share is `1 - WEIGHT_COMPETITION_SHARE`.
-`WEIGHT_COLLECTOR_UID=121` matches the treasury in
-`conjectures-validator/emissions_worker/worker.py`. Prefer setting
-`WEIGHT_COLLECTOR_HOTKEY` to the collector's registered SS58 hotkey: it overrides
-UID configuration and follows metagraph UID changes. An absent collector causes a
-recorded skip, with no fallback to a different recipient.
+The weight setter is the validator's only `set_weights` caller and sets the whole vector
+(`validator/scoring/split.py`): the treasury takes 80% and the competition allocates up to
+20% by score. On netuid 66 the treasury uid (121) and the 20% are code constants; a
+`WEIGHT_TREASURY_UID` or `WEIGHT_COMPETITION_SHARE` that disagrees refuses to start. Off
+mainnet both are configurable (`WEIGHT_TREASURY_UID` defaults to `WEIGHT_BURN_UID`,
+`WEIGHT_COMPETITION_SHARE` to 0.20). `WEIGHT_COLLECTOR_UID` and `WEIGHT_COLLECTOR_HOTKEY`
+are accepted as older names for `WEIGHT_TREASURY_UID` and `WEIGHT_TREASURY_HOTKEY`.
 
-Scoring and speed admission still include baselines in the frontier. Miner scores
-are multiplied by the compression budget without renormalization. Baseline,
-deregistered, duplicate-hotkey and otherwise unpaid allocations go to the collector.
-For example, a miner allocated 25% of the compression budget receives 5% overall;
-the collector receives 95% if there are no other payable miners. An empty or
-baseline-only round sends 100% to the collector. The reserved burn UID remains
-ineligible for miner payment.
+Setting `WEIGHT_TREASURY_HOTKEY` to the treasury's registered SS58 hotkey guards against uid
+reassignment: an absent hotkey causes a recorded skip, with no fallback to a different
+recipient. Off mainnet it also locates the treasury uid and follows it if it changes; on
+netuid 66 it must sit at uid 121, or the epoch is skipped. A treasury uid absent from the
+metagraph is likewise a recorded skip.
 
-`SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within**
-the compression budget (defaults 0.60/0.40). Set them to 1/0 for Pareto-only rewards.
-Score snapshots and weights-preview report competition-local fractions; the
-weight-set audit vector contains actual subnet fractions and its summary records
-the budget and collector allocation. Historical `burn` labels in score reports
-mean unpaid competition allocation; normal weight setting now routes it to the
-collector. No schema migration is required.
+Scoring and speed admission still include baselines in the frontier. Miner scores are
+multiplied by the competition's share without renormalization. Baseline, deregistered,
+duplicate-hotkey and otherwise unpaid allocations go to the treasury. For example, a miner
+allocated 25% of the competition budget receives 5% overall; the treasury receives 95% if
+there are no other payable miners. An empty or baseline-only round, or one whose scoring
+raises, sends 100% to the treasury. The burn uid is never eligible for miner payment.
 
-`WEIGHT_DRY_RUN=1` remains the default. `WEIGHT_BURN_MODE=1` is an explicit emergency
-override: it sends everything to `WEIGHT_BURN_UID`, bypassing normal collector routing.
-Restart the weight setter after configuration changes. Run only one weight-setting
-worker for a validator wallet: this worker constructs the complete subnet vector,
-so do not feed that already scaled vector through the platform's 80/20 allocator.
+`SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within** the
+competition budget (defaults 0.60/0.40). Set them to 1/0 for Pareto-only rewards. Score
+snapshots and weights-preview report competition-local fractions; the weight-set audit
+vector contains actual subnet fractions and its summary records the budget and treasury
+allocation. Historical `burn` labels in score reports mean unpaid competition allocation;
+normal weight setting routes it to the treasury. No schema migration is required.
+
+`WEIGHT_DRY_RUN=1` remains the default. `WEIGHT_BURN_MODE=1` pauses the competition: its
+share goes to `WEIGHT_BURN_UID` (to the treasury if that uid is absent) and the treasury's
+share is paid as usual. Restart the weight setter after configuration changes. Run only one
+weight-setting worker for a validator wallet, and do not also run conjectures-validator's
+retired emissions worker: this worker constructs the complete subnet vector.
