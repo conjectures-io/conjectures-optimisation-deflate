@@ -6,11 +6,24 @@ import argparse
 import dataclasses
 import json
 import os
+from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import Protocol, cast
 
 import db
 import scoring
+from bench.results import Rep, Run
+from scoring.combine import HotkeyScore
 from scoring.pareto import global_coefficients, local_coefficients
+
+
+@dataclasses.dataclass
+class Args:
+    method: str | None = None
+    aggregation_id: list[int] | None = None
+    out_dir: Path | None = None
+    metagraph: Path | None = None
+    burn_uid: int = 0
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -24,17 +37,14 @@ def main(argv: list[str] | None = None) -> None:
         help="JSON hotkey-to-uid mapping; absent means provisional payments",
     )
     ap.add_argument("--burn-uid", type=int, default=int(os.environ.get("WEIGHT_BURN_UID", "0")))
-    args = ap.parse_args(argv)
+    args = ap.parse_args(argv, namespace=Args())
     config = scoring.ScoringConfig.from_env()
     if args.method:
         config = dataclasses.replace(config, method=args.method)
-    eligible = None
+    eligible: set[str] | None = None
     if args.metagraph:
-        eligible = {
-            key
-            for key, uid in json.loads(args.metagraph.read_text()).items()
-            if uid != args.burn_uid
-        }
+        hotkey_to_uid = cast(dict[str, int], json.loads(args.metagraph.read_text()))
+        eligible = {key for key, uid in hotkey_to_uid.items() if uid != args.burn_uid}
     store = db.connect()
     try:
         rows = store.scoring.preview_inputs(aggregation_ids=args.aggregation_id)
@@ -49,11 +59,14 @@ def main(argv: list[str] | None = None) -> None:
         from db.models import BenchmarkAggregation, BenchmarkAggregationInput, BenchmarkRun
 
         print(f"Recalculating preview from stored benchmark evidence: {len(rows)} submissions.")
-        provenance = {}
-        timings = {}
+        provenance: dict[str, dict[str, object]] = {}
+        timings: dict[str, list[dict[str, float]]] = {}
         with store.sessions() as session:
             for row in rows:
+                # preview_inputs' query only selects rows with aggregation_id IS NOT NULL.
+                assert row.aggregation_id is not None
                 aggregation = session.get(BenchmarkAggregation, row.aggregation_id)
+                assert aggregation is not None
                 run_rows = list(
                     session.scalars(
                         select(BenchmarkRun)
@@ -100,29 +113,34 @@ def main(argv: list[str] | None = None) -> None:
         print("Registration eligibility unknown: miner payments below are provisional.")
     points = result.frontier.points
     front = sorted((points[key] for key in result.frontier.frontier), key=lambda p: p.time_s)
-    local = local_coefficients(front, 2.0, 0.0) if front else {}
-    glob = global_coefficients(front, 2.0, 0.0) if front else {}
-    output = []
+    local: dict[str, float] = local_coefficients(front, 2.0, 0.0) if front else {}
+    glob: dict[str, float] = global_coefficients(front, 2.0, 0.0) if front else {}
+    output: list[dict[str, object]] = []
     telemetry = {row.submission_id: row.byte_weighted_ratio_pct for row in rows}
-    previous = None
+    previous: HotkeyScore | None = None
     for s in sorted(result.scores, key=time_coordinate):
         key = str(s.submission_id)
         label = s.baseline_key or s.hotkey or key
-        row = dataclasses.asdict(s) | {
-            "ratio_pct": s.ratio_pct,
-            "byte_weighted_ratio_pct": telemetry[s.submission_id],
-            "label": label,
-            "local": local.get(key),
-            "global": glob.get(key),
-        }
+        record: dict[str, object] = dataclasses.asdict(s)
+        record.update(
+            {
+                "ratio_pct": s.ratio_pct,
+                "byte_weighted_ratio_pct": telemetry[s.submission_id],
+                "label": label,
+                "local": local.get(key),
+                "global": glob.get(key),
+            }
+        )
         if s.on_frontier:
             if previous is not None:
-                row["time_change_pct"] = 100 * (time_coordinate(s) / time_coordinate(previous) - 1)
-                row["size_change_pct"] = (
+                record["time_change_pct"] = 100 * (
+                    time_coordinate(s) / time_coordinate(previous) - 1
+                )
+                record["size_change_pct"] = (
                     100 * (s.ratio_pct / previous.ratio_pct - 1) if previous.ratio_pct else None
                 )
             previous = s
-        output.append(row)
+        output.append(record)
         print(
             f"{s.submission_id:>5} {label:<18} {time_coordinate(s):>8.4f}x incumbent "
             f"({s.time_s:.5f}s) {s.ratio_pct:>7.3f}% "
@@ -130,15 +148,16 @@ def main(argv: list[str] | None = None) -> None:
             f"recency={s.improvement_weight:.5f} payable={s.payable_weight:.5f} "
             f"{s.burn_reason or ''}"
         )
-    from workers.admission_report import explanation, plot_admission
+    from workers.admission_report import AdmissionDetailExtra, explanation, plot_admission
 
     for s in result.scores:
         if s.admission:
-            print(f"  {s.baseline_key or s.submission_id}: {explanation(s.admission)}")
+            detail = cast(AdmissionDetailExtra, cast(object, s.admission))
+            print(f"  {s.baseline_key or s.submission_id}: {explanation(detail)}")
     print(f"burn={result.burn_weight:.5f}")
     if args.out_dir:
         args.out_dir.mkdir(parents=True, exist_ok=True)
-        payload = {
+        payload: dict[str, object] = {
             "config": dataclasses.asdict(config),
             "sources": provenance,
             "timing_repetition_totals": timings,
@@ -153,13 +172,13 @@ def main(argv: list[str] | None = None) -> None:
         plot_admission(result.scores, args.out_dir)
 
 
-def timing_observations(runs):
+def timing_observations(runs: Sequence[tuple[Run, str]]) -> list[dict[str, float]]:
     """Sum the nth measured repetition over every selected file and corpus.
 
     These are aligned repetition totals, not independently executed corpus passes:
     the engine measures all repetitions of each file before moving to the next.
     """
-    files = [
+    files: list[list[Rep]] = [
         [rep for rep in file.methods[method].reps if rep.phase == "measured"]
         for run, method in runs
         for file in run.files
@@ -170,21 +189,58 @@ def timing_observations(runs):
         raise ValueError("timing plots require equal nonzero repetition counts for every file")
     if any(rep.total_s is None for reps in files for rep in reps):
         raise ValueError("timing plots require complete total compression measurements")
+    # files always has one Rep list per (run, method, file), a count that only the
+    # already-passed length check above fixes -- not a static, small arity like the
+    # candidate/incumbent pairing in admission_statistics.py -- so the zip result is
+    # cast wholesale rather than per element.
     return [
         {
             "lz77_s": sum(rep.time_s for rep in repetition),
-            "total_s": sum(rep.total_s for rep in repetition),
+            "total_s": sum(cast(float, rep.total_s) for rep in repetition),
         }
-        for repetition in zip(*files, strict=True)
+        for repetition in cast("Iterator[tuple[Rep, ...]]", zip(*files, strict=True))
     ]
 
 
-def time_coordinate(point):
+class ScoredPoint(Protocol):
+    """The fields these plotting helpers read off a scored point.
+
+    Structural, not HotkeyScore itself: test_scoring_plots.py exercises this module
+    against lightweight `SimpleNamespace` fakes that provide only what a given
+    function actually touches, not every HotkeyScore field. `normalized_time_ratio`
+    and `admission` are read via getattr with a default rather than added here for
+    the same reason -- callers may omit them entirely, not just set them to None.
+    """
+
+    @property
+    def submission_id(self) -> int: ...
+    @property
+    def time_s(self) -> float: ...
+    @property
+    def ratio_pct(self) -> float: ...
+    @property
+    def on_frontier(self) -> bool: ...
+    @property
+    def baseline_key(self) -> str | None: ...
+    @property
+    def hotkey(self) -> str | None: ...
+    @property
+    def payable_weight(self) -> float: ...
+    @property
+    def combined_weight(self) -> float: ...
+
+
+class ScoringResult(Protocol):
+    @property
+    def scores(self) -> Sequence[ScoredPoint]: ...
+
+
+def time_coordinate(point: ScoredPoint) -> float:
     relative = getattr(point, "normalized_time_ratio", None)
     return relative if relative is not None else point.time_s
 
 
-def normalize_frontier(ordered):
+def normalize_frontier(ordered: Sequence[ScoredPoint]) -> dict[int, tuple[float, float]]:
     """Global local-global coordinates; a degenerate axis maps to zero."""
     front = [s for s in ordered if s.on_frontier]
     if not front:
@@ -200,11 +256,18 @@ def normalize_frontier(ordered):
     }
 
 
-def plot(result, directory, provenance=None, timings=None):
+def plot(
+    result: ScoringResult,
+    directory: Path,
+    provenance: dict[str, dict[str, object]] | None = None,
+    timings: dict[str, list[dict[str, float]]] | None = None,
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
     from matplotlib.patches import Patch
 
     provenance, timings = provenance or {}, timings or {}
@@ -221,11 +284,11 @@ def plot(result, directory, provenance=None, timings=None):
     front = [s for s in ordered if s.on_frontier]
     normalized = normalize_frontier(ordered)
 
-    def save(fig, name):
+    def save(fig: Figure, name: str) -> None:
         fig.savefig(directory / name, dpi=160)
         plt.close(fig)
 
-    def pareto(ax, *, normalize=False, uncertainty=False):
+    def pareto(ax: Axes, *, normalize: bool = False, uncertainty: bool = False) -> None:
         selected = front if normalize else ordered
         coordinates = (
             normalized
@@ -236,20 +299,23 @@ def plot(result, directory, provenance=None, timings=None):
             x, y = coordinates[s.submission_id]
             color = colors[s.submission_id]
             if uncertainty:
-                stats = provenance.get(str(s.submission_id), {}).get("timing", {})
-                interval = (stats.get("intervals") or {}).get(
+                stats = cast(
+                    "dict[str, object]", provenance.get(str(s.submission_id), {}).get("timing", {})
+                )
+                intervals = cast("dict[str, list[float]] | None", stats.get("intervals"))
+                interval = (intervals or {}).get(
                     "balanced_time_ratio" if relative_time else "compression_seconds"
                 )
                 if interval:
                     # Draw endpoints directly: a percentile interval need not contain the estimate.
                     ax.hlines(y, interval[0], interval[1], color=color, linewidth=2)
                     ax.plot(interval, [y, y], "|", color=color, markersize=8)
+            admission = getattr(s, "admission", None)
             ax.scatter(
                 x,
                 y,
                 facecolors="none"
-                if getattr(s, "admission", None)
-                and s.admission["outcome"] not in {"passed", "not_required"}
+                if admission and admission["outcome"] not in {"passed", "not_required"}
                 else color,
                 edgecolors=color,
                 marker="s" if s.baseline_key else "o",
@@ -416,8 +482,11 @@ def plot(result, directory, provenance=None, timings=None):
     fig, ax = plt.subplots(figsize=(9, 7), layout="constrained")
     extent = 0.0
     for s, label in zip(ordered, labels, strict=True):
-        stats = provenance.get(str(s.submission_id), {}).get("timing", {})
-        lz77 = stats.get("totals", {}).get("candidate", {}).get("lz77_s")
+        stats = cast(
+            "dict[str, object]", provenance.get(str(s.submission_id), {}).get("timing", {})
+        )
+        totals = cast("dict[str, dict[str, float]]", stats.get("totals", {}))
+        lz77 = totals.get("candidate", {}).get("lz77_s")
         if lz77 is not None:
             ax.scatter(
                 lz77,
