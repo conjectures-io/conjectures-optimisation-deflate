@@ -62,7 +62,6 @@ include = [
     "validator/observability",
     "validator/tests",
     "validator/db",
-    "validator/chain",
     "validator/scoring",
     "validator/workers",
     "validator/tools",
