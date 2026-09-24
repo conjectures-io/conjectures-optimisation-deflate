@@ -10,15 +10,17 @@ import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from bench.corpora import Corpus
-from bench.results import INCUMBENT, SCHEMA_VERSION, Run, parse
+from bench.results import INCUMBENT, SCHEMA_VERSION, FileResult, Run, parse
 from bench.storage import sha256
+from verifier.identity import required_fingerprint
 
-from .models import BenchmarkRun
+from .models import BenchmarkAggregation, BenchmarkAggregationInput, BenchmarkRun, Submission
 
 
 @dataclass(frozen=True, order=True)
@@ -55,7 +57,7 @@ def select_runs(
         if len(rows) != len(run_ids):
             raise ValueError("a requested benchmark run does not exist")
     else:
-        rows = []
+        rows: list[BenchmarkRun] = []
         for corpus in sorted(wanted):
             row = session.scalar(
                 select(BenchmarkRun)
@@ -182,13 +184,18 @@ def compatibility(run: Run) -> tuple[object, ...]:
     Only matching protocols and environments may be combined.
     """
     m = run.meta
-    provenance = run.raw_records[0].get("benchmark_provenance")
-    if not isinstance(provenance, dict) or not all(
-        provenance.get(key) for key in ("engine_sha256", "template_sha256", "host_sha256")
-    ):
-        raise ValueError("benchmark provenance missing; rebenchmark before aggregation")
+    missing_provenance = "benchmark provenance missing; rebenchmark before aggregation"
+    raw_provenance = run.raw_records[0].get("benchmark_provenance")
+    if not isinstance(raw_provenance, dict):
+        raise ValueError(missing_provenance)
+    # isinstance narrows to the bare `dict`, erasing the `dict[str, object]` we know this
+    # is from Run.raw_records' own type; cast restores it instead of losing that back to
+    # `dict[Unknown, Unknown]`.
+    provenance = cast(dict[str, object], raw_provenance)
+    if not all(provenance.get(key) for key in ("engine_sha256", "template_sha256", "host_sha256")):
+        raise ValueError(missing_provenance)
     return (
-        sha256(run.raw_records[0].get("benchmark_provenance")),
+        sha256(provenance),
         m.schema_version,
         m.os,
         m.arch,
@@ -202,20 +209,42 @@ def compatibility(run: Run) -> tuple[object, ...]:
     )
 
 
-def compression_statistics(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
+class CorpusCompressionStats(TypedDict):
+    corpus: str
+    files: int
+    empty_files: int
+    ratio_pct: float
+    incumbent_ratio_pct: float
+
+
+class CompressionStatistics(TypedDict):
+    method: str
+    corpora: list[CorpusCompressionStats]
+    ratio_pct: float
+    incumbent_ratio_pct: float
+    byte_weighted_ratio_pct: float
+    incumbent_byte_weighted_ratio_pct: float
+
+
+def _output_ratio_pct(file: FileResult, method: str) -> float:
+    output_bytes = file.methods[method].output_bytes
+    # validate_evidence already required a non-negative output size for every file.
+    assert output_bytes is not None
+    return 100 * output_bytes / file.raw_bytes
+
+
+def compression_statistics(rows: Sequence[BenchmarkRun]) -> CompressionStatistics:
     """Equal weight per nonempty file, then equal weight per corpus."""
-    corpora = []
+    corpora: list[CorpusCompressionStats] = []
     raw = output = incumbent_output = 0
     for row in sorted(rows, key=lambda row: row.corpus):
         run = validate_evidence(row)
         files = [file for file in run.files if file.raw_bytes > 0]
         if not files:
             raise ValueError(f"{row.corpus}: compression ratio requires nonempty files")
-        ratios = {}
+        ratios: dict[str, float] = {}
         for role, method in (("candidate", row.candidate_method), ("incumbent", INCUMBENT)):
-            ratios[role] = statistics.mean(
-                100 * file.methods[method].output_bytes / file.raw_bytes for file in files
-            )
+            ratios[role] = statistics.mean(_output_ratio_pct(file, method) for file in files)
         corpora.append(
             {
                 "corpus": row.corpus,
@@ -241,12 +270,24 @@ def compression_statistics(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
     }
 
 
-def relative_timing_statistics(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
+class CorpusTimingStats(TypedDict):
+    corpus: str
+    files: int
+    time_ratio: float
+
+
+class RelativeTimingStatistics(TypedDict):
+    method: str
+    time_ratio: float
+    corpora: list[CorpusTimingStats]
+
+
+def relative_timing_statistics(rows: Sequence[BenchmarkRun]) -> RelativeTimingStatistics:
     """Equal-corpus mean of per-nonempty-file ratios of median total times."""
-    corpora = []
+    corpora: list[CorpusTimingStats] = []
     for row in sorted(rows, key=lambda row: row.corpus):
         run = validate_evidence(row)
-        ratios = []
+        ratios: list[float] = []
         for file in run.files:
             if file.raw_bytes == 0:
                 continue
@@ -325,6 +366,19 @@ def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
     )
 
 
+class FileTimingRecord(TypedDict):
+    run_id: int
+    file: str
+    method: str
+    n: int
+    median_s: float | None
+    sample_std_s: float | None
+    lz77_median_s: float
+    lz77_sample_std_s: float | None
+    encode_median_s: float | None
+    encode_sample_std_s: float | None
+
+
 def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dict[str, object]:
     """Paired per-file bootstrap of median timing estimates.
 
@@ -339,7 +393,7 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
         raise ValueError("at least 100 bootstrap draws required")
     rows = sorted(rows, key=lambda r: r.id)
     runs = [validate_evidence(row) for row in rows]
-    files = []
+    files: list[FileTimingRecord] = []
     for row, run in zip(rows, runs, strict=True):
         for file in run.files:
             for method in (INCUMBENT, row.candidate_method):
@@ -395,10 +449,10 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
     }
     for _ in range(draws):
         candidate = incumbent = 0.0
-        corpus_ratios = []
+        corpus_ratios: list[float] = []
         for row, run in zip(rows, runs, strict=True):
             n = run.meta.measured_rounds
-            file_ratios = []
+            file_ratios: list[float] = []
             for file in run.files:
                 indices = [rng.randrange(n) for _ in range(n)]
                 candidate_file = statistics.median(
@@ -444,12 +498,8 @@ def evaluation_context(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
     }
 
 
-def aggregate(session: Session, rows: Sequence[BenchmarkRun]):
+def aggregate(session: Session, rows: Sequence[BenchmarkRun]) -> BenchmarkAggregation:
     """Create immutable evidence, atomically and idempotently, without publication."""
-    from sqlalchemy import text
-
-    from .models import BenchmarkAggregation, BenchmarkAggregationInput
-
     values = reduce_runs(rows)
     key = sha256([CALCULATOR_VERSION, list(values.run_ids)])
     # Transaction lock serializes competing creators before querying for a prior result.
@@ -485,10 +535,7 @@ def publish(
     session: Session, submission_id: int, aggregation_id: int, *, speed_floor: float = 8.0
 ) -> None:
     """Bind verified source to selected evidence; acceptance/registration stay separate."""
-    from verifier.identity import required_fingerprint
-
     from .admission import publication_lock
-    from .models import BenchmarkAggregation, BenchmarkAggregationInput, Submission
 
     publication_lock(session)
     submission = session.get(Submission, submission_id, with_for_update=True)

@@ -180,7 +180,7 @@ class RegistrationsDb:
     def available_slots(self, hotkey: str) -> int:
         # Registrations this hotkey holds that no accepted submission has spent yet.
         with session_scope(self._sessions) as session:
-            return _available_slots(session, hotkey)
+            return available_slots_in_session(session, hotkey)
 
     def claim_slot(self, session: Session, hotkey: str, submission_id: int) -> int:
         """Spend this hotkey's oldest unclaimed registration on `submission_id`.
@@ -213,7 +213,7 @@ class RegistrationsDb:
         return registration_id
 
 
-def _available_slots(session: Session, hotkey: str) -> int:
+def available_slots_in_session(session: Session, hotkey: str) -> int:
     # Shared by the API's reservation check and by available_slots(); takes a session so
     # the worker can ask the question inside the transaction that is about to claim.
     claimed = select(models.EntitlementClaim.registration_id)
