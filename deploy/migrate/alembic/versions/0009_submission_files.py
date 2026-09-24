@@ -23,9 +23,7 @@ def upgrade():
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
-        sa.CheckConstraint(
-            "name IN ('parse.rs', 'Parse.lean')", name="ck_submission_files_name"
-        ),
+        sa.CheckConstraint("name IN ('parse.rs', 'Parse.lean')", name="ck_submission_files_name"),
     )
 
 

@@ -283,7 +283,7 @@ def test_a_scoring_failure_pays_the_treasury_instead_of_failing_the_tick(store, 
     assert result.action == "set" and result.scoring is None
     uids, weights = chain.submitted[0]
     assert weights[uids.index(TREASURY_UID)] == pytest.approx(1.0)
-    assert "scoring failed" in weight_sets(store)[0].summary
+    assert "scoring failed" in (weight_sets(store)[0].summary or "")
 
 
 def test_a_dry_run_computes_and_records_but_never_submits(store):

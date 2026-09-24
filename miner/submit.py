@@ -218,7 +218,9 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--url", required=True, help="the platform API's origin, e.g. https://api.host")
+        p.add_argument(
+            "--url", required=True, help="the platform API's origin, e.g. https://api.host"
+        )
         p.add_argument(
             "--competition",
             default=DEFAULT_COMPETITION,

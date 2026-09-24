@@ -16,8 +16,8 @@ give up that property.
 from __future__ import annotations
 
 import sys
+from argparse import Namespace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -112,7 +112,7 @@ def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypat
     monkeypatch.setattr(submit.requests, "post", post)
     monkeypatch.setattr(submit.time, "time", lambda: 1_700_000_000)
     submit.cmd_submit(
-        SimpleNamespace(
+        Namespace(
             dir=str(_submission(tmp_path)),
             hotkey="//Alice",
             url="https://api.example/",
@@ -156,7 +156,7 @@ def test_a_refusal_reports_the_platforms_reason_code(tmp_path, monkeypatch):
     )
     with pytest.raises(SystemExit) as exited:
         submit.cmd_submit(
-            SimpleNamespace(
+            Namespace(
                 dir=str(_submission(tmp_path)),
                 hotkey="//Alice",
                 url="https://api.example",
@@ -173,8 +173,12 @@ def test_the_leaderboard_follows_every_page(monkeypatch, capsys):
             "ranked_by": "bytes",
             "headline": {"incumbent_bytes": 2153387, "speed_floor": 8.0},
             "ranking": [
-                {"rank": 1, "submission": "1", "hotkey": "5First",
-                 "metrics": {"bytes": 2100000, "vs_incumbent": 0.97519, "time_ratio": 1.5}},
+                {
+                    "rank": 1,
+                    "submission": "1",
+                    "hotkey": "5First",
+                    "metrics": {"bytes": 2100000, "vs_incumbent": 0.97519, "time_ratio": 1.5},
+                },
             ],
             "next_cursor": "page-two",
         },
@@ -182,8 +186,12 @@ def test_the_leaderboard_follows_every_page(monkeypatch, capsys):
             "ranked_by": "bytes",
             "headline": {"incumbent_bytes": 2153387, "speed_floor": 8.0},
             "ranking": [
-                {"rank": 2, "submission": "2", "hotkey": "5Second",
-                 "metrics": {"bytes": 2200000, "vs_incumbent": 1.02165, "time_ratio": None}},
+                {
+                    "rank": 2,
+                    "submission": "2",
+                    "hotkey": "5Second",
+                    "metrics": {"bytes": 2200000, "vs_incumbent": 1.02165, "time_ratio": None},
+                },
             ],
             "next_cursor": None,
         },
@@ -196,7 +204,7 @@ def test_the_leaderboard_follows_every_page(monkeypatch, capsys):
         return _Response(200, pages[params.get("cursor")])
 
     monkeypatch.setattr(submit.requests, "get", get)
-    submit.cmd_leaderboard(SimpleNamespace(url="https://api.example", competition="miniz-oxide"))
+    submit.cmd_leaderboard(Namespace(url="https://api.example", competition="miniz-oxide"))
     out = capsys.readouterr().out
     assert asked == [None, "page-two"]
     assert "5First" in out and "5Second" in out
