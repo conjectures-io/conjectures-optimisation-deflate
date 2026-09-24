@@ -106,7 +106,7 @@ def test_compare_accepts_the_same_run_and_rejects_changed_bytes_or_slow_drift():
 def test_report_names_the_verdict_the_gate_would_give():
     meta, files = run()
     text = an.report(meta, files, "/x/run.jsonl")
-    assert "| slow-better | 1,340 | 0.9571x | 8.81x | over the floor |" in text
+    assert "| slow-better | 1,340 | 0.9571x | 8.81x | accepted |" in text
     assert "| fast-worse | 1,550 | 1.1071x | 0.48x | no improvement |" in text
     assert "| libdeflate-12 | 1,250 | 0.8929x | 2.90x | reference |" in text
     assert "`slow-better`, `incumbent`, `fast-worse`" in text

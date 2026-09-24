@@ -482,7 +482,7 @@ def aggregate(session: Session, rows: Sequence[BenchmarkRun]):
 
 
 def publish(
-    session: Session, submission_id: int, aggregation_id: int, *, speed_floor: float = 8.0
+    session: Session, submission_id: int, aggregation_id: int, *, speed_floor: float | None = None
 ) -> None:
     """Bind verified source to selected evidence; acceptance/registration stay separate."""
     from verifier.identity import required_fingerprint
@@ -526,8 +526,8 @@ def publish(
     ):
         if getattr(aggregation, field) != getattr(values, field):
             raise ValueError("aggregation no longer matches evidence")
-    if not math.isfinite(speed_floor) or speed_floor <= 0 or values.time_ratio > speed_floor:
-        raise ValueError("aggregation exceeds speed floor")
+    # Benchmark publication preserves evidence regardless of reward eligibility.
+    # The legacy speed_floor argument is retained for callers; admission owns bounds.
     for field in (
         "raw_bytes",
         "bytes",

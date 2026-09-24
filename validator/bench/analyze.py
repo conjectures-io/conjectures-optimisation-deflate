@@ -254,8 +254,7 @@ def verdict(method: str, ratio: float, speed: float, floor: float, external: set
         return "reference"
     if method == REFERENCE_METHOD:
         return "incumbent"
-    if speed > floor:
-        return "over the floor"
+    del speed, floor  # Execution timeout and scoring eligibility are separate.
     return "accepted" if ratio < 1 else "no improvement"
 
 
@@ -358,8 +357,8 @@ def report(meta: Meta, files: list[FileRec], run_path: str) -> str:
         f"## Score: pooled bytes and pooled median compression time against `{REFERENCE_METHOD}` "
         f"({len(files)} files, {raw:,} raw bytes)",
         "",
-        f"The gate's arithmetic. `accepted` means fewer bytes and at most {floor:.0f}x the "
-        "incumbent's total compression time. Both LZ77 and the shared encoder are timed.",
+        "`accepted` here indicates fewer bytes, not reward eligibility. Scoring uses "
+        "balanced per-file ratios and separate boundaries. Both compression stages are timed.",
         "",
         md_table(score_rows, ["method", "bytes", "vs incumbent", "time", "gate would say"]),
         "",

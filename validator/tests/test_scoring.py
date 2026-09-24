@@ -103,7 +103,7 @@ def test_the_time_boundary_follows_the_newest_measurement():
     new = sub("b", 2_100_000, 1.0, minutes=60)
     new = dc.replace(new, incumbent_seconds=0.25)
     bounds = scoring.boundaries_for([old, new], CONFIG.speed_floor)
-    assert bounds.time_s == pytest.approx(8.0 * 0.25)
+    assert bounds.time_s == pytest.approx(10.0 * 0.25)
 
 
 def test_an_empty_round_pays_nobody_from_the_frontier():

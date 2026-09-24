@@ -63,6 +63,8 @@ PINNED = [
     "db/admission.py",
     "db/admission_statistics.py",
     "scoring/admission.py",
+    "scoring/eligibility.py",
+    "scoring/config.py",
     "bench/storage.py",
     "bench/artifacts.py",
     "db/scoring.py",

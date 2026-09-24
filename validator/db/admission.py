@@ -22,6 +22,8 @@ from scoring.admission import (
     ordered_candidates,
     select_reference,
 )
+from scoring.config import ScoringConfig
+from scoring.eligibility import bounds_detail
 
 from .admission_statistics import compare, evidence_files
 from .models import (
@@ -68,7 +70,7 @@ def point_payload(point):
     }
 
 
-def evaluate(session, points, *, compute=False, persist=False, replay=False):
+def evaluate(session, points, *, compute=False, persist=False, replay=False, config=None):
     """Evaluate an ordered context. Callers hold publication_lock before persisted reads.
 
     compute=True is a preview or initial publication. An existing pointer in a
@@ -76,6 +78,7 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
     """
     if persist and not compute:
         raise ValueError("publication requires computation")
+    config = config or ScoringConfig.from_env()
     ordered = ordered_candidates(points)
     frontier, result, prefix = [], [], []
     names = {p.baseline_key for p in ordered if p.baseline_key}
@@ -133,6 +136,7 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
         evidence = [[r.id, sha256(r.raw_data)] for r in runs]
         identity = [
             POLICY_VERSION,
+            [config.speed_floor, config.max_ratio_pct],
             BASELINE_ORDER_VERSION,
             point.context,
             point.submission_id,
@@ -178,7 +182,10 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
             try:
                 # Validate minimum repetitions even for first/record-compression points.
                 evidence_files(runs)
-                outcome, reference = select_reference(frontier, point)
+                bounds = bounds_detail(point, config)
+                outcome, reference = (
+                    select_reference(frontier, point) if bounds["eligible"] else ("excluded", None)
+                )
                 stats = (
                     compare(runs, runs_for(session, reference.aggregation_id))
                     if reference
@@ -200,6 +207,7 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
             if stats is not None:
                 outcome = stats["outcome"]
             reason = {
+                "excluded": "outside-scoring-bounds",
                 "passed": "speed-advantage-established",
                 "inconclusive": "speed-advantage-uncertain",
                 "not_required": "no-slower-better-compressing-neighbor",
@@ -218,6 +226,7 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
                 "evaluation_context": point.context,
                 "evidence": evidence,
                 "statistics": stats,
+                "scoring_bounds": bounds,
                 "historical_verification": point.verification_current is False,
             }
             if persist:

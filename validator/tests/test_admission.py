@@ -390,3 +390,91 @@ def test_invalidated_evidence_cannot_keep_current_decision(store):
         # Explicit evaluation must also reject an invalidated row, even for a matching pointer.
         result = evaluate(session, [p], compute=True, persist=True, replay=True)
         assert result[0].admission["outcome"] == "invalid_evidence"
+
+
+@pytest.mark.parametrize(
+    "time,ratio,eligible",
+    [
+        (10, 40, True),
+        (10.00001, 30, False),
+        (1, 40.00001, False),
+        (8.63, 34.79, True),
+        (0.1, 100, False),
+    ],
+)
+def test_balanced_scoring_boundaries(time, ratio, eligible):
+    from scoring import ScoringConfig
+    from scoring.eligibility import bounds_detail
+
+    p = replace(point(1, time, ratio), time_s=0.01, incumbent_seconds=1)
+    assert bounds_detail(p, ScoringConfig())["eligible"] is eligible
+
+
+def test_excluded_points_cannot_affect_rewards_or_improvement_history():
+    from scoring import ScoringConfig, score
+
+    a = replace(point(1, 1, 35), normalized_incumbent_ratio_pct=50)
+    slow = replace(point(2, 11, 10), normalized_incumbent_ratio_pct=50)
+    large = replace(point(3, 0.01, 41), normalized_incumbent_ratio_pct=50)
+    config = ScoringConfig()
+    original = score([a], [a], config)
+    result = score([a, slow, large], [a, slow, large], config)
+    assert result.frontier == original.frontier
+    assert result.improvements == original.improvements
+    assert result.weights == original.weights
+    for s in result.scores[1:]:
+        assert s.combined_weight == s.payable_weight == 0
+        assert s.burn_reason is not None
+        assert s.burn_reason.startswith("scoring-bounds:")
+
+
+def test_bound_decisions_persist_and_excluded_point_is_not_neighbor(store):
+    from db.admission import evaluate
+    from db.models import SubmissionAdmissionCheck
+    from scoring import ScoringConfig
+
+    with store.sessions.begin() as session:
+        slow = stored_point(session, 1, [11.0] * 3)
+        good = stored_point(session, 2, [9.0] * 3)
+        rows = evaluate(session, [slow, good], compute=True, persist=True)
+        assert [p.admission["outcome"] for p in rows] == ["excluded", "not_required"]
+        detail = session.get(SubmissionAdmissionCheck, rows[0].admission_check_id).details
+        assert detail["scoring_bounds"]["violations"] == ["time-ratio-limit"]
+        assert rows[1].admission["frontier_before"] == []
+        # Changing limits invalidates the whole predecessor chain.
+        changed = evaluate(session, [slow, good], config=ScoringConfig(speed_floor=12))
+        assert all(p.admission["outcome"] == "pending" for p in changed)
+        replayed = evaluate(
+            session,
+            [slow, good],
+            compute=True,
+            persist=True,
+            replay=True,
+            config=ScoringConfig(speed_floor=12),
+        )
+        assert [p.admission["outcome"] for p in replayed] == ["not_required", "passed"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"speed_floor": float("nan")},
+        {"speed_floor": float("inf")},
+        {"max_ratio_pct": 0},
+        {"max_ratio_pct": float("inf")},
+    ],
+)
+def test_invalid_scoring_bounds(kwargs):
+    from scoring import ScoringConfig
+
+    with pytest.raises(ValueError):
+        ScoringConfig(**kwargs)
+
+
+def test_scoring_bounds_environment():
+    from scoring import ScoringConfig
+
+    cfg = ScoringConfig.from_env(
+        {"SCORING_MAX_TIME_RATIO": "12", "SCORING_MAX_RATIO_PCT": "45", "SCORING_SPEED_FLOOR": "8"}
+    )
+    assert cfg.speed_floor == 12 and cfg.max_ratio_pct == 45

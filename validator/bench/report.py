@@ -45,11 +45,11 @@ def merge(m: Measurement) -> tuple[FileResult, ...]:
     )
 
 
-def verdicts(m: Measurement, floor: float = SPEED_FLOOR) -> dict[str, Verdict]:
+def verdicts(m: Measurement, floor: float | None = SPEED_FLOOR) -> dict[str, Verdict]:
     return {name: judge(m.of(name), name, floor) for name in m.candidates()}
 
 
-def table(m: Measurement, floor: float = SPEED_FLOOR) -> str:
+def table(m: Measurement, floor: float | None = SPEED_FLOOR) -> str:
     """The score, as a table: one row per corpus file, one column per method."""
     files = merge(m)
     order = _order(m)
@@ -66,7 +66,7 @@ def table(m: Measurement, floor: float = SPEED_FLOOR) -> str:
     return "\n".join(lines)
 
 
-def summary(m: Measurement, floor: float = SPEED_FLOOR) -> dict[str, object]:
+def summary(m: Measurement, floor: float | None = SPEED_FLOOR) -> dict[str, object]:
     """The machine-readable answer: what a validator stores and a miner is sent."""
     files = merge(m)
     judged = verdicts(m, floor)
@@ -118,7 +118,7 @@ def summary(m: Measurement, floor: float = SPEED_FLOOR) -> dict[str, object]:
     return out
 
 
-def records(m: Measurement, floor: float = SPEED_FLOOR) -> list[dict[str, object]]:
+def records(m: Measurement, floor: float | None = SPEED_FLOOR) -> list[dict[str, object]]:
     """The full raw run, as JSONL records. Never leaves the validator unfiltered."""
     head = m.runs[0].meta
     meta: dict[str, object] = {
@@ -203,7 +203,7 @@ def _bytes_table(files: Sequence[FileResult], order: Sequence[str]) -> list[str]
     return _grid(head, [*rows, None, total])
 
 
-def _summary_table(m: Measurement, order: Sequence[str], floor: float) -> list[str]:
+def _summary_table(m: Measurement, order: Sequence[str], floor: float | None) -> list[str]:
     judged = verdicts(m, floor)
     head = ["method", "bytes", "ratio", "lz77", "encode", "total", "slowdown", ""]
     rows: list[list[str] | None] = []

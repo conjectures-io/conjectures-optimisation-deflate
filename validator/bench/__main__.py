@@ -52,7 +52,7 @@ class Options:
     runs_dir: Path | None
     reps: int | None
     warmup: int | None
-    speed_floor: float
+    speed_floor: float | None
     keep: bool
     bars: bool
     quiet: bool
@@ -73,7 +73,12 @@ def parse_args(argv: list[str] | None = None) -> Options:
     ap.add_argument("--runs-dir", type=Path, help="write the raw JSONL run here, named by time")
     ap.add_argument("--reps", type=int, help="timed reps per file per method")
     ap.add_argument("--warmup", type=int, help="discarded reps before them")
-    ap.add_argument("--speed-floor", type=float, default=SPEED_FLOOR)
+    ap.add_argument(
+        "--speed-floor",
+        type=float,
+        default=SPEED_FLOOR,
+        help="Deprecated metadata only; scoring bounds do not reject benchmarks",
+    )
     ap.add_argument("--keep", action="store_true", help="keep the run workspace")
     ap.add_argument("--no-bars", action="store_true", help="skip miniz_oxide and libdeflate")
     ap.add_argument("--quiet", action="store_true", help="no table on stdout")
@@ -88,7 +93,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
         runs_dir=cast("Path | None", a.runs_dir),
         reps=cast("int | None", a.reps),
         warmup=cast("int | None", a.warmup),
-        speed_floor=cast(float, a.speed_floor),
+        speed_floor=cast(float | None, a.speed_floor),
         keep=cast(bool, a.keep),
         bars=not cast(bool, a.no_bars),
         quiet=cast(bool, a.quiet),
@@ -157,7 +162,7 @@ def corpus(name: str) -> corpora.Corpus:
     return corpora.adhoc(Path(name)).require()
 
 
-def write_runs_file(m: Measurement, runs_dir: Path, floor: float) -> Path:
+def write_runs_file(m: Measurement, runs_dir: Path, floor: float | None) -> Path:
     # One permanent, independently-readable artifact per run, never overwritten.
     runs_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())

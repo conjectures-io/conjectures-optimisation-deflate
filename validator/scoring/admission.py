@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-POLICY_VERSION = "fixed-corpus-speed-v1"
+POLICY_VERSION = "fixed-corpus-speed-bounds-v2"
 BASELINE_ORDER_VERSION = "examples-slow-to-fast-v2"
 # Frozen from the 2026-09-24 preview's incumbent-normalized scored times.
 # Never re-sort from noisy measurements; changes require a version bump and replay.

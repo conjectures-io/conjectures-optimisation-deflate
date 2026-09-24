@@ -516,7 +516,7 @@ class SubmissionAdmissionCheck(Base):
     )
     __table_args__ = (
         CheckConstraint(
-            "outcome IN ('passed', 'inconclusive', 'not_required', 'dominated')",
+            "outcome IN ('passed', 'inconclusive', 'not_required', 'dominated', 'excluded')",
             name="ck_admission_outcome",
         ),
         CheckConstraint(

@@ -10,7 +10,7 @@ Credentials and existing local configuration are never reset by these defaults.
 | Scoring method | `local-global-improvement-space-log` |
 | Pareto / recent improvement shares | 0.60 / 0.40 |
 | Improvement window / threshold / decay | 10 / 0.0025 / 0.6 |
-| Incumbent slowdown limit | 8× |
+| Scoring limits | Balanced slowdown ≤ 10×; mean file compressed/original size ≤ 40% |
 | Aggregated speed | Equal corpus/file mean of median total-time ratios to incumbent |
 | Aggregated compression | Equal corpus/file mean of compressed/raw bytes |
 | Admission | 2000 bootstrap draws; one-sided 95% lower gain bound strictly above zero |
@@ -216,3 +216,26 @@ override: it sends everything to `WEIGHT_BURN_UID`, bypassing normal collector r
 Restart the weight setter after configuration changes. Run only one weight-setting
 worker for a validator wallet: this worker constructs the complete subnet vector,
 so do not feed that already scaled vector through the platform's 80/20 allocator.
+
+
+### Scoring boundaries and benchmark timeouts
+
+`SCORING_MAX_TIME_RATIO=10` and `SCORING_MAX_RATIO_PCT=40` are inclusive reward
+eligibility limits. Both use equal-corpus averages of per-file ratios. Points
+outside either limit remain stored but are excluded before Pareto construction,
+statistical neighbor selection, and both Pareto and improvement rewards. Admission
+records contain outcome `excluded`, reason `outside-scoring-bounds`, and structured
+`scoring_bounds` values, limits, and violations. Baselines use the same policy.
+
+These replace the old 8x summed-time acceptance rule. Successful benchmarks and
+aggregations are retained regardless of scoring bounds. `VERIFY_BENCH_TIMEOUT=300`
+remains the wall-clock cap per build/measurement process; a measurement includes
+one corpus and all repetitions. `VERIFY_TOTAL_TIMEOUT=2700` caps the worker gate.
+The deprecated benchmark `--speed-floor` option is metadata only.
+
+Apply migration 0009 with `just db-migrate`. Changed scoring bounds invalidate old
+admission decisions: use `just admission-replay` for current verified evidence, or
+`just admission-replay --historical` for an operator's historical baseline replay.
+`just weights-preview` recalculates historical decisions without rebenchmarking.
+Restart workers after changing environment settings. `SCORING_SPEED_FLOOR` remains
+an alias for the scoring time limit; the new setting takes precedence.

@@ -18,6 +18,7 @@ from chain.types import MetagraphView, WeightPlan
 from db.scoring import ScoredSubmission
 
 from .config import ScoringConfig
+from .eligibility import bounds_detail
 from .frontier import FrontierScore, score_frontier
 from .improvement import Improvement, score_improvements
 
@@ -107,8 +108,12 @@ def score(
         raise ValueError("duplicate submission IDs")
     from db.admission import admitted
 
-    frontier = score_frontier([s for s in submissions if admitted(s)], config)
-    _, improvements = score_improvements([s for s in history if admitted(s)], config)
+    frontier = score_frontier(
+        [s for s in submissions if admitted(s) and bounds_detail(s, config)["eligible"]], config
+    )
+    _, improvements = score_improvements(
+        [s for s in history if admitted(s) and bounds_detail(s, config)["eligible"]], config
+    )
     from .improvement import decay_shares
 
     improvement_by_id = {
@@ -129,7 +134,12 @@ def score(
         improvement = improvement_by_id.get(sid, 0.0)
         reason = None
         payable = pareto + improvement
-        if not admitted(s):
+        if not bounds_detail(s, config)["eligible"]:
+            reason, payable = (
+                "scoring-bounds:" + ",".join(bounds_detail(s, config)["violations"]),
+                0.0,
+            )
+        elif not admitted(s):
             reason, payable = "admission-" + (s.admission or {"outcome": "pending"})["outcome"], 0.0
         elif s.baseline_key is not None or s.hotkey is None:
             reason, payable = "baseline", 0.0

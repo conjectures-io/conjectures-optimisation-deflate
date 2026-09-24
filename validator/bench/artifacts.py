@@ -10,7 +10,7 @@ from . import report
 from .driver import Measurement
 
 
-def write_import_files(m: Measurement, directory: Path, floor: float) -> list[Path]:
+def write_import_files(m: Measurement, directory: Path, floor: float | None) -> list[Path]:
     directory.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     for run in m.runs:

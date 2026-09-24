@@ -6,7 +6,7 @@ stages. See [verification commands, supported Rust and database eligibility](doc
 ## Quick Summary
 
 - A proof-gated DEFLATE competition. Miners submit a Rust LZ77 parser and a Lean proof that its token stream decodes back to the input; a six-stage verifier re-extracts the Rust with Charon and Aeneas, type-checks the proof against a pinned contract inside a sandbox, and scores accepted parsers by compressed bytes on a held-out corpus. Lower wins.
-- Participation is one signed upload, paid for by one subnet registration: the service verifies submissions as they arrive and ranks every hotkey's best on a leaderboard. Ties go to the earlier submission. The speed floor is 8x the incumbent. A registration is spent only when the gate accepts, so a rejection is a free retry.
+- Participation is one signed upload, paid for by one subnet registration: the service verifies submissions as they arrive and ranks every hotkey's best on a leaderboard. Ties go to the earlier submission. Scoring requires balanced slowdown ≤10x the incumbent and mean file compressed/original size ≤40%. A registration is spent only when the gate accepts, so a rejection is a free retry.
 - One command from a fresh clone to a passing self-test.
 
 ```bash
@@ -41,8 +41,8 @@ under 120 lines:
 | **libdeflate level 12** | | | **2,013,342** | **0.935x** | |
 
 The incumbent moved once already: lazy was promoted over the template, and with it
-the speed floor (8x of the incumbent) grew sevenfold in absolute terms, which is what
-made optimal parsing admissible. libdeflate is still 6.5% under the incumbent, and the
+the historical 8x summed-time limit grew sevenfold in absolute terms. That old limit
+has since been replaced by the balanced scoring boundaries described below. libdeflate is still 6.5% under the incumbent, and the
 gap is algorithmic: hash chains saturate at miniz level 9 whatever their depth; the
 rest is optimal parsing and block splitting, all inside the provable subset, because
 SIMD cannot change which match is chosen.
@@ -342,7 +342,7 @@ Corpora live in `validator/corpora.toml` (`just corpora` lists them); a held-out
 | 3 extract | Charon and Aeneas run by the validator | a self-supplied extraction |
 | 4 statement | `LZ77.Obligation slot.parse` type-checks, in bubblewrap, under time and memory caps | a weakened theorem, a runaway proof |
 | 5 axioms | only `propext`, `Classical.choice`, `Quot.sound`, read from a separate read-only `lean` run; extraction re-hashed | `sorry`, a forged report |
-| 6 score | each parser built as its own cdylib in a sandbox that may write only its own workspace, then measured in one that may write nothing: round trip through two inflaters, bytes, speed floor | wrong output, a slow win |
+| 6 score | each parser built as its own cdylib in a sandbox that may write only its own workspace, then measured in one that may write nothing: round trip through two inflaters and bytes; scoring eligibility is evaluated after aggregation | wrong output or execution timeout |
 
 Exit 0 accepted, 1 rejected, 2 the validator itself is broken. Pin integrity is checked at setup/CI, not per submission. See [the verification guide](docs/VERIFICATION.md) for independent stage commands and the supported subset.
 
@@ -422,7 +422,7 @@ just bench-report                                              # score, floor ve
 just bench-compare data/benchmark-runs/A.jsonl data/benchmark-runs/B.jsonl   # two runs of the same code must agree
 ```
 
-With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; each candidate is measured with the incumbent only by default. Set `VERIFY_BENCH_BARS=1` to include the external `miniz_oxide` and `libdeflate` references for local comparison; `--no-bars` explicitly disables them. This default also applies to `just bench-db` and `just baseline-seed`. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Every warmup and measured round runs both LZ77 and the shared DEFLATE encoder. The harness records LZ77 time, encoding time, and their paired sum separately. Benchmark summaries and the speed floor use the sum of per-file median **total compression times**, excluding warmups. The Pareto speed axis uses per-file candidate/incumbent ratios of these median totals, averaged equally within each corpus and then equally across corpora. The median total is computed from each repetition’s stage sum, not by adding stage medians. File I/O, token hashing, and decompression checks are outside the timers; token hashes still detect nondeterminism every round. Runs record the sha256 of every source and corpus file and are never overwritten.
+With no arguments the candidates are `miner/template` and every `miner/examples/*`, so adding one is adding a directory; each candidate is measured with the incumbent only by default. Set `VERIFY_BENCH_BARS=1` to include the external `miniz_oxide` and `libdeflate` references for local comparison; `--no-bars` explicitly disables them. This default also applies to `just bench-db` and `just baseline-seed`. Each parser is compiled as its own cdylib and `dlopen`ed, the incumbent included, so whatever that boundary costs it costs both sides and cancels in the ratio. Every warmup and measured round runs both LZ77 and the shared DEFLATE encoder. The harness records LZ77 time, encoding time, and their paired sum separately. Benchmark summaries retain the sum of per-file median **total compression times**, excluding warmups, as telemetry. Scoring eligibility uses balanced slowdown ≤10x and balanced compressed/original size ≤40%, configured with `SCORING_MAX_TIME_RATIO` and `SCORING_MAX_RATIO_PCT`. These limits exclude points from Pareto and both reward components, without rejecting completed benchmarks. Execution is separately capped by `VERIFY_BENCH_TIMEOUT` (300 seconds per measurement process by default). The Pareto speed axis uses per-file candidate/incumbent ratios of these median totals, averaged equally within each corpus and then equally across corpora. The median total is computed from each repetition’s stage sum, not by adding stage medians. File I/O, token hashing, and decompression checks are outside the timers; token hashes still detect nondeterminism every round. Runs record the sha256 of every source and corpus file and are never overwritten.
 
 ### Memory and CPU limits: systemd user setup
 

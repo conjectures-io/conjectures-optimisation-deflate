@@ -55,7 +55,7 @@ def test_median_of_paired_totals_drives_gate_and_reports(tmp_path):
     total = run.totals("candidate")
     assert (total.parse_s, total.encode_s, total.total_s) == (2, 2, 101)
     decision = verdict.judge(run, "candidate")
-    assert not decision.accepted and decision.slowdown == pytest.approx(101 / 11)
+    assert decision.accepted and decision.slowdown == pytest.approx(101 / 11)
     measured = Measurement(corpus, (run,), tmp_path, False)
     summary = report.summary(measured)
     methods = summary["methods"]
@@ -117,9 +117,7 @@ def test_database_stores_stages_and_scores_total_time(store, tmp_path):
         )
         session.add(sub)
         session.flush()
-        with pytest.raises(ValueError, match="speed floor"):
-            publish(session, sub.id, result.id)
-        publish(session, sub.id, result.id, speed_floor=10)
+        publish(session, sub.id, result.id)
     points = store.scoring.scoring_inputs()
     assert len(points) == 1
     assert points[0].time_s == 101 and points[0].incumbent_seconds == 11

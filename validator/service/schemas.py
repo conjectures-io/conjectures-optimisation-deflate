@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict
 class Health(BaseModel):
     ok: bool
     queued: int
+    # Legacy field name: now a balanced scoring limit, not a benchmark limit.
     speed_floor: float
+    max_ratio_pct: float
 
 
 class Ready(Health):
@@ -57,7 +59,9 @@ class Ranking(BaseModel):
 
 class Leaderboard(BaseModel):
     incumbent_bytes: int | None = None
+    # Legacy field name: now a balanced scoring limit, not a benchmark limit.
     speed_floor: float
+    max_ratio_pct: float
     ranking: list[Ranking]
 
 

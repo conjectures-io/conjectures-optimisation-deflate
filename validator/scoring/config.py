@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import math
 import os
 from collections.abc import Mapping
 
-from .pareto import DEFAULT_METHOD, METHODS, SPEED_FLOOR
+from .pareto import DEFAULT_METHOD, METHODS
 
 
 def _float(env: Mapping[str, str], key: str, default: float) -> float:
@@ -57,9 +58,9 @@ class ScoringConfig:
     # takes about 40% of the improvement share and the tenth about 0.4%.
     improvement_decay: float = 0.6
 
-    # The multiple of the incumbent's time the gate rejects past; it is also the time
-    # boundary every normalized weight function measures against.
-    speed_floor: float = SPEED_FLOOR
+    # Inclusive scoring limits; execution is limited independently by wall-clock timeout.
+    speed_floor: float = 10.0
+    max_ratio_pct: float = 40.0
 
     def __post_init__(self) -> None:
         if self.method not in METHODS:
@@ -76,8 +77,11 @@ class ScoringConfig:
             raise ValueError("improvement_threshold is a relative fraction in [0, 1)")
         if not 0.0 < self.improvement_decay <= 1.0:
             raise ValueError("improvement_decay must be in (0, 1]")
-        if self.speed_floor <= 0:
+        if not math.isfinite(self.speed_floor) or self.speed_floor <= 0:
             raise ValueError("speed_floor must be positive")
+
+        if not math.isfinite(self.max_ratio_pct) or self.max_ratio_pct <= 0:
+            raise ValueError("max_ratio_pct must be positive and finite")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ScoringConfig:
@@ -94,7 +98,10 @@ class ScoringConfig:
                 env, "SCORING_IMPROVEMENT_THRESHOLD", d.improvement_threshold
             ),
             improvement_decay=_float(env, "SCORING_IMPROVEMENT_DECAY", d.improvement_decay),
-            speed_floor=_float(env, "SCORING_SPEED_FLOOR", d.speed_floor),
+            speed_floor=_float(
+                env, "SCORING_MAX_TIME_RATIO", _float(env, "SCORING_SPEED_FLOOR", d.speed_floor)
+            ),
+            max_ratio_pct=_float(env, "SCORING_MAX_RATIO_PCT", d.max_ratio_pct),
         )
 
     @property

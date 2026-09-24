@@ -7,6 +7,13 @@ import textwrap
 
 def explanation(detail):
     status = detail["outcome"]
+    if status == "excluded":
+        b = detail["scoring_bounds"]
+        return (
+            f"Outside scoring bounds: balanced slowdown {b['time_ratio']:.3f}x "
+            f"(maximum {b['max_time_ratio']:g}x), compression {b['compression_pct']:.3f}% "
+            f"(maximum {b['max_compression_pct']:g}%). No rewards."
+        )
     stats = detail.get("statistics")
     if stats:
         gain, lower = stats["gain_pct"], stats["lower_pct"]
