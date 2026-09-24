@@ -23,6 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.sql.schema import SchemaItem
 
 from .status import STATE_VALUES
 
@@ -44,7 +45,7 @@ class Registration(Base):
     real registration event -- and one submission slot (see EntitlementClaim).
     """
 
-    __tablename__ = "registrations"
+    __tablename__: str = "registrations"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     uid: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -64,7 +65,7 @@ class Registration(Base):
 
     claim: Mapped[EntitlementClaim | None] = relationship(back_populates="registration")
 
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("uid", "block", name="uq_registrations_uid_block"),
         Index("ix_registrations_uid", "uid"),
         Index("ix_registrations_ss58_hot", "ss58_hot"),
@@ -74,7 +75,7 @@ class Registration(Base):
 class Submission(Base):
     """One signed upload of parse.rs + Parse.lean, and what the gate made of it."""
 
-    __tablename__ = "submissions"
+    __tablename__: str = "submissions"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     aggregation_id: Mapped[int | None] = mapped_column(
@@ -137,7 +138,7 @@ class Submission(Base):
 
     claim: Mapped[EntitlementClaim | None] = relationship(back_populates="submission")
 
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("hotkey", "digest", name="uq_submissions_hotkey_digest"),
         UniqueConstraint("baseline_key", "digest", name="uq_submission_baseline_digest"),
         CheckConstraint("hotkey IS NULL OR baseline_key IS NULL", name="ck_submission_owner"),
@@ -188,7 +189,7 @@ class EntitlementClaim(Base):
     unique violation, not in two payouts.
     """
 
-    __tablename__ = "entitlement_claims"
+    __tablename__: str = "entitlement_claims"
 
     registration_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("registrations.id", ondelete="CASCADE"), primary_key=True
@@ -211,7 +212,7 @@ class WeightSet(Base):
     """Every set_weights attempt, accepted or not -- so a disputed epoch stays
     reconstructable from the validator's own records."""
 
-    __tablename__ = "weight_sets"
+    __tablename__: str = "weight_sets"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     netuid: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -230,7 +231,7 @@ class WeightSet(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__ = (Index("ix_weight_sets_created_at", "created_at"),)
+    __table_args__: tuple[SchemaItem, ...] = (Index("ix_weight_sets_created_at", "created_at"),)
 
 
 class ScoreSnapshot(Base):
@@ -241,7 +242,7 @@ class ScoreSnapshot(Base):
     since moved.
     """
 
-    __tablename__ = "score_snapshots"
+    __tablename__: str = "score_snapshots"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     weight_set_id: Mapped[int] = mapped_column(
@@ -275,7 +276,7 @@ class ScoreSnapshot(Base):
     improvement_weight: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
     combined_weight: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
 
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_score_snapshots_weight_set_id", "weight_set_id"),
         Index("ix_score_snapshots_hotkey", "hotkey"),
     )
@@ -289,14 +290,16 @@ class RateLimitWindow(Base):
     which is no limit at all behind more than one worker.
     """
 
-    __tablename__ = "rate_limit_windows"
+    __tablename__: str = "rate_limit_windows"
 
     subject: Mapped[str] = mapped_column(Text, primary_key=True)
     # Start of the window this counter covers, truncated to the window length.
     window_start: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     hits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
-    __table_args__ = (Index("ix_rate_limit_windows_window_start", "window_start"),)
+    __table_args__: tuple[SchemaItem, ...] = (
+        Index("ix_rate_limit_windows_window_start", "window_start"),
+    )
 
 
 class BenchmarkRun(Base):
@@ -306,7 +309,7 @@ class BenchmarkRun(Base):
     are its SQL projections; writers must insert all three atomically.
     """
 
-    __tablename__ = "benchmark_runs"
+    __tablename__: str = "benchmark_runs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_key: Mapped[str | None] = mapped_column(Text)
@@ -324,7 +327,7 @@ class BenchmarkRun(Base):
     invalidation_reason: Mapped[str | None] = mapped_column(Text)
     raw_data: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
 
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("run_key", name="uq_benchmark_runs_run_key"),
         CheckConstraint("source_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_runs_source"),
         CheckConstraint("corpus_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_runs_corpus"),
@@ -341,7 +344,7 @@ class BenchmarkRun(Base):
 class BenchmarkCompressionResult(Base):
     """One method's compression result on one input file, independent of timing reps."""
 
-    __tablename__ = "benchmark_compression_results"
+    __tablename__: str = "benchmark_compression_results"
 
     run_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("benchmark_runs.id", ondelete="CASCADE"), primary_key=True
@@ -358,7 +361,7 @@ class BenchmarkCompressionResult(Base):
     tokens_deterministic: Mapped[bool | None] = mapped_column(Boolean)
     succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         CheckConstraint("file_index >= 0", name="ck_benchmark_compression_results_index"),
         CheckConstraint(
             "raw_bytes >= 0 AND (output_bytes IS NULL OR output_bytes >= 0)",
@@ -387,7 +390,7 @@ class BenchmarkCompressionResult(Base):
 class BenchmarkSpeedSample(Base):
     """One repetition with LZ77, encoding and total timings; legacy totals are NULL."""
 
-    __tablename__ = "benchmark_speed_samples"
+    __tablename__: str = "benchmark_speed_samples"
 
     run_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     file_index: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -399,7 +402,7 @@ class BenchmarkSpeedSample(Base):
     encode_s: Mapped[float | None] = mapped_column(Float)
     total_s: Mapped[float | None] = mapped_column(Float)
 
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         ForeignKeyConstraint(
             ["run_id", "file_index", "method"],
             [
@@ -432,7 +435,7 @@ class BenchmarkSpeedSample(Base):
 class BenchmarkAggregation(Base):
     """One successful calculation over explicitly recorded run inputs."""
 
-    __tablename__ = "benchmark_aggregations"
+    __tablename__: str = "benchmark_aggregations"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
@@ -450,7 +453,7 @@ class BenchmarkAggregation(Base):
     parse_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     compression_seconds: Mapped[float | None] = mapped_column(Float)
 
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         CheckConstraint(
             "source_sha256 ~ '^[0-9a-f]{64}$'", name="ck_benchmark_aggregations_source"
         ),
@@ -473,7 +476,7 @@ class BenchmarkAggregation(Base):
 class BenchmarkAggregationInput(Base):
     """The exact runs used, preserved when later runs or aggregations are created."""
 
-    __tablename__ = "benchmark_aggregation_inputs"
+    __tablename__: str = "benchmark_aggregation_inputs"
 
     aggregation_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("benchmark_aggregations.id", ondelete="CASCADE"), primary_key=True
@@ -482,13 +485,15 @@ class BenchmarkAggregationInput(Base):
         BigInteger, ForeignKey("benchmark_runs.id", ondelete="RESTRICT"), primary_key=True
     )
 
-    __table_args__ = (Index("ix_benchmark_aggregation_inputs_run_id", "run_id"),)
+    __table_args__: tuple[SchemaItem, ...] = (
+        Index("ix_benchmark_aggregation_inputs_run_id", "run_id"),
+    )
 
 
 class SubmissionAdmissionCheck(Base):
     """Immutable admission evidence; submissions explicitly select their current decision."""
 
-    __tablename__ = "submission_admission_checks"
+    __tablename__: str = "submission_admission_checks"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     submission_id: Mapped[int] = mapped_column(
         BigInteger,
@@ -508,13 +513,13 @@ class SubmissionAdmissionCheck(Base):
     policy_version: Mapped[str] = mapped_column(Text, nullable=False)
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     reason_code: Mapped[str] = mapped_column(Text, nullable=False)
-    details: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    details: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     )
-    __table_args__ = (
+    __table_args__: tuple[SchemaItem, ...] = (
         CheckConstraint(
             "outcome IN ('passed', 'inconclusive', 'not_required', 'dominated')",
             name="ck_admission_outcome",

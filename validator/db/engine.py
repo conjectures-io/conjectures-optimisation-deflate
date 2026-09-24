@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 from sqlalchemy import Engine, create_engine
@@ -45,7 +45,7 @@ def session_factory(engine: Engine) -> sessionmaker[Session]:
 
 
 @contextmanager
-def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
+def session_scope(factory: sessionmaker[Session]) -> Generator[Session]:
     # Transactional scope: commit on success, roll back on error, always close.
     session = factory()
     try:

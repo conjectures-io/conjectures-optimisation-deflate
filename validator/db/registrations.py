@@ -11,11 +11,13 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from collections.abc import Callable, Iterable
-from typing import Protocol, cast
+from typing import Protocol, cast, final
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
+
+from chain.types import ChainHead, MetagraphSnapshot
 
 from . import models
 from .engine import session_scope
@@ -32,13 +34,20 @@ class Neuron(Protocol):
     """The four fields this module reads off a metagraph neuron.
 
     Structural rather than the SDK's own class, so the diffing stays testable with a
-    plain stub and the store keeps no import of bittensor.
+    plain stub and the store keeps no import of bittensor. Declared as read-only
+    properties, not plain fields: `MetagraphSnapshot.neurons` is a tuple of frozen
+    `NeuronInfo`, and a plain-field protocol demands a *writable* attribute, which a
+    frozen dataclass structurally is not.
     """
 
-    uid: int
-    hotkey: str
-    coldkey: str
-    block_at_registration: int
+    @property
+    def uid(self) -> int: ...
+    @property
+    def hotkey(self) -> str: ...
+    @property
+    def coldkey(self) -> str: ...
+    @property
+    def block_at_registration(self) -> int: ...
 
 
 def changed_rows(
@@ -84,12 +93,18 @@ class NoSlot(Exception):
     """Raised when a hotkey has no unclaimed registration left to spend."""
 
 
+@final
 class RegistrationsDb:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self._sessions = sessions
 
     # --- the chain watcher's seam --------------------------------------------
-    def publish_snapshot(self, head, metagraph, block_time: Callable[[int], dt.datetime]) -> int:
+    def publish_snapshot(
+        self,
+        head: ChainHead,
+        metagraph: MetagraphSnapshot,
+        block_time: Callable[[int], dt.datetime],
+    ) -> int:
         """Append a registration row for every uid whose hot/cold pair changed.
 
         Returns how many rows were written. An unchanged metagraph -- the common case,
@@ -143,7 +158,10 @@ class RegistrationsDb:
             .distinct(models.Registration.uid)
             .order_by(models.Registration.uid, models.Registration.block.desc())
         )
-        return {row.uid: (row.ss58_hot, row.ss58_cold) for row in session.execute(stmt)}
+        return {
+            uid: (ss58_hot, ss58_cold)
+            for uid, ss58_hot, ss58_cold in session.execute(stmt).tuples()
+        }
 
     # --- entitlements ---------------------------------------------------------
     def is_registered(self, hotkey: str) -> bool:
@@ -176,7 +194,7 @@ class RegistrationsDb:
         for one. The primary key on registration_id is the backstop if they ever do.
         """
         claimed = select(models.EntitlementClaim.registration_id)
-        row = session.execute(
+        registration_id = session.execute(
             select(models.Registration.id)
             .where(
                 models.Registration.ss58_hot == hotkey,
@@ -185,12 +203,14 @@ class RegistrationsDb:
             .order_by(models.Registration.block, models.Registration.id)
             .limit(1)
             .with_for_update(skip_locked=True)
-        ).first()
-        if row is None:
+        ).scalar_one_or_none()
+        if registration_id is None:
             raise NoSlot(f"{hotkey[:8]}… has no unclaimed registration")
-        session.add(models.EntitlementClaim(registration_id=row[0], submission_id=submission_id))
+        session.add(
+            models.EntitlementClaim(registration_id=registration_id, submission_id=submission_id)
+        )
         session.flush()
-        return int(row[0])
+        return registration_id
 
 
 def _available_slots(session: Session, hotkey: str) -> int:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, cast
+from typing import cast, final
 
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.dialects.postgresql import insert
@@ -20,6 +20,7 @@ def window_start(t: dt.datetime, seconds: int) -> dt.datetime:
     return dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc)
 
 
+@final
 class RateLimiter:
     """Counts writes per subject per window, atomically.
 
@@ -83,4 +84,4 @@ class RateLimiter:
             result = session.execute(
                 delete(models.RateLimitWindow).where(models.RateLimitWindow.window_start < cutoff)
             )
-            return int(cast("CursorResult[Any]", result).rowcount or 0)
+            return int(cast(CursorResult[tuple[object, ...]], result).rowcount or 0)

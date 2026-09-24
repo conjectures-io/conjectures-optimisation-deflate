@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable
+from typing import final
+
+from chain.types import ChainHead, MetagraphSnapshot
 
 from .registrations import RegistrationsDb
 
 
+@final
 class DatabaseSnapshotSink:
     """A `chain.sink.SnapshotSink` that persists each snapshot as registration rows.
 
@@ -29,5 +33,5 @@ class DatabaseSnapshotSink:
         self._registrations = registrations
         self._block_time = block_time
 
-    def publish(self, head, metagraph) -> None:
+    def publish(self, head: ChainHead, metagraph: MetagraphSnapshot) -> None:
         self._registrations.publish_snapshot(head, metagraph, self._block_time)

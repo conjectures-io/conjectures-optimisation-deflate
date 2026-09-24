@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import uuid
+from typing import final
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,6 +17,7 @@ class StaleAttempt(RuntimeError):
     pass
 
 
+@final
 class VerificationDb:
     def __init__(self, sessions: sessionmaker[Session]):
         self.sessions = sessions
