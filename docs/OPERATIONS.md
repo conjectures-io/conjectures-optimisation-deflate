@@ -132,6 +132,32 @@ subnet costs nothing.
 Every API refusal carries a one-line reason and an `X-Request-Id`; the matching traceback
 is in the API log under the same id.
 
+## Observability (Axiom)
+
+Set `AXIOM_TOKEN` and `AXIOM_DATASET` (and optionally `AXIOM_ENVIRON`, `AXIOM_URL`) in `.env`
+and restart the four processes; with either unset nothing is sent and nothing changes. The
+records use the conjectures platform's envelope exactly -- `_time` (UTC, stamped at emit),
+`severity` (`debug`/`info`/`warning`/`error`/`critical`), `source`, `event_type`, `environ` --
+so they can share the platform's dataset and dashboards. Every event also carries
+`competition: "miniz-oxide"`, and the chain watcher's and weight setter's carry `netuid` and
+`network`. Ingestion is batched on a background thread, flushed at exit, and drops (never
+blocks or raises) when Axiom is slow or down. Module: `validator/observability/axiom.py`.
+
+| source | event_type | fields |
+|---|---|---|
+| all four | `service_started` | a config summary (never secrets) |
+| all four | `service_stopped` | `reason` |
+| all four | `service_misconfigured` | `error`: the process refused to start |
+| all four | `log_error` | any loguru or `logging` record at ERROR+, or an uncaught exception: `message`, `logger`, `module`, `function`, `line`, `exception` |
+| `competition-gate-worker` | `submission_claimed` | `submission_id`, `hotkey`, `baseline_key`, `worker_id` |
+| `competition-gate-worker` | `gate_verdict` | `submission_id`, `hotkey`, `baseline_key`, `state` (accepted/rejected/error), `stage`, `reason`, `bytes`, `vs_incumbent`, `time_ratio`, `exit_code`, `duration_seconds` |
+| `competition-gate-worker` | `submission_requeued` | `submission_id` (or `count` for the stale-claim sweep), `reason` |
+| `competition-gate-worker` | `gate_validator_error` | `submission_id`, `exit_code`, `error`: the gate itself is broken |
+| `competition-chain-watcher` | `registrations_recorded` | `count`, `initial_load`, `block`, `uids` |
+| `competition-chain-watcher` | `chain_read_failed` | `error`, `last_block` |
+| `competition-weight-setter` | `weights_set`, `weights_planned` (dry run), `weights_skipped`, `weights_failed` | `block`, `dry_run`, `burn_mode`, `uids`/`weights` (nonzero entries), `treasury_uid`, `treasury_share`, `competition_share`, `burn_uid`, `burn_share`, `miners`, `summary`, `error` |
+| `competition-submission-api` | lifecycle and `log_error` only | |
+
 ## Seed and inspect the reference frontier
 
 Apply the additive migrations, then seed the downloaded corpora:

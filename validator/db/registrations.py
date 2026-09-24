@@ -17,6 +17,8 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from observability.axiom import get_events
+
 from . import models
 from .engine import session_scope
 
@@ -121,14 +123,22 @@ class RegistrationsDb:
                 .values(rows)
                 .on_conflict_do_nothing(index_elements=["uid", "block"])
             )
+            uids = sorted(cast(int, r["uid"]) for r in rows)
             logger.info(
                 "block %d: recorded %d registration change(s) [%s] for uid(s) %s",
                 metagraph.block,
                 len(rows),
                 scope,
-                sorted(cast(int, r["uid"]) for r in rows),
+                uids,
             )
-            return len(rows)
+        get_events().info(
+            "registrations_recorded",
+            count=len(rows),
+            initial_load=not latest,
+            block=metagraph.block,
+            uids=uids,
+        )
+        return len(rows)
 
     @staticmethod
     def _latest_keys(session: Session) -> dict[int, tuple[str, str]]:

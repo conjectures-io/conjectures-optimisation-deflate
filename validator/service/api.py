@@ -24,6 +24,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 import db
+from observability.axiom import config_error, get_events, init
 
 from . import routes
 from .middleware import BodyLimit, RequestContext
@@ -49,9 +50,18 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         )
         app.state.settings = settings
         logger.info(f"[api] listening on {settings.host}:{settings.port}")
+        events = get_events()
+        events.info(
+            "service_started",
+            host=settings.host,
+            port=settings.port,
+            rate_per_minute=settings.rate_per_minute,
+            signature_window_seconds=settings.signature_window_seconds,
+        )
         try:
             yield
         finally:
+            events.info("service_stopped", reason="shutdown")
             if owned:
                 app.state.store.close()
 
@@ -108,7 +118,12 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
 def main() -> None:
     import uvicorn
 
-    settings = load()
+    events = init("competition-submission-api")
+    try:
+        settings = load()
+    except Exception as exc:
+        events.error("service_misconfigured", error=config_error(exc))
+        raise
     uvicorn.run(
         create_app(settings),
         host=settings.host,

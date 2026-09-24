@@ -35,8 +35,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import db  # noqa: E402
 import scoring  # noqa: E402
 from chain.schedule import should_set  # noqa: E402
-from chain.types import BLOCK_SECONDS, FINNEY, NETUID, SubnetParams, WeightPlan  # noqa: E402
+from chain.types import (  # noqa: E402
+    BLOCK_SECONDS,
+    FINNEY,
+    NETUID,
+    MetagraphView,
+    SubnetParams,
+    WeightPlan,
+)
 from chain.weights import WeightChain  # noqa: E402
+from observability.axiom import EventType, Severity, config_error, get_events, init  # noqa: E402
 from scoring.split import (  # noqa: E402
     burn,
     competition_share_for,
@@ -231,10 +239,12 @@ def step(
     plan, result = plan_for(store, meta, config, scoring_config)
     summary = plan.summary + (f" | {result.summary()}" if result else " | burn mode")
 
+    block = poll.current_block
     if not plan.submittable:
         weight_set_id = record(
             store, config, poll.current_block, plan, result, False, plan.skip_reason
         )
+        emit_plan("warning", "weights_skipped", config, meta, block, plan, plan.skip_reason)
         return StepResult(
             "skip",
             plan.skip_reason or "unsubmittable vector",
@@ -248,6 +258,7 @@ def step(
         weight_set_id = record(
             store, config, poll.current_block, plan, result, False, "dry run: not submitted"
         )
+        emit_plan("info", "weights_planned", config, meta, block, plan)
         return StepResult(
             "skip",
             f"dry run: {summary}",
@@ -268,6 +279,9 @@ def step(
         None if accepted else "the chain refused the vector",
     )
     if not accepted:
+        emit_plan(
+            "error", "weights_failed", config, meta, block, plan, "the chain refused the vector"
+        )
         return StepResult(
             "failed",
             "set_weights rejected",
@@ -276,6 +290,7 @@ def step(
             scoring=result,
             weight_set_id=weight_set_id,
         )
+    emit_plan("info", "weights_set", config, meta, block, plan)
     return StepResult(
         "set",
         f"block {poll.current_block}: {summary}",
@@ -284,6 +299,43 @@ def step(
         plan=plan,
         scoring=result,
         weight_set_id=weight_set_id,
+    )
+
+
+def emit_plan(
+    severity: Severity,
+    event_type: EventType,
+    config: WeightSetterConfig,
+    meta: MetagraphView,
+    block: int,
+    plan: WeightPlan,
+    error: str | None = None,
+) -> None:
+    """One Axiom event for a tick's outcome: the vector's nonzero entries and its split."""
+    treasury, _ = resolve_treasury(
+        meta,
+        netuid=config.netuid,
+        treasury_uid=config.treasury_uid,
+        treasury_hotkey=config.treasury_hotkey,
+    )
+    paid = {uid: w for uid, w in zip(plan.uids, plan.weights, strict=True) if w > 0}
+    get_events().emit(
+        severity,
+        event_type,
+        block=block,
+        dry_run=config.dry_run,
+        burn_mode=config.burn_mode,
+        uids=list(paid),
+        weights=list(paid.values()),
+        treasury_uid=treasury,
+        treasury_share=paid.get(treasury, 0.0) if treasury is not None else None,
+        competition_share=config.competition_share,
+        burn_uid=config.burn_uid,
+        # Off mainnet the treasury may be the burn uid; the two shares are then one number.
+        burn_share=paid.get(config.burn_uid, 0.0) if config.burn_uid != treasury else None,
+        miners=sum(1 for uid in paid if uid not in (treasury, config.burn_uid)),
+        summary=plan.summary,
+        error=error,
     )
 
 
@@ -319,7 +371,31 @@ def run(
     *,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    params = chain.params(config.netuid)
+    events = get_events()
+    try:
+        params = chain.params(config.netuid)
+    except Exception as exc:
+        # Most often a hotkey that is not a registered validator on this netuid.
+        events.error("service_misconfigured", error=config_error(exc))
+        raise
+    events.info(
+        "service_started",
+        uid=params.uid,
+        tempo=params.tempo,
+        weights_rate_limit=params.weights_rate_limit,
+        set_margin=config.set_margin,
+        dry_run=config.dry_run,
+        burn_mode=config.burn_mode,
+        burn_uid=config.burn_uid,
+        treasury_uid=config.treasury_uid,
+        treasury_hotkey=config.treasury_hotkey,
+        competition_share=config.competition_share,
+        wallet_name=config.wallet_name,
+        wallet_hotkey=config.wallet_hotkey,
+        scoring_method=scoring_config.method,
+        pareto_share=scoring_config.pareto_share,
+        improvement_share=scoring_config.improvement_share,
+    )
     logger.info(
         f"[weights] running netuid={config.netuid} uid={params.uid} tempo={params.tempo} "
         f"rate_limit={params.weights_rate_limit} margin={config.set_margin} "
@@ -340,6 +416,7 @@ def run(
                     params = chain.params(config.netuid)
             except Exception as exc:  # noqa: BLE001 - a bad tick must not end the worker
                 logger.exception(f"[weights] tick failed: {exc}")
+                events.error("weights_failed", dry_run=config.dry_run, error=config_error(exc))
             sleep(config.poll_seconds)
     except KeyboardInterrupt:
         logger.info("[weights] interrupted")
@@ -389,8 +466,14 @@ class TickLog:
 def main() -> None:
     from chain.finney import BittensorWeightChain
 
-    config = WeightSetterConfig.from_env()
-    scoring_config = scoring.ScoringConfig.from_env()
+    events = init("competition-weight-setter")
+    try:
+        config = WeightSetterConfig.from_env()
+        scoring_config = scoring.ScoringConfig.from_env()
+    except Exception as exc:
+        events.error("service_misconfigured", error=config_error(exc))
+        raise
+    events.bind(netuid=config.netuid, network=config.network)
     chain = BittensorWeightChain(
         network=config.network,
         wallet_name=config.wallet_name,
@@ -398,9 +481,12 @@ def main() -> None:
         wallet_path=config.wallet_path,
     )
     store = db.connect()
+    reason = "crashed"
     try:
         run(chain, store, config, scoring_config)
+        reason = "interrupted"  # run() returns only on KeyboardInterrupt
     finally:
+        events.info("service_stopped", reason=reason)
         store.close()
 
 
