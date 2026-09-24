@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import fcntl
 import json
 import os
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TypedDict, cast
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICES = {
@@ -20,7 +22,26 @@ SERVICES = {
 }
 
 
-def process_list(output: str) -> list[dict]:
+class Pm2Env(TypedDict, total=False):
+    pm_cwd: str
+    args: list[str] | str
+    status: str
+    pm_out_log_path: str
+    pm_err_log_path: str
+
+
+class Pm2Process(TypedDict):
+    """One `pm2 jlist` entry. `name`/`pm2_env` are what process_list validates below;
+    the rest PM2 fills in once a process has actually started, so callers still read
+    them defensively (`.get`)."""
+
+    name: str
+    pm2_env: Pm2Env
+    pm_id: int
+    pid: int
+
+
+def process_list(output: str) -> list[Pm2Process]:
     """Read jlist's final JSON document, allowing daemon startup banners before it."""
     # Only accept a complete array extending to the end of stdout. Do not extract
     # an arbitrary nested array from a malformed/truncated process record.
@@ -39,7 +60,7 @@ def process_list(output: str) -> list[dict]:
             for item in value
         ):
             raise ValueError("invalid PM2 process records")
-        return value
+        return cast("list[Pm2Process]", value)
     raise ValueError("missing complete PM2 process list")
 
 
@@ -117,6 +138,14 @@ def start_background(service: str, *, stop: bool = False, restart: bool = False)
         ).returncode
 
 
+@dataclasses.dataclass
+class Args:
+    service: str = ""
+    background: bool = False
+    stop: bool = False
+    restart: bool = False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("service", choices=SERVICES)
@@ -124,12 +153,11 @@ def main() -> int:
     mode.add_argument("--background", action="store_true")
     mode.add_argument("--stop", action="store_true", help="stop this service under PM2")
     mode.add_argument("--restart", action="store_true", help="restart this service under PM2")
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=Args())
     if args.background or args.stop or args.restart:
         return start_background(args.service, stop=args.stop, restart=args.restart)
     os.chdir(ROOT / "validator")
     os.execv(sys.executable, [sys.executable, "-m", SERVICES[args.service][1]])
-    return 0
 
 
 if __name__ == "__main__":

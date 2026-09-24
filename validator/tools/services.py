@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import shutil
 import subprocess
 import sys
+from typing import cast
 
-from tools.service_start import ROOT, SERVICES, process_list, start_background
+from tools.service_start import ROOT, SERVICES, Pm2Process, process_list, start_background
 
 WORKERS = ("service-worker", "chain-watcher", "weight-setter")
 
@@ -16,7 +18,7 @@ def command(*args: str) -> int:
     return subprocess.run(list(args), cwd=ROOT, check=False).returncode
 
 
-def inspect() -> list[dict]:
+def inspect() -> list[Pm2Process]:
     if shutil.which("pm2") is None:
         raise ValueError("PM2 missing: install Node.js/npm, then npm install -g pm2")
     result = subprocess.run(
@@ -27,7 +29,7 @@ def inspect() -> list[dict]:
     return process_list(result.stdout)
 
 
-def selected(processes: list[dict], service: str) -> list[dict]:
+def selected(processes: list[Pm2Process], service: str) -> list[Pm2Process]:
     name, module = SERVICES[service]
     return [
         p
@@ -41,6 +43,17 @@ def selected(processes: list[dict], service: str) -> list[dict]:
             )
         )
     ]
+
+
+@dataclasses.dataclass
+class Args:
+    action: str = ""
+    with_api: bool = False
+    external_db: bool = False
+    keep_db: bool = False
+    service: str | None = None
+    lines: int = 100
+    no_follow: bool = False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     logs.add_argument("service", nargs="?", choices=[*SERVICES, "db"])
     logs.add_argument("--lines", type=int, default=100)
     logs.add_argument("--no-follow", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv, namespace=Args())
     try:
         processes = inspect()  # Fail before mutating anything if PM2 is unavailable.
         if args.action == "up":
@@ -109,11 +122,11 @@ def main(argv: list[str] | None = None) -> int:
                 *(("--follow",) if not args.no_follow else ()),
                 "db",
             )
-        paths = []
+        paths: list[str] = []
         for service in [args.service] if args.service else SERVICES:
             for process in selected(processes, service):
                 for key in ("pm_out_log_path", "pm_err_log_path"):
-                    path = process["pm2_env"].get(key)
+                    path = cast("str | None", process["pm2_env"].get(key))
                     if path and path not in paths:
                         paths.append(path)
         if not paths:
