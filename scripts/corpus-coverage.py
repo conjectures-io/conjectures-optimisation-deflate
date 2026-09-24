@@ -53,12 +53,12 @@ import sys
 
 # axis -> (low, high) plausible range, and whether to log-scale first.
 AXES = {
-    "gap":      (0.50, 1.02, False),
+    "gap": (0.50, 1.02, False),
     "lit_frac": (0.00, 1.00, False),
     "mean_len": (3.0, 260.0, True),
-    "near":     (0.00, 1.00, False),
-    "far":      (0.00, 1.00, False),
-    "cap258":   (0.00, 1.00, True),
+    "near": (0.00, 1.00, False),
+    "far": (0.00, 1.00, False),
+    "cap258": (0.00, 1.00, True),
 }
 
 
@@ -99,26 +99,30 @@ def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
     corpus = load(sys.argv[1])
-    print(f"corpus: {len(corpus)} files, {len(AXES)} axes "
-          f"({', '.join(AXES)})\n")
+    print(f"corpus: {len(corpus)} files, {len(AXES)} axes ({', '.join(AXES)})\n")
 
     print("REACH -- how far each reference file is from the nearest thing we test")
     worst = []
     for path in sys.argv[2:]:
         ref = load(path)
-        rows = sorted(((nearest(v, corpus)[0], name, nearest(v, corpus)[1]) for name, v in ref),
-                      reverse=True)
+        rows = sorted(
+            ((nearest(v, corpus)[0], name, nearest(v, corpus)[1]) for name, v in ref), reverse=True
+        )
         print(f"\n  {path}  ({len(ref)} files)")
         for d, name, who in rows:
             flag = "   <-- nothing close" if d > 0.15 else ""
             print(f"    {name:<24} {d:.3f}  nearest: {who}{flag}")
         worst.append((rows[0][0], path, rows[0][1]))
-        print(f"    {'worst':<24} {rows[0][0]:.3f} ({rows[0][1]})   "
-              f"mean {sum(r[0] for r in rows) / len(rows):.3f}")
+        print(
+            f"    {'worst':<24} {rows[0][0]:.3f} ({rows[0][1]})   "
+            f"mean {sum(r[0] for r in rows) / len(rows):.3f}"
+        )
 
     print("\nSPACING -- corpus files with a near-duplicate inside the corpus")
-    pairs = sorted((nearest(v, corpus, exclude=name)[0], name, nearest(v, corpus, exclude=name)[1])
-                   for name, v in corpus)
+    pairs = sorted(
+        (nearest(v, corpus, exclude=name)[0], name, nearest(v, corpus, exclude=name)[1])
+        for name, v in corpus
+    )
     for d, name, who in pairs[:8]:
         flag = "   <-- measures the same thing" if d < 0.04 else ""
         print(f"    {name:<24} {d:.3f}  nearest: {who}{flag}")
@@ -130,8 +134,10 @@ def main():
         ok = "covered" if d <= 0.15 else "GAP"
         print(f"  {path}: worst reach {d:.3f} on {name} -- {ok}")
     dup = [p for p in pairs if p[0] < 0.04]
-    print(f"  {len(dup)} corpus file(s) within 0.04 of another"
-          + (": " + ", ".join(n for _d, n, _w in dup) if dup else ""))
+    print(
+        f"  {len(dup)} corpus file(s) within 0.04 of another"
+        + (": " + ", ".join(n for _d, n, _w in dup) if dup else "")
+    )
 
 
 if __name__ == "__main__":

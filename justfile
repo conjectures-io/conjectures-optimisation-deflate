@@ -7,8 +7,11 @@ val    := root / "validator"
 python := root / ".venv/bin/python"
 
 # Every Python file the linter and the type checker cover.
-py_paths := val / "bench " + val / "verifier " + val / "sandbox " + val / "service " + val / "tests " + root / "deploy/migrate/alembic " + root / "miner/submit.py"
-ruff_paths := py_paths + " " + val / "db " + val / "chain " + val / "scoring " + val / "workers " + val / "tools " + root / "scripts/pareto-weights.py"
+py_paths := val / "bench " + val / "verifier " + val / "sandbox " + val / "service " + val / "tests " + val / "db " + val / "chain " + val / "scoring " + val / "workers " + val / "tools " + root / "deploy/migrate/alembic " + root / "miner/submit.py"
+
+# One-off scripts, run by hand rather than imported by the service: linted and
+# formatted like everything else, but not held to the basedpyright bar.
+ruff_paths := py_paths + " " + root / "scripts"
 
 # The benchmark and the gate are one Python package under validator/.
 bench := python + " -m bench"
