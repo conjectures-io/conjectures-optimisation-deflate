@@ -8,7 +8,8 @@ from test_admission import stored_point
 from test_db_schema import migrated  # noqa: F401
 
 # pyright: reportUnusedImport=false
-from db.admission import evaluate, publication_lock
+from db.admission import evaluate
+from db.locks import publication_lock
 
 
 def test_history_cannot_be_updated_or_deleted(migrated):  # noqa: F811

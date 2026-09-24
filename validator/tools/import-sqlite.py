@@ -23,10 +23,12 @@ Two things the old file cannot supply, and this does not invent:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 VALIDATOR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(VALIDATOR))
@@ -55,6 +57,13 @@ def rows_of(path: Path) -> list[sqlite3.Row]:
         conn.close()
 
 
+@dataclasses.dataclass
+class Args:
+    sqlite_db: Path = Path()
+    dry_run: bool = False
+    charge_accepted: bool = False
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("sqlite_db", type=Path, help="the old service.db")
@@ -64,7 +73,7 @@ def main() -> None:
         action="store_true",
         help="also spend a registration for each imported accepted submission",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(namespace=Args())
 
     if not args.sqlite_db.is_file():
         sys.exit(f"{args.sqlite_db} is not a file")
@@ -79,10 +88,23 @@ def main() -> None:
             # the worker that was verifying it no longer exists.
             if state == "verifying":
                 state = "queued"
+            # sqlite3.Row indexes by column name with no static schema, so every field
+            # read from it is cast to the type the old service's schema actually used.
+            hotkey = cast("str | None", row["hotkey"])
+            digest = cast(str, row["digest"])
+            if not hotkey:
+                print(f"  skipping {digest!r}: no hotkey (the old schema predates baselines)")
+                skipped += 1
+                continue
+            submitted_at = parse_time(cast("str | None", row["submitted_at"]))
+            if submitted_at is None:
+                print(f"  skipping {hotkey[:8]}…: missing or unparseable submitted_at")
+                skipped += 1
+                continue
             with store_pkg.session_scope(store.sessions) as session:
                 existing = (
                     session.query(models.Submission)
-                    .filter_by(hotkey=row["hotkey"], digest=row["digest"])
+                    .filter_by(hotkey=hotkey, digest=digest)
                     .one_or_none()
                 )
                 if existing is not None:
@@ -92,9 +114,9 @@ def main() -> None:
                     imported += 1
                     continue
                 new = models.Submission(
-                    hotkey=row["hotkey"],
-                    digest=row["digest"],
-                    submitted_at=parse_time(row["submitted_at"]),
+                    hotkey=hotkey,
+                    digest=digest,
+                    submitted_at=submitted_at,
                     state=state,
                     exit_code=row["exit_code"],
                     report=row["report"],
@@ -107,7 +129,7 @@ def main() -> None:
                 imported += 1
                 if args.charge_accepted and state == "accepted":
                     try:
-                        store.registrations.claim_slot(session, new.hotkey, new.id)
+                        store.registrations.claim_slot(session, hotkey, new.id)
                         charged += 1
                     except NoSlot:
                         print(f"  no registration to charge submission {new.id} to; left unpaid")
@@ -115,7 +137,7 @@ def main() -> None:
         store.close()
 
     verb = "would import" if args.dry_run else "imported"
-    print(f"{verb} {imported} submission(s), skipped {skipped} already present")
+    print(f"{verb} {imported} submission(s), skipped {skipped} (already present or malformed)")
     if args.charge_accepted:
         print(f"charged {charged} registration(s)")
     if imported:

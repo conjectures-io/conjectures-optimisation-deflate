@@ -10,6 +10,7 @@ import dataclasses as dc
 import datetime as dt
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -18,7 +19,7 @@ sys.path.insert(0, str(VALIDATOR))
 
 import scoring  # noqa: E402
 from chain.types import MetagraphView  # noqa: E402
-from db.scoring import ScoredSubmission  # noqa: E402
+from db.scored import ScoredSubmission  # noqa: E402
 
 T0 = dt.datetime(2026, 10, 1, 12, 0, tzinfo=dt.timezone.utc)
 RAW = 8_060_939
@@ -103,7 +104,7 @@ def test_the_time_boundary_follows_the_newest_measurement():
     new = sub("b", 2_100_000, 1.0, minutes=60)
     new = dc.replace(new, incumbent_seconds=0.25)
     bounds = scoring.boundaries_for([old, new], CONFIG.speed_floor)
-    assert bounds.time_s == pytest.approx(8.0 * 0.25)
+    assert bounds.time_s == pytest.approx(10.0 * 0.25)
 
 
 def test_an_empty_round_pays_nobody_from_the_frontier():
@@ -236,7 +237,7 @@ def test_the_snapshot_carries_the_point_it_was_scored_on():
     assert snap["ratio_pct"] == pytest.approx(100.0 * 2_100_000 / RAW)
     assert snap["on_frontier"] is True
     assert snap["combined_weight"] == pytest.approx(
-        snap["pareto_weight"] + snap["improvement_weight"]
+        cast(float, snap["pareto_weight"]) + cast(float, snap["improvement_weight"])
     )
 
 

@@ -61,6 +61,10 @@ include = [
     "validator/service",
     "validator/observability",
     "validator/tests",
+    "validator/db",
+    "validator/scoring",
+    "validator/workers",
+    "validator/tools",
     "miner/submit.py",
 ]
 # Mirrors the sys.path.insert() calls in miner/submit.py and validator/tests/*.py.

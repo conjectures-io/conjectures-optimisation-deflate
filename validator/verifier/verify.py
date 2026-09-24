@@ -452,8 +452,8 @@ def stage_score(
     sub_id: int | None = None,
     token: str | None = None,
 ) -> int:
-    # Only now compile natively: round trip, compressed bytes, speed floor.
-    # The engine measures and this decides; SPEED_FLOOR is the only policy here.
+    # Only now compile natively and check correctness. Scoring bounds are
+    # applied after aggregation; the sandbox timeout bounds execution.
     selected = corpora.gate_corpora(ROOT)
     print("6 score       running…\n")
 
@@ -522,7 +522,7 @@ def stage_score(
                     session,
                     list(session.scalars(select(BenchmarkRun).where(BenchmarkRun.id.in_(run_ids)))),
                 )
-                publish(session, sub_id, aggregation.id, speed_floor=verdict.SPEED_FLOOR)
+                publish(session, sub_id, aggregation.id)
     if results is not None:
         methods = {}
         for name in (SUBMISSION, "incumbent"):

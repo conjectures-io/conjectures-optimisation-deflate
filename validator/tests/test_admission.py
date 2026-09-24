@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from db.scoring import ScoredSubmission
+from db.scored import ScoredSubmission
 from scoring.admission import advance, ordered_candidates, select_reference
 
 
@@ -23,6 +23,13 @@ def point(sid, time, ratio, **kwargs):
         normalized_ratio_pct=ratio,
         **kwargs,
     )
+
+
+def admission_of(p: ScoredSubmission) -> dict[str, object]:
+    # evaluate() sets `admission` on every point it returns; this states that
+    # invariant for the type checker at each of this file's many read sites.
+    assert p.admission is not None
+    return p.admission
 
 
 def test_single_neighbor_and_equal_replacement():
@@ -220,7 +227,8 @@ def stored_point(session, rid, values):
 def test_db_decisions_idempotent_and_require_explicit_replay(store):
     from sqlalchemy import func, select
 
-    from db.admission import evaluate, publication_lock
+    from db.admission import evaluate
+    from db.locks import publication_lock
     from db.models import Submission, SubmissionAdmissionCheck
 
     with store.sessions.begin() as session:
@@ -228,7 +236,7 @@ def test_db_decisions_idempotent_and_require_explicit_replay(store):
         b = stored_point(session, 2, [0.8] * 11)
         publication_lock(session)
         points = evaluate(session, [b, a], compute=True, persist=True)
-        assert [p.admission["outcome"] for p in points] == ["not_required", "passed"]
+        assert [admission_of(p)["outcome"] for p in points] == ["not_required", "passed"]
         first_ids = [p.admission_check_id for p in points]
         assert first_ids == [
             p.admission_check_id for p in evaluate(session, [a, b], compute=True, persist=True)
@@ -236,9 +244,9 @@ def test_db_decisions_idempotent_and_require_explicit_replay(store):
         assert session.scalar(select(func.count()).select_from(SubmissionAdmissionCheck)) == 2
         # Removing the predecessor changes context and cannot silently promote b.
         stale = evaluate(session, [b], compute=True, persist=True)
-        assert stale[0].admission["outcome"] == "pending"
+        assert admission_of(stale[0])["outcome"] == "pending"
         replayed = evaluate(session, [b], compute=True, persist=True, replay=True)
-        assert replayed[0].admission["outcome"] == "not_required"
+        assert admission_of(replayed[0])["outcome"] == "not_required"
         assert replayed[0].admission_check_id not in first_ids
         assert session.get(SubmissionAdmissionCheck, first_ids[1]).outcome == "passed"
         assert (
@@ -250,7 +258,8 @@ def test_db_decisions_idempotent_and_require_explicit_replay(store):
 def test_db_concurrent_publication(store):
     from concurrent.futures import ThreadPoolExecutor
 
-    from db.admission import evaluate, publication_lock
+    from db.admission import evaluate
+    from db.locks import publication_lock
 
     with store.sessions.begin() as session:
         p = stored_point(session, 1, [1.0] * 3)
@@ -271,8 +280,8 @@ def test_db_baseline_prefix_is_required(store):
     with store.sessions.begin() as session:
         p = replace(stored_point(session, 1, [1.0] * 3), baseline_key="lazy")
         result = evaluate(session, [p], compute=True)
-        assert result[0].admission["outcome"] == "pending"
-        assert result[0].admission["reason_code"] == "awaiting-predecessor"
+        assert admission_of(result[0])["outcome"] == "pending"
+        assert admission_of(result[0])["reason_code"] == "awaiting-predecessor"
 
 
 def test_exclusion_preserves_weights_geometry_and_recency():
@@ -308,21 +317,33 @@ def test_exclusion_preserves_weights_geometry_and_recency():
 
 
 def test_report_payload_and_plots(store, tmp_path):
+    from typing import cast
+
     from db.admission import evaluate
     from scoring import ScoringConfig, score
-    from workers.admission_report import comparison_range, explanation, plot_admission
+    from workers.admission_report import (
+        AdmissionDetailExtra,
+        comparison_range,
+        explanation,
+        plot_admission,
+    )
 
     with store.sessions.begin() as session:
         reference = stored_point(session, 1, [1.0] * 11)
         winner = stored_point(session, 2, [0.8] * 11)
         noisy = stored_point(session, 3, [0.4, 0.5, 0.6, 0.7, 0.75, 0.79, 0.85, 0.9, 1.0, 1.1, 1.2])
         points = evaluate(session, [reference, winner, noisy], compute=True)
-    assert [p.admission["outcome"] for p in points] == ["not_required", "passed", "inconclusive"]
+    assert [admission_of(p)["outcome"] for p in points] == [
+        "not_required",
+        "passed",
+        "inconclusive",
+    ]
     for p in points[1:]:
-        detail = p.admission
-        assert detail["preview"]
-        assert detail["frontier_before"]
-        stats = detail["statistics"]
+        detail = cast(AdmissionDetailExtra, cast(object, admission_of(p)))
+        assert detail.get("preview")
+        assert detail.get("frontier_before")
+        stats = detail.get("statistics")
+        assert stats is not None
         assert stats["confidence"] == 0.95
         assert "90%" in stats["interval"]
         assert "95% interval" not in stats["interval"]
@@ -330,8 +351,10 @@ def test_report_payload_and_plots(store, tmp_path):
         interval = comparison_range(detail)
         assert interval is not None
         assert interval[0] <= interval[1]
+        reference_payload = detail.get("reference")
+        assert reference_payload is not None
         assert interval[0] == pytest.approx(
-            detail["reference"]["time_ratio"] * (1 - stats["upper_pct"] / 100)
+            reference_payload["time_ratio"] * (1 - stats["upper_pct"] / 100)
         )
         assert "measured" in explanation(detail)
     result = score(points, points, ScoringConfig())
@@ -355,7 +378,8 @@ def test_missing_decision_is_not_rewarded():
 
 
 def test_cleared_pointer_still_requires_replay(store):
-    from db.admission import evaluate, publication_lock
+    from db.admission import evaluate
+    from db.locks import publication_lock
     from db.models import Submission
 
     with store.sessions.begin() as session:
@@ -365,10 +389,13 @@ def test_cleared_pointer_still_requires_replay(store):
         evaluate(session, [a, b], compute=True, persist=True)
         session.get(Submission, b.submission_id).admission_check_id = None
         assert (
-            evaluate(session, [b], compute=True, persist=True)[0].admission["outcome"] == "pending"
+            admission_of(evaluate(session, [b], compute=True, persist=True)[0])["outcome"]
+            == "pending"
         )
         assert (
-            evaluate(session, [b], compute=True, persist=True, replay=True)[0].admission["outcome"]
+            admission_of(evaluate(session, [b], compute=True, persist=True, replay=True)[0])[
+                "outcome"
+            ]
             == "not_required"
         )
 
@@ -376,7 +403,8 @@ def test_cleared_pointer_still_requires_replay(store):
 def test_invalidated_evidence_cannot_keep_current_decision(store):
     from datetime import datetime, timezone
 
-    from db.admission import evaluate, publication_lock
+    from db.admission import evaluate
+    from db.locks import publication_lock
     from db.models import BenchmarkRun
 
     with store.sessions.begin() as session:
@@ -389,4 +417,92 @@ def test_invalidated_evidence_cannot_keep_current_decision(store):
         # Public entry points validate through _inputs before reading a decision.
         # Explicit evaluation must also reject an invalidated row, even for a matching pointer.
         result = evaluate(session, [p], compute=True, persist=True, replay=True)
-        assert result[0].admission["outcome"] == "invalid_evidence"
+        assert admission_of(result[0])["outcome"] == "invalid_evidence"
+
+
+@pytest.mark.parametrize(
+    "time,ratio,eligible",
+    [
+        (10, 40, True),
+        (10.00001, 30, False),
+        (1, 40.00001, False),
+        (8.63, 34.79, True),
+        (0.1, 100, False),
+    ],
+)
+def test_balanced_scoring_boundaries(time, ratio, eligible):
+    from scoring import ScoringConfig
+    from scoring.eligibility import bounds_detail
+
+    p = replace(point(1, time, ratio), time_s=0.01, incumbent_seconds=1)
+    assert bounds_detail(p, ScoringConfig())["eligible"] is eligible
+
+
+def test_excluded_points_cannot_affect_rewards_or_improvement_history():
+    from scoring import ScoringConfig, score
+
+    a = replace(point(1, 1, 35), normalized_incumbent_ratio_pct=50)
+    slow = replace(point(2, 11, 10), normalized_incumbent_ratio_pct=50)
+    large = replace(point(3, 0.01, 41), normalized_incumbent_ratio_pct=50)
+    config = ScoringConfig()
+    original = score([a], [a], config)
+    result = score([a, slow, large], [a, slow, large], config)
+    assert result.frontier == original.frontier
+    assert result.improvements == original.improvements
+    assert result.weights == original.weights
+    for s in result.scores[1:]:
+        assert s.combined_weight == s.payable_weight == 0
+        assert s.burn_reason is not None
+        assert s.burn_reason.startswith("scoring-bounds:")
+
+
+def test_bound_decisions_persist_and_excluded_point_is_not_neighbor(store):
+    from db.admission import evaluate
+    from db.models import SubmissionAdmissionCheck
+    from scoring import ScoringConfig
+
+    with store.sessions.begin() as session:
+        slow = stored_point(session, 1, [11.0] * 3)
+        good = stored_point(session, 2, [9.0] * 3)
+        rows = evaluate(session, [slow, good], compute=True, persist=True)
+        assert [admission_of(p)["outcome"] for p in rows] == ["excluded", "not_required"]
+        detail = session.get(SubmissionAdmissionCheck, rows[0].admission_check_id).details
+        assert detail["scoring_bounds"]["violations"] == ["time-ratio-limit"]
+        assert admission_of(rows[1])["frontier_before"] == []
+        # Changing limits invalidates the whole predecessor chain.
+        changed = evaluate(session, [slow, good], config=ScoringConfig(speed_floor=12))
+        assert all(admission_of(p)["outcome"] == "pending" for p in changed)
+        replayed = evaluate(
+            session,
+            [slow, good],
+            compute=True,
+            persist=True,
+            replay=True,
+            config=ScoringConfig(speed_floor=12),
+        )
+        assert [admission_of(p)["outcome"] for p in replayed] == ["not_required", "passed"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"speed_floor": float("nan")},
+        {"speed_floor": float("inf")},
+        {"max_ratio_pct": 0},
+        {"max_ratio_pct": float("inf")},
+    ],
+)
+def test_invalid_scoring_bounds(kwargs):
+    from scoring import ScoringConfig
+
+    with pytest.raises(ValueError):
+        ScoringConfig(**kwargs)
+
+
+def test_scoring_bounds_environment():
+    from scoring import ScoringConfig
+
+    cfg = ScoringConfig.from_env(
+        {"SCORING_MAX_TIME_RATIO": "12", "SCORING_MAX_RATIO_PCT": "45", "SCORING_SPEED_FLOOR": "8"}
+    )
+    assert cfg.speed_floor == 12 and cfg.max_ratio_pct == 45

@@ -9,9 +9,10 @@ from loguru import logger
 
 import db
 from db import iso, models
+from scoring.config import ScoringConfig
 
 from . import schemas, security, sig, storage
-from .settings import MAX_FILE_BYTES, SPEED_FLOOR, Settings
+from .settings import MAX_FILE_BYTES, Settings
 
 router = APIRouter()
 
@@ -68,7 +69,10 @@ def health(request: Request) -> schemas.Health:
     # one count: a health check that fails when the store is slow takes the API down
     # with it. /ready is the one that reports the store.
     return schemas.Health(
-        ok=True, queued=_store(request).submissions.queue_depth(), speed_floor=SPEED_FLOOR
+        ok=True,
+        queued=_store(request).submissions.queue_depth(),
+        speed_floor=ScoringConfig.from_env().speed_floor,
+        max_ratio_pct=ScoringConfig.from_env().max_ratio_pct,
     )
 
 
@@ -83,7 +87,13 @@ def ready(request: Request) -> schemas.Ready:
     except Exception as exc:  # noqa: BLE001 - any store failure is "not ready"
         logger.warning(f"[api] not ready: {exc}")
         raise HTTPException(503, {"reason": "the store is not reachable"}) from exc
-    return schemas.Ready(ok=True, queued=queued, speed_floor=SPEED_FLOOR, database=database)
+    return schemas.Ready(
+        ok=True,
+        queued=queued,
+        speed_floor=ScoringConfig.from_env().speed_floor,
+        max_ratio_pct=ScoringConfig.from_env().max_ratio_pct,
+        database=database,
+    )
 
 
 @router.post("/submit", response_model=schemas.SubmitAccepted)
@@ -173,7 +183,8 @@ def leaderboard(request: Request) -> schemas.Leaderboard:
     incumbent = store.submissions.latest_incumbent_bytes()
     return schemas.Leaderboard(
         incumbent_bytes=incumbent,
-        speed_floor=SPEED_FLOOR,
+        speed_floor=ScoringConfig.from_env().speed_floor,
+        max_ratio_pct=ScoringConfig.from_env().max_ratio_pct,
         ranking=[
             schemas.Ranking(
                 rank=i + 1,

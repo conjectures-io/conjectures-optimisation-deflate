@@ -7,8 +7,14 @@ val    := root / "validator"
 python := root / ".venv/bin/python"
 
 # Every Python file the linter and the type checker cover.
-py_paths := val / "bench " + val / "verifier " + val / "sandbox " + val / "service " + val / "observability " + val / "tests " + root / "deploy/migrate/alembic " + root / "miner/submit.py " + root / "miner/sig.py"
-ruff_paths := py_paths + " " + val / "db " + val / "chain " + val / "scoring " + val / "workers " + val / "tools " + root / "scripts/pareto-weights.py"
+py_paths := val / "bench " + val / "verifier " + val / "sandbox " + val / "service " + val / "observability " + val / "tests " + val / "db " + val / "scoring " + val / "workers " + val / "tools " + root / "deploy/migrate/alembic " + root / "miner/submit.py " + root / "miner/sig.py"
+
+# validator/chain touches the bittensor SDK (the `chain` dependency group), which is
+# never installed by default -- not even in CI -- so basedpyright can't resolve it there;
+# lint it with ruff only. One-off scripts get the same treatment: run by hand rather
+# than imported by the service, linted and formatted like everything else, but not held
+# to the basedpyright bar.
+ruff_paths := py_paths + " " + val / "chain " + root / "scripts"
 
 # The benchmark and the gate are one Python package under validator/.
 bench := python + " -m bench"

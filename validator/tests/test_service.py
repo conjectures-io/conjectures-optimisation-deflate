@@ -160,7 +160,12 @@ def test_a_worker_that_died_mid_gate_is_reclaimed(client, store, settings, drain
 
 def test_health_is_liveness_and_ready_is_the_store(client, store, tmp_path):
     enrol(store, ALICE)
-    assert client.get("/health").json() == {"ok": True, "queued": 0, "speed_floor": 8.0}
+    assert client.get("/health").json() == {
+        "ok": True,
+        "queued": 0,
+        "speed_floor": 10.0,
+        "max_ratio_pct": 40.0,
+    }
     ready = client.get("/ready").json()
     assert ready["ok"] is True and ready["database"] is True
     post_submission(client, ALICE, submission_files(tmp_path, "alice"))

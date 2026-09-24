@@ -7,10 +7,13 @@ matching current pointers; only explicit replay may rewrite an existing context.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import Protocol, TypedDict, cast
 
-from sqlalchemy import select, text
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from bench.storage import sha256
 from scoring.admission import (
@@ -22,8 +25,11 @@ from scoring.admission import (
     ordered_candidates,
     select_reference,
 )
+from scoring.config import ScoringConfig
+from scoring.eligibility import bounds_detail
 
 from .admission_statistics import compare, evidence_files
+from .locks import publication_lock
 from .models import (
     BenchmarkAggregation,
     BenchmarkAggregationInput,
@@ -31,19 +37,28 @@ from .models import (
     Submission,
     SubmissionAdmissionCheck,
 )
-
-if TYPE_CHECKING:
-    from .scoring import ScoredSubmission, ScoringDb
+from .scored import ScoredSubmission
 
 
-LOCK_KEY = 771002001
+class ScoringSource(Protocol):
+    """What `run` needs from a scoring repository.
+
+    Structural rather than db.scoring.ScoringDb itself: ScoringDb.scoring_inputs()
+    calls back into this module's evaluate(), so importing the concrete class here
+    would be a real cycle. ScoringDb satisfies this without change.
+    """
+
+    def transaction(self) -> AbstractContextManager[Session, bool | None]: ...
+    def inputs_for_admission(
+        self, *, preview: bool, session: Session
+    ) -> list[ScoredSubmission]: ...
 
 
-def publication_lock(session):
-    session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": LOCK_KEY})
-
-
-def runs_for(session, aggregation_id):
+def runs_for(session: Session, aggregation_id: int | None) -> list[BenchmarkRun]:
+    # A point with no aggregation has no evidence to gather -- callers already treat an
+    # empty result as "invalid_evidence", so this is a real, meaningful case, not a bug.
+    if aggregation_id is None:
+        return []
     return list(
         session.scalars(
             select(BenchmarkRun)
@@ -57,7 +72,16 @@ def runs_for(session, aggregation_id):
     )
 
 
-def point_payload(point):
+class PointPayload(TypedDict):
+    submission_id: int
+    aggregation_id: int | None
+    label: str
+    time_ratio: float
+    compression_pct: float
+    admission_check_id: int | None
+
+
+def point_payload(point: ScoredSubmission) -> PointPayload:
     return {
         "submission_id": point.submission_id,
         "aggregation_id": point.aggregation_id,
@@ -68,7 +92,15 @@ def point_payload(point):
     }
 
 
-def evaluate(session, points, *, compute=False, persist=False, replay=False):
+def evaluate(
+    session: Session,
+    points: Sequence[ScoredSubmission],
+    *,
+    compute: bool = False,
+    persist: bool = False,
+    replay: bool = False,
+    config: ScoringConfig | None = None,
+) -> list[ScoredSubmission]:
     """Evaluate an ordered context. Callers hold publication_lock before persisted reads.
 
     compute=True is a preview or initial publication. An existing pointer in a
@@ -76,8 +108,11 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
     """
     if persist and not compute:
         raise ValueError("publication requires computation")
+    config = config or ScoringConfig.from_env()
     ordered = ordered_candidates(points)
-    frontier, result, prefix = [], [], []
+    frontier: list[ScoredSubmission] = []
+    result: list[ScoredSubmission] = []
+    prefix: list[str] = []
     names = {p.baseline_key for p in ordered if p.baseline_key}
     baseline_context = (
         bool(names & set(BASELINE_ORDER))
@@ -133,6 +168,7 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
         evidence = [[r.id, sha256(r.raw_data)] for r in runs]
         identity = [
             POLICY_VERSION,
+            [config.speed_floor, config.max_ratio_pct],
             BASELINE_ORDER_VERSION,
             point.context,
             point.submission_id,
@@ -178,7 +214,10 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
             try:
                 # Validate minimum repetitions even for first/record-compression points.
                 evidence_files(runs)
-                outcome, reference = select_reference(frontier, point)
+                bounds = bounds_detail(point, config)
+                outcome, reference = (
+                    select_reference(frontier, point) if bounds["eligible"] else ("excluded", None)
+                )
                 stats = (
                     compare(runs, runs_for(session, reference.aggregation_id))
                     if reference
@@ -200,6 +239,7 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
             if stats is not None:
                 outcome = stats["outcome"]
             reason = {
+                "excluded": "outside-scoring-bounds",
                 "passed": "speed-advantage-established",
                 "inconclusive": "speed-advantage-uncertain",
                 "not_required": "no-slower-better-compressing-neighbor",
@@ -218,6 +258,7 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
                 "evaluation_context": point.context,
                 "evidence": evidence,
                 "statistics": stats,
+                "scoring_bounds": bounds,
                 "historical_verification": point.verification_current is False,
             }
             if persist:
@@ -234,7 +275,11 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
                 session.add(check)
                 session.flush()
         if persist:
+            # check is not None here: either the `check is not None` branch above found
+            # an existing row, or persist's own branch just above created one.
+            assert check is not None
             sub.admission_check_id = check.id
+        outcome_str = cast(str, detail["outcome"])
         updated = replace(
             point,
             admission_check_id=check.id if check else None,
@@ -242,25 +287,29 @@ def evaluate(session, points, *, compute=False, persist=False, replay=False):
         )
         result.append(updated)
         prefix.append(key)
-        frontier = advance(frontier, updated, detail["outcome"])
+        frontier = advance(frontier, updated, outcome_str)
     return result
 
 
 def run(
-    scoring_db: ScoringDb, *, persist=False, replay=False, historical=False
+    scoring_db: ScoringSource,
+    *,
+    persist: bool = False,
+    replay: bool = False,
+    historical: bool = False,
 ) -> list[ScoredSubmission]:
     """Publish under one lock/transaction, or compute a read-only snapshot preview."""
-    with scoring_db._sessions.begin() as session:
+    with scoring_db.transaction() as session:
         if persist:
             publication_lock(session)
             # Protect evidence and pointers against concurrent updates during publication.
             for model in (Submission, BenchmarkAggregation, BenchmarkRun):
                 list(session.scalars(select(model).order_by(model.id).with_for_update()))
-        points = scoring_db._inputs(None, None, preview=historical, session=session)
+        points = scoring_db.inputs_for_admission(preview=historical, session=session)
         return evaluate(session, points, compute=True, persist=persist, replay=replay)
 
 
-def admitted(point):
+def admitted(point: ScoredSubmission) -> bool:
     # Pure legacy callers have no persisted evidence; production DB rows always get a status.
     if point.admission is None:
         return point.aggregation_id is None

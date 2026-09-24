@@ -23,7 +23,6 @@ MAX_FILE_BYTES = 512 * 1024
 MAX_REQUEST_BYTES = 3 * MAX_FILE_BYTES
 # A submission that beats the incumbent's bytes but is slower than this multiple of the
 # incumbent's time is rejected by the gate, not here; the API only reports it.
-SPEED_FLOOR = 8.0
 
 
 class Settings(BaseSettings):

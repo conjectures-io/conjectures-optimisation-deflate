@@ -305,7 +305,7 @@ def test_empty_files_excluded_from_ratio(store):
 def test_recency_uses_balanced_ratio():
     from dataclasses import replace
 
-    from db.scoring import ScoredSubmission
+    from db.scored import ScoredSubmission
     from scoring.improvement import improvement_events
 
     baseline = ScoredSubmission(

@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses as dc
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import db
 from db.admission import run
 
 
-def main(argv=None):
+@dc.dataclass
+class Args:
+    preview: bool = False
+    replay: bool = False
+    historical: bool = False
+    out: Path | None = None
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--preview", action="store_true", help="compute without writing decisions")
     ap.add_argument("--replay", action="store_true", help="allow replacement of existing contexts")
@@ -20,7 +30,7 @@ def main(argv=None):
         help="use historical verification; does not refresh it or enable live scoring",
     )
     ap.add_argument("--out", type=Path, help="write API-ready decision JSON")
-    args = ap.parse_args(argv)
+    args = ap.parse_args(argv, namespace=Args())
     store = db.connect()
     try:
         points = run(
@@ -29,14 +39,17 @@ def main(argv=None):
             replay=args.replay or args.preview,
             historical=args.historical,
         )
-        payload = []
+        payload: list[dict[str, object]] = []
         for p in points:
+            # evaluate() (the only implementation of `run`) sets `admission` on every
+            # point it returns, never leaves it at the dataclass's own None default.
+            assert p.admission is not None
             detail = {**p.admission, "admission_check_id": p.admission_check_id}
             payload.append(detail)
             stats = detail.get("statistics")
             gain = (
                 f" measured={stats['gain_pct']:.3f}% lower={stats['lower_pct']:.3f}%"
-                if stats
+                if isinstance(stats, dict)
                 else ""
             )
             print(
@@ -50,7 +63,11 @@ def main(argv=None):
             print("Preview only: no admission decisions published.")
         return (
             1
-            if any(p.admission["outcome"] in {"pending", "invalid_evidence"} for p in points)
+            if any(
+                p.admission is not None
+                and p.admission["outcome"] in {"pending", "invalid_evidence"}
+                for p in points
+            )
             else 0
         )
     finally:

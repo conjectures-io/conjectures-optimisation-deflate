@@ -172,7 +172,7 @@ class StepResult:
 
 def plan_for(
     store: db.Store,
-    meta,
+    meta: MetagraphView,
     config: WeightSetterConfig,
     scoring_config: scoring.ScoringConfig,
 ) -> tuple[WeightPlan, scoring.Scoring | None]:

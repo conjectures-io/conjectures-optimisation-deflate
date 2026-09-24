@@ -10,9 +10,10 @@ from __future__ import annotations
 import dataclasses as dc
 from collections.abc import Sequence
 
-from db.scoring import ScoredSubmission
+from db.scored import ScoredSubmission
 
 from .config import ScoringConfig
+from .eligibility import bounds_detail
 from .pareto import Boundaries, Point, pareto_front, weigh
 
 
@@ -43,8 +44,8 @@ def to_points(submissions: Sequence[ScoredSubmission]) -> dict[str, Point]:
 def boundaries_for(submissions: Sequence[ScoredSubmission], speed_floor: float) -> Boundaries:
     """Incumbent-relative reference for boundary-based comparison methods.
 
-    The relative time coordinate uses incumbent=1. The separate acceptance gate
-    still checks summed absolute times; this reference does not replace that check.
+    The relative time coordinate uses incumbent=1. Scoring eligibility uses
+    that same coordinate; execution timeouts are independent.
 
     Every accepted submission carries the incumbent's time as measured on the same run,
     so they should agree; they can differ when the operator promoted a new incumbent
@@ -67,8 +68,11 @@ def score_frontier(submissions: Sequence[ScoredSubmission], config: ScoringConfi
     anything. It can still earn from the improvement share, which is the point of having
     two components.
     """
+    submissions = [s for s in submissions if bounds_detail(s, config)["eligible"]]
     points = to_points(submissions)
-    bounds = boundaries_for(submissions, config.speed_floor)
+    bounds = dc.replace(
+        boundaries_for(submissions, config.speed_floor), ratio_pct=config.max_ratio_pct
+    )
     front = pareto_front(list(points.values()))
     raw = weigh(front, bounds, config.method)
     weights = {point_id: 0.0 for point_id in points}

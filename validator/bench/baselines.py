@@ -147,9 +147,9 @@ def seed_one(
                     ids.append(existing)
                     continue
                 print(f"{name}: benchmark {corpus.name}", flush=True)
-                measured = run(config, {name: stored / "parse.rs"}, corpus, speed_floor=8.0)
+                measured = run(config, {name: stored / "parse.rs"}, corpus, speed_floor=None)
                 paths = write_import_files(
-                    measured, ROOT.parent / "data/benchmark-runs/baselines", 8.0
+                    measured, ROOT.parent / "data/benchmark-runs/baselines", None
                 )
                 ids.extend(import_file(engine, path) for path in paths)
             with Session(engine) as session, session.begin():
@@ -160,18 +160,6 @@ def seed_one(
                     ids,
                 )
                 result = aggregate(session, rows)
-                # Speed gate applies equally. Keep evidence but do not activate a failed revision.
-                assert result.compression_seconds is not None
-                if result.compression_seconds > 8.0 * result.incumbent_seconds:
-                    sub = session.get(Submission, sid)
-                    assert sub is not None
-                    if not sub.baseline_active:
-                        sub.state = "rejected"
-                    print(
-                        f"{name}: measured but over speed floor; aggregation {result.id}",
-                        flush=True,
-                    )
-                    return
                 publish(session, sid, result.id)
                 session.execute(
                     update(Submission)

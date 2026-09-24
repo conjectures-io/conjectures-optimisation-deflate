@@ -55,6 +55,37 @@ class StatusResult(TypedDict):
     metrics: Metrics
 
 
+class ApiAdmission(TypedDict):
+    outcome: str | None
+    reason_code: str | None
+
+
+class ApiSubmission(TypedDict):
+    id: str
+    gate_status: str
+    submitted_at: str
+    metrics: Metrics | None
+    admission: ApiAdmission
+    score: dict[str, object] | None
+
+
+class ApiStatus(TypedDict):
+    submission: ApiSubmission
+
+
+class ApiRank(TypedDict):
+    rank: int
+    hotkey: str
+    payable_weight: float
+    combined_weight: float
+
+
+class ApiBoard(TypedDict):
+    context: dict[str, object]
+    ranking: list[ApiRank]
+    next_cursor: str | None
+
+
 class ReportResult(TypedDict):
     report: str | None
 
@@ -159,12 +190,29 @@ def cmd_status(args: argparse.Namespace) -> None:
     r = requests.get(here, timeout=TIMEOUT)
     if r.status_code != 200:
         sys.exit(refused("status", r))
-    s = cast(StatusResult, r.json())
-    print(f"submission {s['id']}  state {s['state']}  submitted {s['submitted_at']}")
-    m = s["metrics"]
-    if m.get("bytes") is not None:
-        vs, ratio = m.get("vs_incumbent"), m.get("time_ratio")
-        print(f"bytes {m['bytes']}  vs incumbent {vs}x  time {ratio}x")
+    body = cast(dict[str, object], r.json())
+    if "submission" in body:
+        current = cast(ApiStatus, cast(object, body))["submission"]
+        print(
+            f"submission {current['id']}  gate {current['gate_status']}  "
+            f"submitted {current['submitted_at']}"
+        )
+        admission = current["admission"]
+        print(f"admission {admission['outcome'] or 'pending'}: {admission['reason_code']}")
+        if current["metrics"]:
+            print(
+                f"balanced time {current['metrics'].get('balanced_time_ratio')}x; "
+                f"mean file compression {current['metrics'].get('mean_file_compression_pct')}%"
+            )
+        if current["score"]:
+            print(f"payable competition weight {current['score'].get('payable_weight')}")
+    else:
+        s = cast(StatusResult, r.json())
+        print(f"submission {s['id']}  state {s['state']}  submitted {s['submitted_at']}")
+        m = s["metrics"]
+        if m.get("bytes") is not None:
+            vs, ratio = m.get("vs_incumbent"), m.get("time_ratio")
+            print(f"bytes {m['bytes']}  vs incumbent {vs}x  time {ratio}x")
     # The report is its own endpoint on the platform, since it is unbounded text that no
     # listing should carry. It is how a rejected miner finds out which stage refused them.
     rr = requests.get(f"{here}/report", timeout=TIMEOUT)
@@ -185,7 +233,25 @@ def cmd_leaderboard(args: argparse.Namespace) -> None:
         r = requests.get(f"{base(url, competition)}/leaderboard", params=params, timeout=TIMEOUT)
         if r.status_code != 200:
             sys.exit(refused("leaderboard", r))
-        page = cast(LeaderboardPage, r.json())
+        body = cast(dict[str, object], r.json())
+        if "context" in body:
+            current = cast(ApiBoard, cast(object, body))
+            if cursor is None:
+                print(
+                    f"scoring snapshot {current['context'].get('snapshot_id')}; "
+                    "ranked by payable competition weight"
+                )
+                print(f"{'rank':>4} {'payable':>12} {'allocated':>12}  hotkey")
+            for row in current["ranking"]:
+                print(
+                    f"{row['rank']:>4} {row['payable_weight']:>12.6f} "
+                    f"{row['combined_weight']:>12.6f}  {row['hotkey']}"
+                )
+            cursor = current["next_cursor"]
+            if cursor:
+                continue
+            return
+        page = cast(LeaderboardPage, cast(object, body))
         first = first or page
         rows.extend(page["ranking"])
         cursor = page.get("next_cursor")

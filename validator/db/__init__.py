@@ -11,13 +11,16 @@ repositories are thin and hold nothing but the session factory.
 
 from __future__ import annotations
 
-from sqlalchemy import Engine, text
+from typing import final
+
+from sqlalchemy import Engine, literal, select
 
 from .clock import iso, now
 from .engine import create_db_engine, database_url, session_factory, session_scope
 from .ratelimit import RateLimiter
 from .registrations import NoSlot, RegistrationsDb
-from .scoring import ScoredSubmission, ScoringDb
+from .scored import ScoredSubmission
+from .scoring import ScoringDb
 from .status import PENDING, TERMINAL, SubmissionState
 from .submissions import SubmissionsDb
 from .verification import VerificationDb
@@ -47,6 +50,7 @@ RATE_LIMIT = 10
 RATE_WINDOW_SECONDS = 60
 
 
+@final
 class Store:
     def __init__(
         self,
@@ -67,12 +71,22 @@ class Store:
         # Is the database actually reachable? Used by /ready, which must fail when the
         # process is alive but cannot serve.
         with self.engine.connect() as conn:
-            return conn.execute(text("SELECT 1")).scalar_one() == 1
+            return conn.execute(select(literal(1))).scalar_one() == 1
 
     def close(self) -> None:
         self.engine.dispose()
 
 
-def connect(url: str | None = None, *, echo: bool = False, **kwargs: object) -> Store:
+def connect(
+    url: str | None = None,
+    *,
+    echo: bool = False,
+    rate_limit: int = RATE_LIMIT,
+    rate_window_seconds: int = RATE_WINDOW_SECONDS,
+) -> Store:
     # Open the store against `url`, or the environment-resolved default.
-    return Store(create_db_engine(url, echo=echo), **kwargs)  # pyright: ignore[reportArgumentType]
+    return Store(
+        create_db_engine(url, echo=echo),
+        rate_limit=rate_limit,
+        rate_window_seconds=rate_window_seconds,
+    )

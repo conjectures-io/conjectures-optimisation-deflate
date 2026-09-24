@@ -75,15 +75,14 @@ equal credit; a fixed absolute gain receives more credit at lower values. Local-
 coefficients themselves remain linear. Both axes must be positive and finite. A singleton receives the entire Pareto share.
 Other methods, including elbow-sweetspot, remain selectable for comparisons.
 
-Local-global does not use the external speed limit in its formula. Acceptance still
-requires time no greater than 8 times the paired incumbent. The Pareto time coordinate is now the arithmetic mean of per-file
+Local-global does not use the external speed limit in its formula. Scoring eligibility requires balanced slowdown no greater than 10 times the paired incumbent
+and balanced compressed/original size no greater than 40%. The Pareto time coordinate is now the arithmetic mean of per-file
 candidate/incumbent median total-time ratios within each corpus, then the equal-weight
 mean across corpora. Total time means paired LZ77 + encoding time, excluding warmups.
 A coordinate of 1 means incumbent performance; lower is better. Nonempty files count
 equally regardless of size. Empty files are excluded from both balanced metrics but
 remain in absolute telemetry. Positive per-file median times are required.
-The absolute sum of per-file medians remains telemetry and still supplies the existing
-8x acceptance check. The dimensionless Pareto coordinate has its own paired bootstrap
+The absolute sum of per-file medians remains telemetry only. The dimensionless Pareto coordinate has its own paired bootstrap
 interval (`balanced_time_ratio`); it is not the ratio of summed times.
 Recalculation reuses retained evidence; preview automatically applies the new formula. Stage medians are kept for telemetry, but their sum is not the scored statistic. The scored compression ratio is the arithmetic mean of per-file compressed/raw
 ratios within each corpus, then the equally weighted mean across corpora. Empty
@@ -334,3 +333,26 @@ share goes to `WEIGHT_BURN_UID` (to the treasury if that uid is absent) and the 
 share is paid as usual. Restart the weight setter after configuration changes. Run only one
 weight-setting worker for a validator wallet, and do not also run conjectures-validator's
 retired emissions worker: this worker constructs the complete subnet vector.
+
+
+### Scoring boundaries and benchmark timeouts
+
+`SCORING_MAX_TIME_RATIO=10` and `SCORING_MAX_RATIO_PCT=40` are inclusive reward
+eligibility limits. Both use equal-corpus averages of per-file ratios. Points
+outside either limit remain stored but are excluded before Pareto construction,
+statistical neighbor selection, and both Pareto and improvement rewards. Admission
+records contain outcome `excluded`, reason `outside-scoring-bounds`, and structured
+`scoring_bounds` values, limits, and violations. Baselines use the same policy.
+
+These replace the old 8x summed-time acceptance rule. Successful benchmarks and
+aggregations are retained regardless of scoring bounds. `VERIFY_BENCH_TIMEOUT=300`
+remains the wall-clock cap per build/measurement process; a measurement includes
+one corpus and all repetitions. `VERIFY_TOTAL_TIMEOUT=2700` caps the worker gate.
+The deprecated benchmark `--speed-floor` option is metadata only.
+
+Apply migration 0010 with `just db-migrate`. Changed scoring bounds invalidate old
+admission decisions: use `just admission-replay` for current verified evidence, or
+`just admission-replay --historical` for an operator's historical baseline replay.
+`just weights-preview` recalculates historical decisions without rebenchmarking.
+Restart workers after changing environment settings. `SCORING_SPEED_FLOOR` remains
+an alias for the scoring time limit; the new setting takes precedence.

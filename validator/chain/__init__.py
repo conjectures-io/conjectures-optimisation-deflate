@@ -9,6 +9,8 @@ can still import this package.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .schedule import SetDecision, blocks_until_next_epoch, should_set
 from .sink import LoggingSink, SnapshotSink
 from .source import ChainSource
@@ -28,6 +30,11 @@ from .types import (
 )
 from .watcher import run, step
 from .weights import WeightChain
+
+if TYPE_CHECKING:
+    # Only for static analysis: the runtime lookup is __getattr__ below, which keeps the
+    # bittensor SDK import lazy.
+    from .finney import BittensorChainSource, BittensorWeightChain
 
 __all__ = [
     "ARCHIVE",
@@ -59,8 +66,12 @@ __all__ = [
 def __getattr__(name: str) -> object:
     # The SDK is a heavy optional dependency (requirements-chain.txt), so the two live
     # implementations are imported only when actually asked for.
-    if name in ("BittensorChainSource", "BittensorWeightChain"):
+    if name == "BittensorChainSource":
         from . import finney
 
-        return getattr(finney, name)
+        return finney.BittensorChainSource
+    if name == "BittensorWeightChain":
+        from . import finney
+
+        return finney.BittensorWeightChain
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

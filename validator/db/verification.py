@@ -5,10 +5,13 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import uuid
+from typing import final
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import clock, models
+import db.clock as clock
+import db.models as models
+
 from .engine import session_scope
 
 
@@ -16,6 +19,7 @@ class StaleAttempt(RuntimeError):
     pass
 
 
+@final
 class VerificationDb:
     def __init__(self, sessions: sessionmaker[Session]):
         self.sessions = sessions
