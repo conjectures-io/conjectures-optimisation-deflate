@@ -195,13 +195,29 @@ def plan_for(
             meta, treasury_uid=treasury, burn_uid=config.burn_uid, competition_share=share
         ), None
     try:
-        points = store.scoring.scoring_inputs()
+        from dataclasses import asdict, replace
+
+        from scoring.admission import POLICY_VERSION
+
+        points, snapshot = store.scoring.api_inputs(
+            {
+                **asdict(scoring_config),
+                "version": POLICY_VERSION,
+                "scoring_method": scoring_config.method,
+                "max_balanced_time_ratio": scoring_config.speed_floor,
+                "max_mean_file_compression_pct": scoring_config.max_ratio_pct,
+                "competition_share": share,
+                "confidence_level": 0.95,
+                "bootstrap_draws": 2000,
+            }
+        )
         eligible = {
             hotkey
             for hotkey, uid in meta.uid_by_hotkey.items()
             if uid in meta.uids and uid not in (config.burn_uid, treasury)
         }
         result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
+        result = replace(result, api_snapshot=snapshot)
     except Exception as exc:  # noqa: BLE001 - any scoring failure pays the treasury
         logger.exception(f"[weights] scoring failed; paying the treasury this epoch: {exc}")
         return split(None, meta, treasury_uid=treasury, reason=f"scoring failed: {exc}"), None
@@ -350,6 +366,8 @@ def record(
 ) -> int:
     # The vector and its reasoning, in one transaction. Recorded whatever happened: a
     # refused or skipped epoch is exactly the one somebody will ask about later.
+    if result is not None and result.api_snapshot is None:
+        raise ValueError("completed scoring requires API evidence")
     return store.scoring.record_weight_set(
         netuid=config.netuid,
         block=block,
@@ -360,6 +378,7 @@ def record(
         dry_run=config.dry_run,
         error=error,
         snapshots=result.snapshots() if result else None,
+        api_snapshot=result.api_snapshot if result else None,
     )
 
 
