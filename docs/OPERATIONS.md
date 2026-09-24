@@ -97,7 +97,7 @@ paid either way: this weight setter is the validator's only `set_weights` caller
 sets the whole vector, not just the competition's part (`validator/scoring/split.py`).
 
 To dial the whole competition down without pausing it, lower `SCORING_PARETO_SHARE` and
-`SCORING_IMPROVEMENT_SHARE`. What neither claims burns.
+`SCORING_IMPROVEMENT_SHARE`. What neither claims goes to the treasury.
 
 ## Promoting a new incumbent
 
@@ -125,7 +125,7 @@ subnet costs nothing.
 | miners get 402 "not registered" | is `chain-watcher` running? `SELECT count(*) FROM registrations;` |
 | nothing is being verified | is `gate-worker` running, and does it have the toolchain? `just doctor` |
 | the queue is stuck in `verifying` | a worker died; the next one's sweep reclaims it after `SERVICE_STALE_CLAIM_SECONDS` |
-| weights are all burn | `WEIGHT_BURN_MODE`, or nothing accepted yet: `just weights-preview` |
+| the treasury gets everything | `WEIGHT_BURN_MODE` absent a burn uid, scoring failed (the `weight_sets` summary says), or nothing accepted yet: `just weights-preview` |
 | the API is up but refusing everything | `/ready` reports the store; `/health` only reports the process |
 | a miner disputes their weight | `just db-weights`, and `score_snapshots` for the epoch in question |
 

@@ -5,18 +5,19 @@ from __future__ import annotations
 import math
 
 POLICY_VERSION = "fixed-corpus-speed-v1"
-BASELINE_ORDER_VERSION = "examples-v1"
-# Append new entries and bump the version; never infer admission order from discovery.
+BASELINE_ORDER_VERSION = "examples-slow-to-fast-v2"
+# Frozen from the 2026-09-24 preview's incumbent-normalized scored times.
+# Never re-sort from noisy measurements; changes require a version bump and replay.
 BASELINE_ORDER = (
-    "template",
+    "optimal-iter",
+    "optimal",
+    "mo-lazy",
+    "lazy",
+    "hc-d64",
+    "no-lz77",
     "hash-chains",
     "hc-d4",
-    "hc-d64",
-    "lazy",
-    "mo-lazy",
-    "no-lz77",
-    "optimal",
-    "optimal-iter",
+    "template",
 )
 ADMITTED = {"passed", "not_required"}
 

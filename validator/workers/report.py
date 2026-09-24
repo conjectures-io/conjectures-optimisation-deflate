@@ -200,6 +200,28 @@ def normalize_frontier(ordered):
     }
 
 
+def elbow_region(points):
+    """Find the lower-left cluster using unit-range Euclidean distance.
+
+    Include distances within 0.25 of the nearest point to the ideal corner.
+    Degenerate axes contribute zero. Plot limits include full intervals.
+    """
+    if not points:
+        return []
+    x0, x1 = min(map(time_coordinate, points)), max(map(time_coordinate, points))
+    y0, y1 = min(s.ratio_pct for s in points), max(s.ratio_pct for s in points)
+    distances = [
+        (
+            ((time_coordinate(s) - x0) / (x1 - x0) if x1 > x0 else 0) ** 2
+            + ((s.ratio_pct - y0) / (y1 - y0) if y1 > y0 else 0) ** 2
+        )
+        ** 0.5
+        for s in points
+    ]
+    cutoff = min(distances) + 0.25
+    return [s for s, d in zip(points, distances, strict=True) if d <= cutoff]
+
+
 def plot(result, directory, provenance=None, timings=None):
     import matplotlib
 
@@ -225,8 +247,18 @@ def plot(result, directory, provenance=None, timings=None):
         fig.savefig(directory / name, dpi=160)
         plt.close(fig)
 
-    def pareto(ax, *, normalize=False, uncertainty=False):
+    def interval_for(s):
+        stats = provenance.get(str(s.submission_id), {}).get("timing", {})
+        return (stats.get("intervals") or {}).get(
+            "balanced_time_ratio" if relative_time else "compression_seconds"
+        )
+
+    def pareto(ax, *, normalize=False, uncertainty=False, subset=None):
         selected = front if normalize else ordered
+        if subset is not None:
+            selected = subset
+        if uncertainty:
+            selected = [s for s in selected if interval_for(s)]
         coordinates = (
             normalized
             if normalize
@@ -236,26 +268,24 @@ def plot(result, directory, provenance=None, timings=None):
             x, y = coordinates[s.submission_id]
             color = colors[s.submission_id]
             if uncertainty:
-                stats = provenance.get(str(s.submission_id), {}).get("timing", {})
-                interval = (stats.get("intervals") or {}).get(
-                    "balanced_time_ratio" if relative_time else "compression_seconds"
+                interval = interval_for(s)
+                # A percentile interval need not contain the estimate.
+                ax.hlines(y, interval[0], interval[1], color=color, linewidth=2)
+                ax.plot(interval, [y, y], "|", color=color, markersize=8)
+                x = (interval[0] + interval[1]) / 2
+            else:
+                ax.scatter(
+                    x,
+                    y,
+                    facecolors="none"
+                    if getattr(s, "admission", None)
+                    and s.admission["outcome"] not in {"passed", "not_required"}
+                    else color,
+                    edgecolors=color,
+                    marker="s" if s.baseline_key else "o",
+                    zorder=3,
+                    clip_on=not normalize,
                 )
-                if interval:
-                    # Draw endpoints directly: a percentile interval need not contain the estimate.
-                    ax.hlines(y, interval[0], interval[1], color=color, linewidth=2)
-                    ax.plot(interval, [y, y], "|", color=color, markersize=8)
-            ax.scatter(
-                x,
-                y,
-                facecolors="none"
-                if getattr(s, "admission", None)
-                and s.admission["outcome"] not in {"passed", "not_required"}
-                else color,
-                edgecolors=color,
-                marker="s" if s.baseline_key else "o",
-                zorder=3,
-                clip_on=not normalize,
-            )
             ax.annotate(
                 s.baseline_key or f"{s.hotkey}:{s.submission_id}",
                 (x, y),
@@ -264,12 +294,13 @@ def plot(result, directory, provenance=None, timings=None):
                 textcoords="offset points",
                 fontsize=8,
             )
-        ax.plot(
-            [coordinates[s.submission_id][0] for s in front],
-            [coordinates[s.submission_id][1] for s in front],
-            "--",
-            color="gray",
-        )
+        if not uncertainty:
+            ax.plot(
+                [coordinates[s.submission_id][0] for s in front],
+                [coordinates[s.submission_id][1] for s in front],
+                "--",
+                color="gray",
+            )
         if normalize:
             ax.plot([0, 1], [1, 0], ":", color="lightgray")
             ax.set(
@@ -291,7 +322,13 @@ def plot(result, directory, provenance=None, timings=None):
             )
         ax.grid(alpha=0.15)
         if not selected:
-            ax.text(0.5, 0.5, "No current scoring evidence", transform=ax.transAxes, ha="center")
+            ax.text(
+                0.5,
+                0.5,
+                "No timing intervals" if uncertainty else "No current scoring evidence",
+                transform=ax.transAxes,
+                ha="center",
+            )
 
     fig, axes = plt.subplots(1, 3, figsize=(20, 6), layout="constrained")
     pareto(axes[0])
@@ -324,12 +361,17 @@ def plot(result, directory, provenance=None, timings=None):
     pareto(axes[2], normalize=True)
     save(fig, "pareto.png")
 
-    fig, ax = plt.subplots(figsize=(10, 6), layout="constrained")
-    pareto(ax, uncertainty=True)
-    ax.set_title("Compression Pareto with 95% bootstrap timing intervals")
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7), layout="constrained")
+    pareto(axes[0], uncertainty=True)
+    axes[0].set_title("Full range")
+    elbow = elbow_region([s for s in ordered if interval_for(s)])
+    pareto(axes[1], uncertainty=True, subset=elbow)
+    axes[1].set_title("Automatic elbow zoom")
+    fig.suptitle("Compression Pareto with 95% bootstrap timing intervals")
     fig.supxlabel(
         "Within recorded runs only; excludes host drift and systematic bias. "
-        "Missing intervals are omitted.",
+        "Missing intervals are omitted.\n"
+        "Zoom: normalized distance to lower-left within 0.25 of nearest.",
         fontsize=9,
     )
     save(fig, "pareto-uncertainty.png")

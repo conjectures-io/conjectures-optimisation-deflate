@@ -82,7 +82,8 @@ def test_plot_panels_colors_and_intervals(tmp_path, monkeypatch):
         np.testing.assert_allclose(
             color, figures["compression-times.png"].axes[0].patches[index].get_facecolor()
         )
-    assert len(figures["pareto-uncertainty.png"].axes[0].collections) == 8
+    assert len(figures["pareto-uncertainty.png"].axes) == 2
+    assert len(figures["pareto-uncertainty.png"].axes[0].collections) == 4
     assert len(figures["compression-vs-lz77.png"].axes[0].collections) == 4
     plot(NS(scores=[]), tmp_path)
 

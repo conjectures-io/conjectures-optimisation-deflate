@@ -205,9 +205,14 @@ def test_it_scores_the_round_and_sets_a_vector_that_sums_to_one(store):
     assert uids == [0, 1, 2, TREASURY_UID]
     assert sum(weights) == pytest.approx(1.0)
     assert weights[1] > 0 and weights[2] > 0
-    # The competition shares out exactly its slice; the treasury has the rest.
-    assert sum(weights[:3]) == pytest.approx(SHARE)
-    assert weights[3] == pytest.approx(1.0 - SHARE)
+    # Miners are paid their score times the competition's share; whatever the competition
+    # does not pay a miner goes to the treasury with its own share, never to the burn uid.
+    assert result.scoring is not None
+    assert weights[1] == pytest.approx(SHARE * result.scoring.weights["alice"])
+    assert weights[2] == pytest.approx(SHARE * result.scoring.weights["bob"])
+    assert weights[0] == 0
+    assert weights[3] == pytest.approx(1.0 - weights[1] - weights[2])
+    assert weights[3] >= 1.0 - SHARE
 
 
 def test_every_outcome_is_written_down_with_its_reasoning(store):
@@ -238,11 +243,10 @@ def test_a_refused_vector_is_recorded_as_refused(store):
     assert rows[0].accepted is False and "refused" in (rows[0].error or "")
 
 
-def test_an_unsubmittable_competition_vector_pays_the_treasury_everything(store):
-    # bob earned a share and then left the subnet, so part of the competition's emission has
-    # nobody to go to -- and there is no burn uid in the metagraph to take it. The competition
-    # vector cannot sum to one, so this epoch the treasury is paid all of it: a skipped epoch
-    # would pay nobody, and it cannot be set retroactively.
+def test_a_deregistered_miners_share_goes_to_the_treasury(store):
+    # bob earned a share and then left the subnet, and there is no burn uid in the metagraph
+    # either. His share has nobody to go to, so the treasury takes it: it is not redistributed
+    # to alice, and a missing burn uid no longer matters outside burn mode.
     accept(store, "alice", 2_100_000, 2.0)
     accept(store, "bob", 2_120_000, 0.30)
     chain = FakeChain(
@@ -250,9 +254,10 @@ def test_an_unsubmittable_competition_vector_pays_the_treasury_everything(store)
     )
     result = step(chain, store, CONFIG, SCORING, PARAMS)
     assert result.action == "set", result.reason
-    uids, weights = chain.submitted[0]
-    assert weights[uids.index(TREASURY_UID)] == pytest.approx(1.0)
-    assert "burn uid 0 absent" in weight_sets(store)[0].summary
+    _, weights = chain.submitted[0]
+    assert result.scoring is not None
+    alice = SHARE * result.scoring.weights["alice"]
+    assert weights == pytest.approx([alice, 0.0, 1.0 - alice])
 
 
 def test_a_vector_with_no_treasury_uid_is_skipped_and_recorded(store):
@@ -310,15 +315,16 @@ def test_burn_mode_pays_nobody_and_scores_nothing(store):
     assert snapshots(store, require(result.weight_set_id)) == []
 
 
-def test_an_empty_round_burns_rather_than_skipping(store):
+def test_an_empty_round_pays_the_treasury_rather_than_skipping(store):
     # Nobody has been accepted yet. A validator must still set weights -- a zero vector
-    # or a silent epoch reads as "no opinion", not as "pay nobody".
+    # or a silent epoch reads as "no opinion", not as "pay nobody". The competition's
+    # unpaid share goes to the treasury.
     chain = FakeChain(hotkeys={"burn": 0}, block=at_epoch_boundary(), since=1000)
     result = step(chain, store, CONFIG, SCORING, PARAMS)
     assert result.action == "set"
     uids, weights = chain.submitted[0]
-    assert weights[uids.index(0)] == pytest.approx(SHARE)
-    assert weights[uids.index(TREASURY_UID)] == pytest.approx(1.0 - SHARE)
+    assert weights[uids.index(0)] == 0
+    assert weights[uids.index(TREASURY_UID)] == pytest.approx(1.0)
 
 
 # ── The loop around it ────────────────────────────────────────────────────
@@ -404,12 +410,75 @@ def test_off_mainnet_the_treasury_share_goes_where_it_is_told_or_burns():
 
 
 def test_the_split_scales_the_competition_and_pays_the_treasury_the_rest():
-    meta = MetagraphView(uids=(0, 5, TREASURY_UID), uid_by_hotkey={})
-    competition = scoring.to_vector({"x": 0.5}, MetagraphView((0, 5, 121), {"x": 5}), burn_uid=0)
-    plan = split(competition, meta, treasury_uid=TREASURY_UID, competition_bps=2_500)
+    meta = MetagraphView(uids=(0, 5, TREASURY_UID), uid_by_hotkey={"x": 5})
+    plan = split({"x": 0.5}, meta, treasury_uid=TREASURY_UID, competition_share=0.25)
     assert plan.submittable
+    # x's half of the competition's quarter; the unclaimed half goes to the treasury.
     assert dict(zip(plan.uids, plan.weights, strict=True)) == pytest.approx(
-        {0: 0.125, 5: 0.125, TREASURY_UID: 0.75}
+        {0: 0.0, 5: 0.125, TREASURY_UID: 0.875}
     )
-    everything = split(competition, meta, treasury_uid=TREASURY_UID, competition_bps=10_000)
+    everything = split({"x": 1.0}, meta, treasury_uid=TREASURY_UID, competition_share=1.0)
     assert dict(zip(everything.uids, everything.weights, strict=True))[TREASURY_UID] == 0.0
+    failed = split(None, meta, treasury_uid=TREASURY_UID, reason="scoring failed: boom")
+    assert failed.weights == (0.0, 0.0, 1.0) and "scoring failed" in failed.summary
+
+
+def test_the_competition_share_on_mainnet_is_a_code_constant(monkeypatch):
+    assert WeightSetterConfig(netuid=NETUID).competition_share == SHARE
+    assert (
+        WeightSetterConfig(netuid=NETUID, competition_share_override=0.2).competition_share == SHARE
+    )
+    with pytest.raises(ValueError, match="code constant"):
+        WeightSetterConfig(netuid=NETUID, competition_share_override=0.3)
+    monkeypatch.setenv("WEIGHT_COMPETITION_SHARE", "1.0")
+    with pytest.raises(ValueError, match="code constant"):
+        WeightSetterConfig.from_env()
+
+
+def test_burn_mode_without_a_burn_uid_pays_the_treasury(store):
+    chain = FakeChain(uids=(1, TREASURY_UID), block=at_epoch_boundary(), since=1000)
+    config = WeightSetterConfig(netuid=NETUID, burn_mode=True, dry_run=False)
+    result = step(chain, store, config, SCORING, PARAMS)
+    assert result.action == "set"
+    assert chain.submitted[0][1] == [0.0, 1.0]
+    assert "burn uid 0 absent" in (weight_sets(store)[0].summary or "")
+
+
+def test_a_pinned_treasury_hotkey_must_sit_at_the_treasury_uid_on_mainnet(store):
+    accept(store, "alice", 2_100_000, 2.0)
+    config = WeightSetterConfig(netuid=NETUID, treasury_hotkey="treasury", dry_run=False)
+    moved = FakeChain(hotkeys={"alice": 1, "treasury": 2}, block=at_epoch_boundary())
+    result = step(moved, store, config, SCORING, PARAMS)
+    assert result.action == "skip" and "not the treasury uid" in result.reason
+    assert moved.submitted == []
+    home = FakeChain(hotkeys={"alice": 1, "treasury": TREASURY_UID}, block=at_epoch_boundary())
+    assert step(home, store, config, SCORING, PARAMS).action == "set"
+
+
+def test_default_budget_is_recorded_and_baseline_allocation_goes_to_collector(store):
+    baseline_id = accept(store, "baseline-owner", 2_000_000, 2.0)
+    accept(store, "miner", 2_050_000, 0.3)
+    with store_pkg.session_scope(store.sessions) as session:
+        baseline = session.get(models.Submission, baseline_id)
+        assert baseline is not None
+        baseline.hotkey = None
+        baseline.baseline_key = "local:routing-baseline"
+        baseline.baseline_active = True
+    from db.admission import run as admit
+
+    admit(store.scoring, persist=True, replay=True)
+    chain = FakeChain(
+        uids=(0, 1, 121),
+        hotkeys={"miner": 1, "collector": 121},
+        block=at_epoch_boundary(),
+    )
+    result = step(chain, store, WeightSetterConfig(dry_run=False), SCORING, PARAMS)
+    assert result.action == "set", result.reason
+    assert result.scoring is not None
+    assert any(s.baseline_key for s in result.scoring.scores)
+    _, weights = chain.submitted[0]
+    assert weights[0] == 0
+    assert weights[1] == pytest.approx(0.2 * result.scoring.weights["miner"])
+    assert weights[2] == pytest.approx(1 - weights[1])
+    assert weights[2] >= 0.8
+    assert "competition_share=0.200000" in (weight_sets(store)[0].summary or "")

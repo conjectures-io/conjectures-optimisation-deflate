@@ -454,10 +454,7 @@ def stage_score(
 ) -> int:
     # Only now compile natively: round trip, compressed bytes, speed floor.
     # The engine measures and this decides; SPEED_FLOOR is the only policy here.
-    corpus = corpora.default(ROOT)
-    logger.debug(f"[gate] scoring against {corpus.name} ({corpus.path})")
-    if not any(corpus.path.iterdir()):
-        misconfigured(f"corpus {corpus.path} is empty; run `verifier/make-corpus.py`")
+    selected = corpora.gate_corpora(ROOT)
     print("6 score       running…\n")
 
     proved = work_root / SUBMISSION_FILES["parse.rs"]
@@ -465,43 +462,54 @@ def stage_score(
     expected = active_workspace.hashes["parse.rs"]
     if sha(proved) != expected:
         fail("6 (score)", "source changed after intake")
-    try:
-        measured = bench.run(
-            bench_config(), {SUBMISSION: proved}, corpus, speed_floor=verdict.SPEED_FLOOR
-        )
-    except bench.Blamed as e:
-        # Only the submission's own failure is a verdict; a broken incumbent is ours.
-        if e.method != SUBMISSION:
+    measurements: list[bench.Measurement] = []
+    run_ids: list[int] = []
+    accepted = True
+    for corpus in selected:
+        print(f"Corpus: {corpus.name}")
+        try:
+            measured = bench.run(
+                bench_config(), {SUBMISSION: proved}, corpus, speed_floor=verdict.SPEED_FLOOR
+            )
+        except bench.Blamed as e:
+            # Only the submission's own failure is a verdict; a broken incumbent is ours.
+            if e.method != SUBMISSION:
+                misconfigured(f"{e}\n{e.detail[-2000:]}")
+            fail("6 (score)", f"{e}\n{e.detail[-2000:]}")
+        except bench.Failed as e:
             misconfigured(f"{e}\n{e.detail[-2000:]}")
-        fail("6 (score)", f"{e}\n{e.detail[-2000:]}")
-    except bench.Failed as e:
-        misconfigured(f"{e}\n{e.detail[-2000:]}")
-    except bench.Misconfigured as e:
-        misconfigured(str(e))
+        except bench.Misconfigured as e:
+            misconfigured(str(e))
 
-    run = measured.only()
-    # What was measured must be what was extracted and proved. They are one file
-    # on disk, so this can only fail if something rewrote it mid-gate.
-    if (run.meta.methods[SUBMISSION].source_sha256 or "") != expected:
-        fail("6 (score)", "the parse.rs that was measured is not the one that was proved")
+        run = measured.only()
+        # What was measured must be what was extracted and proved. They are one file
+        # on disk, so this can only fail if something rewrote it mid-gate.
+        if (run.meta.methods[SUBMISSION].source_sha256 or "") != expected:
+            fail("6 (score)", "the parse.rs that was measured is not the one that was proved")
 
-    print(report.table(measured, verdict.SPEED_FLOOR))
-    v = verdict.judge(run, SUBMISSION, verdict.SPEED_FLOOR)
-    print()
-    for f in v.failures[:20]:
-        print(f"  {f}")
-    print(v.line())
+        print(report.table(measured, verdict.SPEED_FLOOR))
+        v = verdict.judge(run, SUBMISSION, verdict.SPEED_FLOOR)
+        print()
+        if corpus.public:
+            for f in v.failures[:20]:
+                print(f"  {f}")
+        print(v.line())
+        measurements.append(measured)
+        accepted = accepted and v.accepted
+        if store is not None and sub_id is not None:
+            from bench.artifacts import write_import_files
+            from bench.storage import import_file
+
+            paths = write_import_files(
+                measured, ROOT.parent / "data/benchmark-runs/service", verdict.SPEED_FLOOR
+            )
+            run_ids.extend(import_file(store.engine, path) for path in paths)
+
     if store is not None and sub_id is not None:
-        from bench.artifacts import write_import_files
-        from bench.storage import import_file
         from db.aggregation import aggregate, publish
         from db.models import BenchmarkRun, Submission
 
-        paths = write_import_files(
-            measured, ROOT.parent / "data/benchmark-runs/service", verdict.SPEED_FLOOR
-        )
-        run_ids = [import_file(store.engine, path) for path in paths]
-        if v.accepted:
+        if accepted:
             with store.sessions.begin() as session:
                 row = session.get(Submission, sub_id, with_for_update=True)
                 if row is None or row.verification_attempt != token:
@@ -516,8 +524,32 @@ def stage_score(
                 )
                 publish(session, sub_id, aggregation.id, speed_floor=verdict.SPEED_FLOOR)
     if results is not None:
-        results.write_text(json.dumps(report.summary(measured, verdict.SPEED_FLOOR), indent=2))
-    return 0 if v.accepted else 1
+        methods = {}
+        for name in (SUBMISSION, "incumbent"):
+            totals = [m.only().totals(name) for m in measurements]
+            methods[name] = {
+                "output_bytes": sum(t.output_bytes for t in totals),
+                "parse_s": sum(t.parse_s for t in totals),
+                "total_s": sum(t.total_s or 0.0 for t in totals),
+            }
+        methods[SUBMISSION]["slowdown"] = (
+            methods[SUBMISSION]["total_s"] / methods["incumbent"]["total_s"]
+            if methods["incumbent"]["total_s"] > 0
+            else 0.0
+        )
+        results.write_text(
+            json.dumps(
+                {
+                    "candidates": [SUBMISSION],
+                    "raw_bytes": sum(f.raw_bytes for m in measurements for f in m.only().files),
+                    "methods": methods,
+                    "corpora": [c.name for c in selected],
+                    "accepted": accepted,
+                },
+                indent=2,
+            )
+        )
+    return 0 if accepted else 1
 
 
 def terminate(_signum: int, _frame: object) -> NoReturn:

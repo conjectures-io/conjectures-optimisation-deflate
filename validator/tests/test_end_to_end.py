@@ -147,13 +147,14 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
     assert uids == [0, 1, 2, 121]
     assert sum(weights) == pytest.approx(1.0)
     # All three points contribute geometry. Alice receives the oldest point plus
-    # both recency events; her newer frontier allocation burns. Log improvement-space
-    # weighting gives the two endpoints different allocations. The competition's vector is
-    # scaled to its share of the validator's weight; the treasury, uid 121, has the rest.
+    # both recency events; her newer frontier allocation is unpaid. Log improvement-space
+    # weighting gives the two endpoints different allocations. Miners are paid their score
+    # times the competition's share; the treasury, uid 121, has its own share plus the
+    # competition's unpaid allocation, and nothing burns.
     assert weights[1] == pytest.approx(0.4122670669511427 * SHARE)
     assert weights[2] == pytest.approx(0.3378419715198898 * SHARE)
-    assert weights[0] == pytest.approx(0.2498909615289675 * SHARE)
-    assert weights[3] == pytest.approx(1.0 - SHARE)
+    assert weights[0] == 0
+    assert weights[3] == pytest.approx(1.0 - SHARE + 0.2498909615289675 * SHARE)
 
     # 9. And the vector is on the record with its per-hotkey reasoning.
     with store_pkg.session_scope(store.sessions) as session:

@@ -24,7 +24,7 @@ import dataclasses as dc
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -37,7 +37,13 @@ import scoring  # noqa: E402
 from chain.schedule import should_set  # noqa: E402
 from chain.types import BLOCK_SECONDS, FINNEY, NETUID, SubnetParams, WeightPlan  # noqa: E402
 from chain.weights import WeightChain  # noqa: E402
-from scoring.split import split, treasury_uid_for  # noqa: E402
+from scoring.split import (  # noqa: E402
+    burn,
+    competition_share_for,
+    resolve_treasury,
+    split,
+    treasury_uid_for,
+)
 
 Action = Literal["wait", "skip", "set", "failed"]
 
@@ -59,10 +65,11 @@ class WeightSetterConfig:
     wallet_hotkey: str = "default"
     wallet_path: str = "~/.bittensor/wallets"
 
-    # The uid unclaimed emission burns to; uid 0 by convention.
+    # Burn mode's destination for the competition's share, and, off mainnet with no
+    # WEIGHT_TREASURY_UID, the treasury's. Never eligible for miner payment.
     burn_uid: int = 0
-    # Emit everything to the burn uid, ignoring the scores. A deliberate, restart-toggled
-    # switch for a round that is paused or not yet open.
+    # Burn the competition's share, ignoring the scores; the treasury is still paid its share.
+    # A deliberate, restart-toggled switch for a round that is paused or not yet open.
     burn_mode: bool = False
 
     # Set this many blocks (or fewer) before each epoch boundary, so the vector lands
@@ -75,11 +82,23 @@ class WeightSetterConfig:
     # Off mainnet only: where the treasury share goes (default: the burn uid). On netuid 66 the
     # treasury uid is a code constant and a different value here refuses to start.
     treasury_override: int | None = None
+    # The treasury's registered hotkey. When set, the epoch is skipped unless it is in the
+    # metagraph -- off mainnet it also locates the treasury uid; on mainnet it must sit at the
+    # constant uid, so a reassigned uid 121 is never paid.
+    treasury_hotkey: str | None = None
+    # Off mainnet only: the competition's fraction of the validator's weight (default 0.20).
+    # On netuid 66 it is a code constant and a different value here refuses to start.
+    competition_share_override: float | None = None
 
     def __post_init__(self) -> None:
         if self.burn_uid < 0:
             raise ValueError("burn_uid must be >= 0")
+        if self.treasury_override is not None and self.treasury_override < 0:
+            raise ValueError("WEIGHT_TREASURY_UID must be >= 0")
+        if self.treasury_hotkey is not None and not self.treasury_hotkey.strip():
+            raise ValueError("WEIGHT_TREASURY_HOTKEY must not be blank")
         self.treasury_uid  # noqa: B018 - validates the override against the netuid now
+        self.competition_share  # noqa: B018 - likewise
         if self.set_margin < 0:
             raise ValueError("set_margin must be >= 0")
         if self.poll_seconds <= 0:
@@ -89,10 +108,15 @@ class WeightSetterConfig:
     def treasury_uid(self) -> int:
         return treasury_uid_for(self.netuid, self.treasury_override, burn_uid=self.burn_uid)
 
+    @property
+    def competition_share(self) -> float:
+        return competition_share_for(self.netuid, self.competition_share_override)
+
     @classmethod
     def from_env(cls) -> WeightSetterConfig:
         d = cls()
         env = os.environ
+        share = env.get("WEIGHT_COMPETITION_SHARE", "").strip()
         return cls(
             network=env.get("BITTENSOR_NETWORK", d.network),
             netuid=int(env.get("NETUID", str(d.netuid))),
@@ -104,10 +128,24 @@ class WeightSetterConfig:
             set_margin=int(env.get("WEIGHT_SET_MARGIN", str(d.set_margin))),
             poll_seconds=float(env.get("WEIGHT_POLL_SECONDS", str(d.poll_seconds))),
             dry_run=_dry_run(env.get("WEIGHT_DRY_RUN", "1")),
-            treasury_override=int(env["WEIGHT_TREASURY_UID"])
-            if env.get("WEIGHT_TREASURY_UID", "").strip()
-            else None,
+            treasury_override=_aliased_int(env, "WEIGHT_TREASURY_UID", "WEIGHT_COLLECTOR_UID"),
+            treasury_hotkey=_aliased(env, "WEIGHT_TREASURY_HOTKEY", "WEIGHT_COLLECTOR_HOTKEY"),
+            competition_share_override=float(share) if share else None,
         )
+
+
+def _aliased(env: Mapping[str, str], name: str, alias: str) -> str | None:
+    """`name`, or the earlier `alias` for it; both set and disagreeing refuses to start."""
+    value = env.get(name, "").strip() or None
+    legacy = env.get(alias, "").strip() or None
+    if value is not None and legacy is not None and value != legacy:
+        raise ValueError(f"{name}={value} and {alias}={legacy} disagree; set only {name}")
+    return value if value is not None else legacy
+
+
+def _aliased_int(env: Mapping[str, str], name: str, alias: str) -> int | None:
+    value = _aliased(env, name, alias)
+    return None if value is None else int(value)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -135,23 +173,31 @@ def plan_for(
     Scoring that raises pays the treasury everything this epoch instead of failing the tick:
     a failed tick sets nothing, and an epoch with no weight set cannot be made up later.
     """
-    treasury = config.treasury_uid
+    treasury, missing = resolve_treasury(
+        meta,
+        netuid=config.netuid,
+        treasury_uid=config.treasury_uid,
+        treasury_hotkey=config.treasury_hotkey,
+    )
+    if treasury is None:
+        return WeightPlan((), (), False, missing, f"treasury_hotkey={config.treasury_hotkey}"), None
+    share = config.competition_share
     if config.burn_mode:
-        competition = scoring.to_vector({}, meta, burn_uid=config.burn_uid)
-        return split(competition, meta, treasury_uid=treasury), None
+        return burn(
+            meta, treasury_uid=treasury, burn_uid=config.burn_uid, competition_share=share
+        ), None
     try:
         points = store.scoring.scoring_inputs()
         eligible = {
             hotkey
             for hotkey, uid in meta.uid_by_hotkey.items()
-            if uid not in (config.burn_uid, treasury)
+            if uid in meta.uids and uid not in (config.burn_uid, treasury)
         }
         result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
     except Exception as exc:  # noqa: BLE001 - any scoring failure pays the treasury
         logger.exception(f"[weights] scoring failed; paying the treasury this epoch: {exc}")
         return split(None, meta, treasury_uid=treasury, reason=f"scoring failed: {exc}"), None
-    competition = scoring.to_vector(result.weights, meta, burn_uid=config.burn_uid)
-    return split(competition, meta, treasury_uid=treasury), result
+    return split(result.weights, meta, treasury_uid=treasury, competition_share=share), result
 
 
 def step(
@@ -278,7 +324,8 @@ def run(
         f"[weights] running netuid={config.netuid} uid={params.uid} tempo={params.tempo} "
         f"rate_limit={params.weights_rate_limit} margin={config.set_margin} "
         f"burn_mode={config.burn_mode} burn_uid={config.burn_uid} dry_run={config.dry_run} "
-        f"treasury_uid={config.treasury_uid} "
+        f"treasury_uid={config.treasury_uid} treasury_hotkey={config.treasury_hotkey} "
+        f"competition_share={config.competition_share:.3f} "
         f"method={scoring_config.method} "
         f"split={scoring_config.pareto_share:.2f}/{scoring_config.improvement_share:.2f}"
     )
