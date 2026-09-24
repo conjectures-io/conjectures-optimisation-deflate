@@ -94,6 +94,8 @@ class Submission(Base):
             use_alter=True,
         ),
     )
+    # Platform account attribution; CLI/baseline submissions have no account.
+    account_id: Mapped[str | None] = mapped_column(Text)
     hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     baseline_key: Mapped[str | None] = mapped_column(Text)
     baseline_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
@@ -248,6 +250,8 @@ class WeightSet(Base):
     # never come apart, and so a reader needs no join to see what was set.
     uids: Mapped[list[int]] = mapped_column(JSONB, nullable=False)
     weights: Mapped[list[float]] = mapped_column(JSONB, nullable=False)
+    # Null for historical or treasury-only attempts without completed scoring.
+    api_snapshot: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     summary: Mapped[str | None] = mapped_column(Text)
     accepted: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # Set when the chain refused the vector, or when the worker skipped submitting it.

@@ -63,6 +63,7 @@ class Scoring:
     frontier: FrontierScore
     improvements: tuple[Improvement, ...]
     eligibility_known: bool = False
+    api_snapshot: dict[str, object] | None = dc.field(default=None, compare=False, repr=False)
 
     @property
     def weights(self) -> dict[str, float]:

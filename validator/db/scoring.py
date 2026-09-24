@@ -106,6 +106,20 @@ class ScoringDb:
             points = self._inputs(corpora, aggregation_ids, preview=False, session=session)
             return evaluate(session, points)
 
+    def api_inputs(
+        self,
+        policy: dict[str, object],
+    ) -> tuple[list[ScoredSubmission], dict[str, object]]:
+        """Capture scoring inputs and public membership in the same database view."""
+        from .admission import evaluate
+        from .api_snapshot import build_snapshot
+
+        with self._sessions.begin() as session:
+            session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+            publication_lock(session)
+            points = evaluate(session, self._inputs(None, None, preview=False, session=session))
+            return points, build_snapshot(session, points, policy)
+
     def preview_inputs(
         self,
         corpora: Mapping[str, str] | None = None,
@@ -312,6 +326,7 @@ class ScoringDb:
         dry_run: bool = False,
         error: str | None = None,
         snapshots: list[dict[str, object]] | None = None,
+        api_snapshot: dict[str, object] | None = None,
     ) -> int:
         """Persist one weight vector and the per-hotkey reasoning behind it.
 
@@ -325,6 +340,7 @@ class ScoringDb:
                 uids=list(uids),
                 weights=[float(w) for w in weights],
                 summary=summary,
+                api_snapshot=api_snapshot,
                 accepted=accepted,
                 dry_run=dry_run,
                 error=error,
@@ -334,3 +350,12 @@ class ScoringDb:
             for snap in snapshots or []:
                 session.add(models.ScoreSnapshot(weight_set_id=row.id, **snap))
             return int(row.id)
+
+    def weight_set_outcome(self, weight_set_id: int, *, accepted: bool, error: str | None) -> None:
+        """Complete the chain stage without changing its already-persisted scoring evidence."""
+        with session_scope(self._sessions) as session:
+            row = session.get(models.WeightSet, weight_set_id)
+            if row is None:
+                raise ValueError(f"unknown weight set {weight_set_id}")
+            row.accepted = accepted
+            row.error = error

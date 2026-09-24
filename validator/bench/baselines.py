@@ -18,7 +18,8 @@ from bench import corpora
 from bench.artifacts import write_import_files
 from bench.driver import Config, check, provenance, run
 from bench.errors import BenchError
-from bench.storage import import_file, preflight, sha256
+from bench.hashing import sha256
+from bench.storage import import_file, preflight
 from db.aggregation import (
     CorpusIdentity,
     aggregate,
@@ -28,7 +29,7 @@ from db.aggregation import (
     validate_evidence,
 )
 from db.engine import create_db_engine
-from db.models import BenchmarkAggregation, Submission
+from db.models import BenchmarkAggregation, Submission, SubmissionFile
 from service.settings import load
 from service.storage import write_submission
 from verifier.identity import required_fingerprint
@@ -94,6 +95,23 @@ def seed_one(
                     session.add(sub)
                     session.flush()
                 sid = sub.id
+                # Keep source bytes with the revision even when all benchmark runs are reused.
+                # Missing historical copies are filled in; an existing copy is immutable.
+                for filename, content, recorded_hash in (
+                    ("parse.rs", source, sub.source_sha256),
+                    ("Parse.lean", proof, sub.proof_sha256),
+                ):
+                    if recorded_hash and recorded_hash != hashlib.sha256(content).hexdigest():
+                        raise ValueError(f"baseline {filename} differs from verified source hash")
+                    saved = session.get(SubmissionFile, (sid, filename))
+                    if saved is None:
+                        session.add(
+                            SubmissionFile(submission_id=sid, name=filename, content=content)
+                        )
+                    elif saved.content != content:
+                        raise ValueError(
+                            f"stored baseline {filename} differs from immutable revision"
+                        )
             stored = settings.submission_dir(sid)
             if stored.exists() and all((stored / f).exists() for f in ("parse.rs", "Parse.lean")):
                 if (stored / "parse.rs").read_bytes() != source or (
@@ -178,12 +196,17 @@ def seed_one(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--corpus", action="append", required=True)
+    ap.add_argument(
+        "--corpus",
+        action="append",
+        help="repeat to select corpora; default: both competition stages",
+    )
     ap.add_argument("--only", action="append", help="baseline name; repeat to select several")
     ap.add_argument(
         "--overwrite", action="store_true", help="fresh runs; preserve historical evidence"
     )
     args = cast(Options, ap.parse_args(argv))
+    args.corpus = args.corpus or ["corpus-stage1", "corpus-stage2"]
     available = discover()
     from scoring.admission import BASELINE_ORDER
 

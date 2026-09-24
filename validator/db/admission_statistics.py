@@ -13,8 +13,8 @@ import statistics
 from collections.abc import Sequence
 from typing import TypedDict, cast
 
+from bench.hashing import sha256
 from bench.results import INCUMBENT
-from bench.storage import sha256
 
 from .aggregation import evaluation_context, reduce_runs, validate_evidence
 from .models import BenchmarkRun

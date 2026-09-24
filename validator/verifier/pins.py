@@ -66,6 +66,7 @@ PINNED = [
     "scoring/eligibility.py",
     "scoring/config.py",
     "bench/storage.py",
+    "bench/hashing.py",
     "bench/artifacts.py",
     "db/scoring.py",
     "db/models.py",

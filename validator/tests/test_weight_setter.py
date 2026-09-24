@@ -47,6 +47,9 @@ class FakeChain:
         self.submitted: list[tuple[list[int], list[float]]] = []
         self.param_calls = 0
 
+    def current_block(self) -> int:
+        return self.block
+
     def params(self, netuid: int) -> SubnetParams:
         self.param_calls += 1
         return SubnetParams(uid=9, tempo=100, weights_rate_limit=10)
@@ -153,7 +156,9 @@ def test_it_waits_while_the_rate_limit_is_still_running(store):
     chain = FakeChain(block=at_epoch_boundary(), since=0)  # just set weights
     result = step(chain, store, CONFIG, SCORING, PARAMS)
     assert result.action == "wait" and result.rate_off_blocks == 10
-    assert chain.submitted == [] and weight_sets(store) == []
+    assert chain.submitted == []
+    assert len(weight_sets(store)) == 1
+    assert weight_sets(store)[0].api_snapshot is not None
 
 
 def test_it_waits_while_the_epoch_boundary_is_far_off(store):
@@ -482,3 +487,96 @@ def test_default_budget_is_recorded_and_baseline_allocation_goes_to_collector(st
     assert weights[2] == pytest.approx(1 - weights[1])
     assert weights[2] >= 0.8
     assert "competition_share=0.200000" in (weight_sets(store)[0].summary or "")
+
+
+def test_api_snapshot_captures_public_membership_without_changing_scores(store):
+    from dataclasses import replace
+
+    sid = accept(store, "api-miner", 2_000_000, 0.4)
+    queued, _ = store.submissions.add("queued-miner", "c" * 64)
+    with store.sessions.begin() as session:
+        diagnostic = models.Submission(digest="d" * 64)
+        session.add(diagnostic)
+        session.flush()
+        test_id = diagnostic.id
+    chain = FakeChain(block=at_epoch_boundary(), hotkeys={"api-miner": 1})
+    points = store.scoring.scoring_inputs()
+    expected = scoring.score(points, points, SCORING, eligible_hotkeys={"api-miner"})
+    result = step(chain, store, replace(CONFIG, dry_run=True), SCORING, PARAMS)
+    assert chain.submitted == []
+    assert result.scoring is not None
+    assert result.scoring.scores == expected.scores
+    row = weight_sets(store)[0]
+    payload = row.api_snapshot
+    assert payload is not None
+    assert payload["schema_version"] == 1
+    import json
+
+    saved = json.dumps(payload, sort_keys=True)
+    # Diagnostic submissions never enter public snapshot membership.
+    items = payload["items"]
+    assert isinstance(items, list)
+    assert {item["submission"]["id"] for item in items} == {sid, queued}
+    assert test_id not in {item["submission"]["id"] for item in items}
+    policy = payload["policy"]
+    assert isinstance(policy, dict)
+    assert policy["competition_share"] == SHARE
+    assert policy["max_balanced_time_ratio"] == 10
+    assert policy["max_mean_file_compression_pct"] == 40
+    measured = next(item for item in items if item["submission"]["id"] == sid)
+    assert measured["aggregation"]["statistics"]["intervals"] is not None
+    assert measured["admission"]["outcome"] == "not_required"
+    with store.sessions.begin() as session:
+        sub = session.get(models.Submission, sid)
+        sub.state = "error"
+    assert json.dumps(weight_sets(store)[0].api_snapshot, sort_keys=True) == saved
+
+
+def test_treasury_only_attempt_has_no_completed_api_snapshot(store):
+    from dataclasses import replace
+
+    chain = FakeChain(block=at_epoch_boundary())
+    step(chain, store, replace(CONFIG, burn_mode=True, dry_run=True), SCORING, PARAMS)
+    assert weight_sets(store)[0].api_snapshot is None
+    assert chain.submitted == []
+
+
+def test_unregistered_validator_saves_scores_before_registration_check(store):
+    accept(store, "alice", 2_100_000, 2.0)
+
+    class Unregistered(FakeChain):
+        def params(self, netuid):
+            rows = weight_sets(store)
+            assert len(rows) == 1 and rows[0].api_snapshot is not None
+            raise RuntimeError("the wallet hotkey is not registered on netuid 66")
+
+    chain = Unregistered(hotkeys={"alice": 1}, block=at_epoch_boundary())
+    result = step(chain, store, CONFIG, SCORING)
+    assert result.action == "skip" and "not registered" in result.reason
+    assert chain.submitted == []
+    row = weight_sets(store)[0]
+    assert not row.accepted and row.error is not None and "not registered" in row.error
+    assert snapshots(store, row.id)
+
+
+def test_unregistered_loop_can_register_without_restart(store):
+    class RegistersLater(FakeChain):
+        def params(self, netuid):
+            self.param_calls += 1
+            if self.param_calls == 1:
+                raise RuntimeError("not registered")
+            return PARAMS
+
+    chain = RegistersLater(block=at_epoch_boundary())
+    ticks = []
+
+    def sleep(_):
+        ticks.append(1)
+        if len(ticks) == 2:
+            raise KeyboardInterrupt
+
+    run(chain, store, CONFIG, SCORING, sleep=sleep)
+    assert len(chain.submitted) == 1
+    assert len(weight_sets(store)) == 2
+    assert not weight_sets(store)[0].accepted
+    assert weight_sets(store)[1].accepted
