@@ -121,8 +121,10 @@ def test_status_reports_live_pending_instead_of_old_acceptance(store):
             )
         )
     payload = submission.status(store, sid)
-    assert payload["admission"]["details"]["outcome"] == "pending"
-    assert payload["admission"]["details"]["reason_code"] == "awaiting-predecessor"
+    details = payload["admission"]["details"]
+    assert details is not None
+    assert details["outcome"] == "pending"
+    assert details["reason_code"] == "awaiting-predecessor"
     rendered = submission.summary(payload)
     assert "gate passed" in rendered
     assert "pending — awaiting current baseline evidence" in rendered

@@ -1,8 +1,28 @@
 """Plot coordinates and sample selection must preserve scoring semantics."""
 
 from types import SimpleNamespace as NS
+from typing import cast
 
-from workers.report import normalize_frontier, plot, timing_observations
+from bench.results import Run
+from workers.report import ScoredPoint, ScoringResult, normalize_frontier, plot, timing_observations
+
+# SimpleNamespace carries no static attribute information regardless of what its
+# constructor was called with, so every fake built with it is cast to whatever
+# protocol/type the function under test actually needs -- the same shape these
+# functions already read dynamically (via getattr, or at runtime), just asserted
+# once here instead of failing type-checking as bare Any.
+
+
+def as_points(objs: list[NS]) -> list[ScoredPoint]:
+    return cast("list[ScoredPoint]", objs)
+
+
+def as_runs(pairs: list[tuple[NS, str]]) -> list[tuple[Run, str]]:
+    return cast("list[tuple[Run, str]]", pairs)
+
+
+def as_result(ns: NS) -> ScoringResult:
+    return cast(ScoringResult, cast(object, ns))
 
 
 def point(key, time, ratio, frontier=True):
@@ -20,8 +40,8 @@ def point(key, time, ratio, frontier=True):
 
 def test_normalization_uses_frontier_extremes():
     points = [point(1, 2, 60), point(2, 4, 30), point(3, 6, 20), point(4, 100, 90, False)]
-    assert normalize_frontier(points) == {1: (0, 1), 2: (0.5, 0.25), 3: (1, 0)}
-    assert normalize_frontier([points[0]]) == {1: (0, 0)}
+    assert normalize_frontier(as_points(points)) == {1: (0, 1), 2: (0.5, 0.25), 3: (1, 0)}
+    assert normalize_frontier(as_points([points[0]])) == {1: (0, 0)}
     assert normalize_frontier([]) == {}
 
 
@@ -32,7 +52,7 @@ def test_observations_exclude_warmup_and_preserve_pairs():
         NS(phase="measured", time_s=4, total_s=9),
     ]
     run = NS(files=[NS(methods={"candidate": NS(reps=reps)})])
-    assert timing_observations([(run, "candidate")]) == [
+    assert timing_observations(as_runs([(run, "candidate")])) == [
         {"lz77_s": 2, "total_s": 3},
         {"lz77_s": 4, "total_s": 9},
     ]
@@ -67,7 +87,12 @@ def test_plot_panels_colors_and_intervals(tmp_path, monkeypatch):
         str(p.submission_id): [{"lz77_s": 0.1, "total_s": 0.2}, {"lz77_s": 0.2, "total_s": 0.4}]
         for p in points
     }
-    plot(NS(scores=points), tmp_path, provenance, timings)
+    plot(
+        as_result(NS(scores=points)),
+        tmp_path,
+        cast("dict[str, dict[str, object]]", provenance),
+        timings,
+    )
     assert len(figures) == 4
     assert all(ax.get_xscale() == "linear" for fig in figures.values() for ax in fig.axes)
     raw, bars, normalized = figures["pareto.png"].axes
@@ -84,7 +109,7 @@ def test_plot_panels_colors_and_intervals(tmp_path, monkeypatch):
         )
     assert len(figures["pareto-uncertainty.png"].axes[0].collections) == 8
     assert len(figures["compression-vs-lz77.png"].axes[0].collections) == 4
-    plot(NS(scores=[]), tmp_path)
+    plot(as_result(NS(scores=[])), tmp_path)
 
 
 def test_repetition_totals_hold_file_mix_constant():
@@ -101,15 +126,17 @@ def test_repetition_totals_hold_file_mix_constant():
 
     # Very different file sizes must not produce a wide box when timings are stable.
     run = NS(files=[file([1, 1, 1]), file([100, 100, 100])])
-    assert timing_observations([(run, "candidate")]) == [{"lz77_s": 101, "total_s": 202}] * 3
+    assert (
+        timing_observations(as_runs([(run, "candidate")])) == [{"lz77_s": 101, "total_s": 202}] * 3
+    )
     extra = NS(files=[file([3, 4, 5])])
-    assert timing_observations([(run, "candidate"), (extra, "candidate")]) == [
+    assert timing_observations(as_runs([(run, "candidate"), (extra, "candidate")])) == [
         {"lz77_s": 104, "total_s": 208},
         {"lz77_s": 105, "total_s": 210},
         {"lz77_s": 106, "total_s": 212},
     ]
     with pytest.raises(ValueError, match="equal nonzero"):
-        timing_observations([(NS(files=[file([1]), file([2, 3])]), "candidate")])
+        timing_observations(as_runs([(NS(files=[file([1]), file([2, 3])]), "candidate")]))
 
 
 def test_relative_axis_and_intervals_preserve_absolute_telemetry(tmp_path, monkeypatch):
@@ -133,7 +160,7 @@ def test_relative_axis_and_intervals_preserve_absolute_telemetry(tmp_path, monke
             }
         }
     }
-    plot(NS(scores=[p]), tmp_path, provenance)
+    plot(as_result(NS(scores=[p])), tmp_path, cast("dict[str, dict[str, object]]", provenance))
     raw = figures["pareto.png"].axes[0]
     assert raw.collections[0].get_offsets()[0][0] == 0.5
     assert "incumbent" in raw.get_xlabel()

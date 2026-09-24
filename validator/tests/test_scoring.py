@@ -10,6 +10,7 @@ import dataclasses as dc
 import datetime as dt
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -236,7 +237,7 @@ def test_the_snapshot_carries_the_point_it_was_scored_on():
     assert snap["ratio_pct"] == pytest.approx(100.0 * 2_100_000 / RAW)
     assert snap["on_frontier"] is True
     assert snap["combined_weight"] == pytest.approx(
-        snap["pareto_weight"] + snap["improvement_weight"]
+        cast(float, snap["pareto_weight"]) + cast(float, snap["improvement_weight"])
     )
 
 
