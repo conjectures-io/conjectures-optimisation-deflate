@@ -56,7 +56,9 @@ class FakeChain:
 
 
 PARAMS = SubnetParams(uid=9, tempo=100, weights_rate_limit=10)
-CONFIG = WeightSetterConfig(netuid=NETUID, burn_uid=0, dry_run=False)
+CONFIG = WeightSetterConfig(
+    collector_uid=0, competition_share=1.0, netuid=NETUID, burn_uid=0, dry_run=False
+)
 SCORING = scoring.ScoringConfig()
 
 
@@ -237,7 +239,7 @@ def test_an_unsubmittable_vector_is_skipped_and_recorded(store):
     accept(store, "bob", 2_120_000, 0.30)
     chain = FakeChain(uids=(1, 2), hotkeys={"alice": 1}, block=at_epoch_boundary(), since=1000)
     result = step(chain, store, CONFIG, SCORING, PARAMS)
-    assert result.action == "skip" and "burn uid 0 absent" in result.reason
+    assert result.action == "skip" and "reward collector absent" in result.reason
     assert chain.submitted == []
     assert weight_sets(store)[0].accepted is False
 
@@ -247,7 +249,7 @@ def test_a_dry_run_computes_and_records_but_never_submits(store):
     # validator hotkey exists.
     accept(store, "alice", 2_100_000, 2.0)
     chain = FakeChain(hotkeys={"burn": 0, "alice": 1}, block=at_epoch_boundary(), since=1000)
-    config = WeightSetterConfig(netuid=NETUID, dry_run=True)
+    config = WeightSetterConfig(collector_uid=0, competition_share=1.0, netuid=NETUID, dry_run=True)
     result = step(chain, store, config, SCORING, PARAMS)
     assert result.action == "skip" and "dry run" in result.reason
     assert chain.submitted == []
@@ -260,7 +262,9 @@ def test_a_dry_run_computes_and_records_but_never_submits(store):
 def test_burn_mode_pays_nobody_and_scores_nothing(store):
     accept(store, "alice", 2_100_000, 2.0)
     chain = FakeChain(hotkeys={"burn": 0, "alice": 1}, block=at_epoch_boundary(), since=1000)
-    config = WeightSetterConfig(netuid=NETUID, burn_mode=True, dry_run=False)
+    config = WeightSetterConfig(
+        collector_uid=0, competition_share=1.0, netuid=NETUID, burn_mode=True, dry_run=False
+    )
     result = step(chain, store, config, SCORING, PARAMS)
     assert result.action == "set"
     uids, weights = chain.submitted[0]
@@ -341,3 +345,32 @@ def test_weight_setting_defaults_to_dry_run(monkeypatch):
     monkeypatch.setenv("WEIGHT_DRY_RUN", "flase")
     with pytest.raises(ValueError, match="WEIGHT_DRY_RUN"):
         WeightSetterConfig.from_env()
+
+
+def test_default_budget_is_recorded_and_baseline_allocation_goes_to_collector(store):
+    baseline_id = accept(store, "baseline-owner", 2_000_000, 2.0)
+    accept(store, "miner", 2_050_000, 0.3)
+    with store_pkg.session_scope(store.sessions) as session:
+        baseline = session.get(models.Submission, baseline_id)
+        assert baseline is not None
+        baseline.hotkey = None
+        baseline.baseline_key = "local:routing-baseline"
+        baseline.baseline_active = True
+    from db.admission import run as admit
+
+    admit(store.scoring, persist=True, replay=True)
+    chain = FakeChain(
+        uids=(0, 1, 121),
+        hotkeys={"miner": 1, "collector": 121},
+        block=at_epoch_boundary(),
+    )
+    result = step(chain, store, WeightSetterConfig(dry_run=False), SCORING, PARAMS)
+    assert result.action == "set", result.reason
+    assert result.scoring is not None
+    assert any(s.baseline_key for s in result.scoring.scores)
+    _, weights = chain.submitted[0]
+    assert weights[0] == 0
+    assert weights[1] == pytest.approx(0.2 * result.scoring.weights["miner"])
+    assert weights[2] == pytest.approx(1 - weights[1])
+    assert weights[2] >= 0.8
+    assert "competition_share=0.200000" in (weight_sets(store)[0].summary or "")

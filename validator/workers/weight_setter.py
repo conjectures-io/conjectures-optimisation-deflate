@@ -53,7 +53,13 @@ class WeightSetterConfig:
     wallet_hotkey: str = "default"
     wallet_path: str = "~/.bittensor/wallets"
 
-    # The uid unclaimed emission burns to; uid 0 by convention.
+    # Match conjectures-validator/emissions_worker/worker.py by default.
+    collector_uid: int = 121
+    # Prefer a stable hotkey when configured; never fall back if it deregisters.
+    collector_hotkey: str | None = None
+    competition_share: float = 0.20
+
+    # Only used by the explicit emergency burn mode.
     burn_uid: int = 0
     # Emit everything to the burn uid, ignoring the scores. A deliberate, restart-toggled
     # switch for a round that is paused or not yet open.
@@ -68,6 +74,12 @@ class WeightSetterConfig:
     dry_run: bool = True
 
     def __post_init__(self) -> None:
+        if self.collector_uid < 0:
+            raise ValueError("collector_uid must be >= 0")
+        if not 0 <= self.competition_share <= 1:
+            raise ValueError("competition_share must be between 0 and 1")
+        if self.collector_hotkey is not None and not self.collector_hotkey.strip():
+            raise ValueError("collector_hotkey must not be blank")
         if self.burn_uid < 0:
             raise ValueError("burn_uid must be >= 0")
         if self.set_margin < 0:
@@ -85,6 +97,9 @@ class WeightSetterConfig:
             wallet_name=env.get("BITTENSOR_WALLET_NAME", d.wallet_name),
             wallet_hotkey=env.get("BITTENSOR_WALLET_HOTKEY", d.wallet_hotkey),
             wallet_path=env.get("BITTENSOR_WALLET_PATH", d.wallet_path),
+            collector_uid=int(env.get("WEIGHT_COLLECTOR_UID", str(d.collector_uid))),
+            collector_hotkey=env.get("WEIGHT_COLLECTOR_HOTKEY", "").strip() or None,
+            competition_share=float(env.get("WEIGHT_COMPETITION_SHARE", str(d.competition_share))),
             burn_uid=int(env.get("WEIGHT_BURN_UID", str(d.burn_uid))),
             burn_mode=env.get("WEIGHT_BURN_MODE", "").lower() in ("1", "true", "yes"),
             set_margin=int(env.get("WEIGHT_SET_MARGIN", str(d.set_margin))),
@@ -115,10 +130,34 @@ def plan_for(
 ) -> tuple[WeightPlan, scoring.Scoring | None]:
     if config.burn_mode:
         return scoring.to_vector({}, meta, burn_uid=config.burn_uid), None
+    collector_uid = (
+        meta.uid_by_hotkey.get(config.collector_hotkey)
+        if config.collector_hotkey is not None
+        else config.collector_uid
+    )
+    if collector_uid not in meta.uids:
+        return WeightPlan(
+            (),
+            (),
+            False,
+            "reward collector absent from the metagraph",
+            f"collector_hotkey={config.collector_hotkey!r} collector_uid={collector_uid}",
+        ), None
     points = store.scoring.scoring_inputs()
-    eligible = {hotkey for hotkey, uid in meta.uid_by_hotkey.items() if uid != config.burn_uid}
+    eligible = {
+        hotkey
+        for hotkey, uid in meta.uid_by_hotkey.items()
+        if uid in meta.uids and uid not in (config.burn_uid, collector_uid)
+    }
     result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
-    return scoring.to_vector(result.weights, meta, burn_uid=config.burn_uid), result
+    from scoring.routing import reward_vector
+
+    return reward_vector(
+        result.weights,
+        meta,
+        collector_uid=collector_uid,
+        competition_share=config.competition_share,
+    ), result
 
 
 def step(
@@ -245,6 +284,8 @@ def run(
         f"[weights] running netuid={config.netuid} uid={params.uid} tempo={params.tempo} "
         f"rate_limit={params.weights_rate_limit} margin={config.set_margin} "
         f"burn_mode={config.burn_mode} burn_uid={config.burn_uid} dry_run={config.dry_run} "
+        f"collector={config.collector_hotkey or config.collector_uid} "
+        f"competition_share={config.competition_share:.3f} "
         f"method={scoring_config.method} "
         f"split={scoring_config.pareto_share:.2f}/{scoring_config.improvement_share:.2f}"
     )

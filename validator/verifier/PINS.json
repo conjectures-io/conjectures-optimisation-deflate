@@ -45,7 +45,7 @@
   "rust-toolchain.toml": "02171bc5045093d56fe2fc1547a861a359fcfd7c33574d2f125e5052032d0a8f",
   "sandbox/__init__.py": "33fedd1220d771d1567e26a57fc5701c795070bf3759aa7d2da330a5c5d0030b",
   "sandbox/bwrap.py": "ba35cd059a2d9ceda03aa7edca35370d0380d3849d14d7513f758476017470bb",
-  "scoring/admission.py": "49e39ef9f17c5cdfee1e2f940fa0426d96111e8e5209523847a289fc6f1acc9a",
+  "scoring/admission.py": "ffe89cc195516814db5a91669b948cb388cd3bbecf5658a435705d462ce5178a",
   "service/worker.py": "fba93b29684bed7ac558edb4802cd9ea4bd29a2b7c9bbeccb6b8df55773fe852",
   "slot/Cargo.lock": "f4c9796598e1278b7b283f1f5661542de091b04dd0135471a5a2525330d1f286",
   "slot/Cargo.toml": "f5b2d1690c66eb62d55d3e71d2ae441cf03b8fc375ed99319097bb58571b641e",

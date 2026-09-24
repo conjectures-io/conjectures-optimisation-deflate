@@ -137,7 +137,9 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
     result = step(
         chain,
         store,
-        WeightSetterConfig(netuid=NETUID, burn_uid=0),
+        WeightSetterConfig(
+            collector_uid=0, competition_share=1.0, netuid=NETUID, burn_uid=0, dry_run=False
+        ),
         scoring.ScoringConfig(),
         chain.params(NETUID),
     )

@@ -290,3 +290,37 @@ an API implementing the same views without requiring local benchmark files.
 Admission detail plots use stacked gain, normalized-time and Pareto panels. Per-file
 diagnostics are written separately as `admission/submission-<id>-files.png`.
 The proposed browser API is documented in [FRONTEND_API.md](FRONTEND_API.md).
+
+
+## Conjectures collector and compression budget
+
+The weight setter reserves 80% for the Conjectures collector and allocates up to
+20% through compression scoring. Configure `WEIGHT_COMPETITION_SHARE=0.20`;
+the fixed collector share is `1 - WEIGHT_COMPETITION_SHARE`.
+`WEIGHT_COLLECTOR_UID=121` matches the treasury in
+`conjectures-validator/emissions_worker/worker.py`. Prefer setting
+`WEIGHT_COLLECTOR_HOTKEY` to the collector's registered SS58 hotkey: it overrides
+UID configuration and follows metagraph UID changes. An absent collector causes a
+recorded skip, with no fallback to a different recipient.
+
+Scoring and speed admission still include baselines in the frontier. Miner scores
+are multiplied by the compression budget without renormalization. Baseline,
+deregistered, duplicate-hotkey and otherwise unpaid allocations go to the collector.
+For example, a miner allocated 25% of the compression budget receives 5% overall;
+the collector receives 95% if there are no other payable miners. An empty or
+baseline-only round sends 100% to the collector. The reserved burn UID remains
+ineligible for miner payment.
+
+`SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within**
+the compression budget (defaults 0.60/0.40). Set them to 1/0 for Pareto-only rewards.
+Score snapshots and weights-preview report competition-local fractions; the
+weight-set audit vector contains actual subnet fractions and its summary records
+the budget and collector allocation. Historical `burn` labels in score reports
+mean unpaid competition allocation; normal weight setting now routes it to the
+collector. No schema migration is required.
+
+`WEIGHT_DRY_RUN=1` remains the default. `WEIGHT_BURN_MODE=1` is an explicit emergency
+override: it sends everything to `WEIGHT_BURN_UID`, bypassing normal collector routing.
+Restart the weight setter after configuration changes. Run only one weight-setting
+worker for a validator wallet: this worker constructs the complete subnet vector,
+so do not feed that already scaled vector through the platform's 80/20 allocator.
