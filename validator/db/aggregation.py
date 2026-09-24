@@ -484,7 +484,19 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
     return answer
 
 
-def evaluation_context(rows: Sequence[BenchmarkRun]) -> dict[str, object]:
+class EvaluationContext(TypedDict):
+    # Kept as list-of-lists, not list-of-tuples: this is stored in and compared against
+    # a JSONB column, which has no tuple type, and tuple != list even with equal
+    # elements -- a tuple here would make every stale-context comparison fail.
+    corpora: list[list[str]]
+    protocol: list[object]
+    calculator: str
+    timing: str
+    compression: str
+    speed: str
+
+
+def evaluation_context(rows: Sequence[BenchmarkRun]) -> EvaluationContext:
     runs = [validate_evidence(row) for row in rows]
     if len({compatibility(run) for run in runs}) != 1:
         raise ValueError("incompatible measurement context")

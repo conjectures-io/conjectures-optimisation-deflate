@@ -10,14 +10,19 @@ from __future__ import annotations
 
 import dataclasses as dc
 import datetime as dt
+import json
+import os
+from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
-from typing import Any
+from typing import cast, final
 
-from sqlalchemy import select
+from sqlalchemy import Select, select, true
 from sqlalchemy.orm import Session, sessionmaker
 
 import db.models as models
+from verifier.identity import required_fingerprint
 
+from .aggregation import CALCULATOR_VERSION, evaluation_context, reduce_runs
 from .engine import session_scope
 from .status import SubmissionState
 
@@ -50,7 +55,7 @@ class ScoredSubmission:
     context: dict[str, object] | None = None
 
     admission_check_id: int | None = None
-    admission: dict[str, Any] | None = None
+    admission: dict[str, object] | None = None
     normalized_time_ratio: float | None = None
     verification_current: bool | None = None
     normalized_ratio_pct: float | None = None
@@ -75,12 +80,12 @@ class ScoredSubmission:
         return 100.0 * self.bytes / self.raw_bytes
 
 
-def _scorable(stmt, *, preview=False):
+def _scorable(
+    stmt: Select[tuple[models.Submission]], *, preview: bool = False
+) -> Select[tuple[models.Submission]]:
     # Only accepted submissions carrying every number the frontier needs. A row missing
     # one of them predates the columns or came from a harness that did not print it;
     # scoring it would put a fabricated point on the frontier.
-    from verifier.identity import required_fingerprint
-
     return stmt.where(
         models.Submission.hotkey.is_not(None) | models.Submission.baseline_key.is_not(None),
         models.Submission.static_verified_at.is_not(None),
@@ -109,6 +114,7 @@ def _to_scored(row: models.Submission) -> ScoredSubmission:
     assert row.raw_bytes is not None, "_scorable filters raw_bytes IS NULL"
     assert row.compression_seconds is not None, "_scorable filters compression_seconds IS NULL"
     assert row.incumbent_seconds is not None, "_scorable filters incumbent_seconds IS NULL"
+    assert row.incumbent_bytes is not None, "_scorable filters incumbent_bytes IS NULL"
     return ScoredSubmission(
         submission_id=row.id,
         hotkey=row.hotkey,
@@ -123,11 +129,16 @@ def _to_scored(row: models.Submission) -> ScoredSubmission:
     )
 
 
+@final
 class ScoringDb:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self._sessions = sessions
 
-    def scoring_inputs(self, corpora=None, aggregation_ids=None) -> list[ScoredSubmission]:
+    def scoring_inputs(
+        self,
+        corpora: Mapping[str, str] | None = None,
+        aggregation_ids: Sequence[int] | None = None,
+    ) -> list[ScoredSubmission]:
         """Current verified, published evidence for live scoring."""
         from .admission import evaluate, publication_lock
 
@@ -136,7 +147,11 @@ class ScoringDb:
             points = self._inputs(corpora, aggregation_ids, preview=False, session=session)
             return evaluate(session, points)
 
-    def preview_inputs(self, corpora=None, aggregation_ids=None) -> list[ScoredSubmission]:
+    def preview_inputs(
+        self,
+        corpora: Mapping[str, str] | None = None,
+        aggregation_ids: Sequence[int] | None = None,
+    ) -> list[ScoredSubmission]:
         """Recalculate historical verified evidence without publishing or re-verifying.
 
         Use the runs linked to each submission's published aggregation (or explicit
@@ -150,20 +165,20 @@ class ScoringDb:
             points = self._inputs(corpora, aggregation_ids, preview=True, session=session)
             return evaluate(session, points, compute=True, replay=True)
 
-    def _inputs(self, corpora, aggregation_ids, *, preview, session=None) -> list[ScoredSubmission]:
+    def _inputs(
+        self,
+        corpora: Mapping[str, str] | None,
+        aggregation_ids: Sequence[int] | None,
+        *,
+        preview: bool,
+        session: Session | None = None,
+    ) -> list[ScoredSubmission]:
         """SCORING_CORPORA selects exact corpus hashes; mixed contexts fail closed."""
-        import json
-        import os
-
-        from verifier.identity import required_fingerprint
-
-        from .aggregation import CALCULATOR_VERSION, evaluation_context, reduce_runs
-
         current_fingerprint = required_fingerprint()
 
-        requested = corpora
+        requested: Mapping[str, str] | None = corpora
         if requested is None and os.getenv("SCORING_CORPORA"):
-            requested = json.loads(os.environ["SCORING_CORPORA"])
+            requested = cast(dict[str, str], json.loads(os.environ["SCORING_CORPORA"]))
         with (
             nullcontext(session) if session is not None else session_scope(self._sessions)
         ) as session:
@@ -173,7 +188,7 @@ class ScoringDb:
                     .where(
                         models.Submission.aggregation_id.is_not(None),
                         (
-                            True
+                            true()
                             if aggregation_ids is not None
                             else (
                                 models.Submission.baseline_key.is_(None)
@@ -184,7 +199,7 @@ class ScoringDb:
                     .order_by(models.Submission.submitted_at, models.Submission.id)
                 )
             )
-            overrides = {}
+            overrides: dict[str, models.BenchmarkAggregation] = {}
             if aggregation_ids is not None:
                 for aid in aggregation_ids:
                     item = session.get(models.BenchmarkAggregation, aid)
@@ -193,15 +208,19 @@ class ScoringDb:
                             "unknown aggregation or multiple aggregations for one source"
                         )
                     overrides[item.source_sha256] = item
-            result = []
+            result: list[ScoredSubmission] = []
             for row in rows:
+                # _scorable's measured_source_sha256 == source_sha256 filter excludes NULL.
+                assert row.source_sha256 is not None
                 aggregation = (
                     overrides.get(row.source_sha256)
                     if aggregation_ids is not None
                     else session.get(models.BenchmarkAggregation, row.aggregation_id)
                 )
-                if aggregation is None or (
-                    not preview and aggregation.calculator_version != CALCULATOR_VERSION
+                if (
+                    aggregation is None
+                    or aggregation.context is None
+                    or (not preview and aggregation.calculator_version != CALCULATOR_VERSION)
                 ):
                     continue
                 runs = list(
@@ -221,7 +240,7 @@ class ScoringDb:
                     continue  # Invalidated evidence removes the point, not only its payout.
                 # A formula change may alter only aggregation metadata. Corpus,
                 # timing definition and measurement protocol must still agree.
-                ignored = {"calculator", "compression", "speed"} if preview else set()
+                ignored: set[str] = {"calculator", "compression", "speed"} if preview else set()
                 stored_context = {
                     key: value for key, value in aggregation.context.items() if key not in ignored
                 }
@@ -234,7 +253,9 @@ class ScoringDb:
                     or aggregation.source_sha256 != row.source_sha256
                 ):
                     continue
-                if requested is not None and dict(context["corpora"]) != requested:
+                if requested is not None and (
+                    dict((pair[0], pair[1]) for pair in context["corpora"]) != requested
+                ):
                     continue
                 if any(
                     getattr(values, key) != getattr(aggregation, key)
