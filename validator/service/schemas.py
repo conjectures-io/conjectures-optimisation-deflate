@@ -44,6 +44,8 @@ class SubmissionView(BaseModel):
     bytes: int | None = None
     incumbent_bytes: int | None = None
     time_ratio: float | None = None
+    # Alpha this submission has received so far toward ALPHA_TOTAL_SUBMISSION_BOUNTY.
+    bounty_alpha: float | None = None
 
 
 class Ranking(BaseModel):
@@ -55,6 +57,7 @@ class Ranking(BaseModel):
     vs_incumbent: float | None = None
     time_ratio: float | None = None
     submitted_at: str
+    bounty_alpha: float | None = None
 
 
 class Leaderboard(BaseModel):
@@ -62,6 +65,8 @@ class Leaderboard(BaseModel):
     # Legacy field name: now a balanced scoring limit, not a benchmark limit.
     speed_floor: float
     max_ratio_pct: float
+    # The most alpha one submission is ever paid, and each ranked one's total so far.
+    bounty_limit_alpha: float | None = None
     ranking: list[Ranking]
 
 

@@ -175,6 +175,7 @@ subnet costs nothing.
 | the treasury gets everything | `WEIGHT_BURN_MODE` absent a burn uid, scoring failed (the `weight_sets` summary says), or nothing accepted yet: `just weights-preview` |
 | the API is up but refusing everything | `/ready` reports the store; `/health` only reports the process |
 | a miner disputes their weight | `just db-weights`, and `score_snapshots` for the epoch in question |
+| a miner's weight is 0 with `bounty-cap` | it has received, or would pass, `ALPHA_TOTAL_SUBMISSION_BOUNTY`: `SELECT submission_id, sum(alpha_rao)/1e9 FROM bounty_accruals GROUP BY 1;` and `bounty_caps` |
 
 Every API refusal carries a one-line reason and an `X-Request-Id`; the matching traceback
 is in the API log under the same id.
@@ -203,6 +204,8 @@ blocks or raises) when Axiom is slow or down. Module: `validator/observability/a
 | `competition-chain-watcher` | `registrations_recorded` | `count`, `initial_load`, `block`, `uids` |
 | `competition-chain-watcher` | `chain_read_failed` | `error`, `last_block` |
 | `competition-weight-setter` | `weights_set`, `weights_planned` (dry run), `weights_skipped`, `weights_failed` | `block`, `dry_run`, `burn_mode`, `uids`/`weights` (nonzero entries), `treasury_uid`, `treasury_share`, `competition_share`, `burn_uid`, `burn_share`, `miners`, `summary`, `error` |
+| `competition-weight-setter` | `bounty_recorded` | `epoch_block`, `credits`, `credited_alpha`, `miner_pool_alpha`: one epoch's emission credited to submissions |
+| `competition-weight-setter` | `bounty_capped` | `submission_id`, `hotkey`, `earned_alpha`, `projected_alpha`, `bounty_alpha`: a submission reached its bounty |
 | `competition-submission-api` | lifecycle and `log_error` only | |
 
 ## Seed and inspect the reference frontier

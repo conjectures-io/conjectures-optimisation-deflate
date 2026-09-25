@@ -335,6 +335,38 @@ weight-setting worker for a validator wallet, and do not also run conjectures-va
 retired emissions worker: this worker constructs the complete subnet vector.
 
 
+### The submission bounty
+
+Each (hotkey, submission) pair is paid at most `ALPHA_TOTAL_SUBMISSION_BOUNTY` alpha over
+its lifetime (default 3600, half a day of the subnet's total alpha), whatever its frontier
+position or incentive. Past that, its weight is 0 and its share goes to the treasury like
+any other unpaid allocation (`validator/scoring/bounty.py`).
+
+What a pair has received is read from the chain. Once per epoch the weight setter reads each
+uid's `Emission` (with its hotkey and coldkey) and credits it to the submissions this
+validator's accepted vector paid that hotkey for. It prefers the vector consensus actually
+read: the one set `RevealPeriodEpochs` before the epoch, under commit-reveal. A hotkey
+paid for several submissions splits by their weights. Emission to a hotkey this competition
+did not pay is not counted. Each epoch is recorded once (`bounty_epochs`), with its credits
+(`bounty_accruals`), so a restart never counts one twice. Only the latest epoch is readable,
+so while the weight setter is down the epochs that pass are not counted, and it logs the
+gap.
+
+At every scoring pass a payable pair is capped when what it has received plus its projected
+pay would exceed the bounty. The projection is the larger of its last credited epoch and
+what the new vector would pay it (its weight x the competition's share x the last epoch's
+miner pool), over one epoch plus the reveal delay, because a vector set now keeps paying
+until a later one is revealed. So a pair stops slightly short of the bounty rather than
+past it. A cap is permanent (`bounty_caps`): the pair's burn reason is `bounty-cap` in
+`score_snapshots`, and it stays capped after its observed rate falls to zero.
+
+Each pass publishes the totals in `weight_sets.api_snapshot["bounty"]`: the limit, and each
+pair's `earned_rao`/`earned_alpha` and `capped`. The platform API's submissions, Pareto and
+leaderboard endpoints read them from there; `/submissions/{id}` and `/leaderboard` on this
+service read the ledger directly. None of this touches a pinned file, so the verifier
+fingerprint is unchanged. Counting starts when migration 0012 is applied; alpha received
+before then is not in any total.
+
 ### Scoring boundaries and benchmark timeouts
 
 `SCORING_MAX_TIME_RATIO=10` and `SCORING_MAX_RATIO_PCT=40` are inclusive reward

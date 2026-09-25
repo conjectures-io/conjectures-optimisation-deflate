@@ -42,6 +42,10 @@ class HotkeyScore:
     normalized_time_ratio: float | None = None
     admission_check_id: int | None = None
     admission: dict[str, object] | None = None
+    # Alpha rao this pair had received when it was scored, and whether it has reached the
+    # submission bounty (`scoring.bounty`). None for a baseline, which is never paid.
+    bounty_rao: int | None = None
+    bounty_capped: bool = False
 
     @property
     def combined_weight(self) -> float:
@@ -53,6 +57,9 @@ class HotkeyScore:
         # Keep the historical snapshot time_s column in actual seconds.
         snapshot.pop("normalized_time_ratio")
         snapshot.pop("admission")
+        # Published in the pass's api_snapshot["bounty"]; a capped row's burn_reason says so.
+        snapshot.pop("bounty_rao")
+        snapshot.pop("bounty_capped")
         snapshot["combined_weight"] = self.combined_weight
         return snapshot
 

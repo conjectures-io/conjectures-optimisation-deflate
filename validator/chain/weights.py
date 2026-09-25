@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
-from .types import MetagraphView, PollState, SubnetParams
+from .types import EpochEmission, MetagraphView, PollState, SubnetParams
 
 
 @runtime_checkable
@@ -29,3 +29,11 @@ class WeightChain(Protocol):
     def metagraph(self, netuid: int) -> MetagraphView: ...
 
     def set_weights(self, netuid: int, uids: Sequence[int], weights: Sequence[float]) -> bool: ...
+
+    def last_epoch_block(self, netuid: int) -> int:
+        """The block of the subnet's most recent epoch; cheap enough to read every tick."""
+        ...
+
+    def epoch_emission(self, netuid: int) -> EpochEmission:
+        """Per-uid emission of the most recent epoch, with its keys, read at one block."""
+        ...

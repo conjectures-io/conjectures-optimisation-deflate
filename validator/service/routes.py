@@ -9,6 +9,7 @@ from loguru import logger
 
 import db
 from db import iso, models
+from scoring.bounty import RAO_PER_ALPHA, bounty_alpha_from_env
 from scoring.config import ScoringConfig
 
 from . import schemas, security, sig, storage
@@ -47,7 +48,13 @@ def _client(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def submission_view(row: models.Submission) -> schemas.SubmissionView:
+def alpha(rao: int | None) -> float | None:
+    return None if rao is None else rao / RAO_PER_ALPHA
+
+
+def submission_view(
+    row: models.Submission, bounty_rao: int | None = None
+) -> schemas.SubmissionView:
     return schemas.SubmissionView(
         id=row.id,
         hotkey=row.hotkey,
@@ -60,6 +67,7 @@ def submission_view(row: models.Submission) -> schemas.SubmissionView:
         bytes=row.bytes,
         incumbent_bytes=row.incumbent_bytes,
         time_ratio=row.time_ratio,
+        bounty_alpha=alpha(bounty_rao),
     )
 
 
@@ -169,10 +177,13 @@ async def submit(
 def submission(request: Request, sub_id: int) -> schemas.SubmissionView:
     # State, report and score of one submission. Public: a miner reads their own by id,
     # and the report is how they find out which stage refused them.
-    row = _store(request).submissions.get(sub_id)
+    store = _store(request)
+    row = store.submissions.get(sub_id)
     if row is None:
         raise HTTPException(404, {"reason": "no such submission"})
-    return submission_view(row)
+    # A baseline is never paid, so it has no bounty total to show.
+    earned = None if row.hotkey is None else store.bounty.totals([row.id]).get(row.id)
+    return submission_view(row, earned)
 
 
 @router.get("/leaderboard", response_model=schemas.Leaderboard)
@@ -181,10 +192,12 @@ def leaderboard(request: Request) -> schemas.Leaderboard:
     store = _store(request)
     rows = store.submissions.leaderboard()
     incumbent = store.submissions.latest_incumbent_bytes()
+    earned = store.bounty.totals(row.id for row in rows if row.hotkey is not None)
     return schemas.Leaderboard(
         incumbent_bytes=incumbent,
         speed_floor=ScoringConfig.from_env().speed_floor,
         max_ratio_pct=ScoringConfig.from_env().max_ratio_pct,
+        bounty_limit_alpha=bounty_alpha_from_env(),
         ranking=[
             schemas.Ranking(
                 rank=i + 1,
@@ -201,6 +214,7 @@ def leaderboard(request: Request) -> schemas.Leaderboard:
                 ),
                 time_ratio=row.time_ratio,
                 submitted_at=iso(row.submitted_at),
+                bounty_alpha=alpha(earned.get(row.id)),
             )
             for i, row in enumerate(rows)
         ],
