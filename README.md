@@ -10,7 +10,7 @@ stages. See [verification commands, supported Rust and database eligibility](doc
 - One command from a fresh clone to a passing self-test.
 
 ```bash
-git clone <this repo> && cd conjectures-miniz-oxide-competition
+git clone <this repo> && cd conjectures-optimisation-lz77
 ./setup.sh                      # apt packages, just, .venv, .env, Lean/Aeneas toolchain (~15 min, 9 GB); idempotent
 just check miner/template       # the whole gate, then the score, on the first incumbent
 just --list                     # everything else

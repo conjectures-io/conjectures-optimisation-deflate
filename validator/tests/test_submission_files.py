@@ -27,7 +27,7 @@ TEMPLATE = REPO / "miner/template"
 
 
 def _queue_through_the_platform(store, *, marker: str = "") -> int:
-    """What the platform API's miniz adapter writes: a queued row and both files.
+    """What the platform API's competition adapter writes: a queued row and both files.
 
     The digest is the real one: the gate refuses stored content that does not match the digest
     the submitter signed, which is the property that makes the database copy trustworthy.

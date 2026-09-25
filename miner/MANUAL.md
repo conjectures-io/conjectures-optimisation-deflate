@@ -9,7 +9,7 @@
 - Seven Rust rules and ten proof rules below. Every one was found by something failing. Every example in `miner/examples` and `miner/template` passes the gate; copy the closest one.
 
 ```bash
-git clone <repo> && cd conjectures-miniz-oxide-competition
+git clone <repo> && cd conjectures-optimisation-lz77
 ./setup.sh                                  # packages, just, .venv, .env, Lean and Aeneas toolchain
 cp -r miner/examples/lazy my-submission     # the incumbent's parser, with its proof
 just bench my-submission                    # bytes, time, verdict, seconds
