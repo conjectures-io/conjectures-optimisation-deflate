@@ -63,6 +63,39 @@ Upgrading from the old SQLite service: `just db-import-sqlite` once, before star
 anything. It will not invent the numbers the old schema never stored — see the script's
 `--help`.
 
+## Serving through the conjectures platform
+
+The public competition surface, `/v1/competitions/miniz-oxide/...` (what `miner/submit.py`
+talks to), is served by conjectures-validator's API straight from this database. The gate,
+the chain watcher and the weight setter stay here. The platform only queues submissions
+and reads what they publish. To wire it up:
+
+1. **Role.** Set `PLATFORM_API_PASSWORD` in `.env` and run `just db-grant-platform`. It
+   creates `platform_api` and grants exactly `deploy/db/platform_api.sql`: queue a
+   submission and its files, count the per-hotkey rate limit, read registrations, claims
+   and the published scoring. Re-run it after every `just db-migrate`, because it resets
+   the role to that file.
+2. **Network**, when both stacks share a host: set
+   `COMPOSE_FILE=compose.yaml:compose.platform.yaml` in `.env`, then run `just db-up`. The
+   database joins the platform's network, and its host port binds to loopback only.
+3. **Platform side**, in conjectures-validator's `.env`:
+
+       COMPETITIONS_ENABLED=1
+       COMPETITION_DATABASE_URL=postgresql+psycopg://platform_api:<password>@conjectures_miniz_db:5432/<POSTGRES_DB>
+       COMPETITION_SLUG=miniz-oxide
+
+   The platform refuses the whole surface (503 `COMPETITION_SCHEMA_UNAVAILABLE`) and fails
+   `/readyz` until this database is at migration 0011 or later, so migrate first.
+
+**After a verifier change**, the stored `verifier_fingerprint`s no longer match
+`just verification-fingerprint`, and scoring drops those submissions from the frontier.
+Re-stamp each accepted one before the next epoch: `just preverify-db ID`, then
+`just verify-lean-db ID`.
+
+**On a host that cannot reach the corpus repositories** (stage 2 is private), point
+`CORPUS_STAGE1_REMOTE` and `CORPUS_STAGE2_REMOTE` at local mirrors, then run
+`just corpus-pull`. The gate scores both corpora on every submission.
+
 ## One registration, one submission
 
 A hotkey with no registration on the subnet cannot submit. A hotkey with one unclaimed
