@@ -19,6 +19,7 @@ import scoring
 from bench.results import Rep, Run
 from scoring.combine import HotkeyScore
 from scoring.pareto import global_coefficients, local_coefficients
+from scoring.split import TREASURY_UID
 
 
 @dataclasses.dataclass
@@ -27,7 +28,7 @@ class Args:
     aggregation_id: list[int] | None = None
     out_dir: Path | None = None
     metagraph: Path | None = None
-    burn_uid: int = 0
+    burn_uid: int = TREASURY_UID
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -40,7 +41,9 @@ def main(argv: list[str] | None = None) -> None:
         type=Path,
         help="JSON hotkey-to-uid mapping; absent means provisional payments",
     )
-    ap.add_argument("--burn-uid", type=int, default=int(os.environ.get("WEIGHT_BURN_UID", "0")))
+    ap.add_argument(
+        "--burn-uid", type=int, default=int(os.environ.get("WEIGHT_BURN_UID", str(TREASURY_UID)))
+    )
     args = ap.parse_args(argv, namespace=Args())
     config = scoring.ScoringConfig.from_env()
     if args.method:

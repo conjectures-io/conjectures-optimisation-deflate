@@ -191,9 +191,10 @@ The weight setter is the validator's only `set_weights` caller and sets the whol
 (`validator/scoring/split.py`): the treasury takes 80% and the competition allocates up to
 20% by score. On netuid 66 the treasury uid (121) and the 20% are code constants; a
 `WEIGHT_TREASURY_UID` or `WEIGHT_COMPETITION_SHARE` that disagrees refuses to start. Off
-mainnet both are configurable (`WEIGHT_TREASURY_UID` defaults to `WEIGHT_BURN_UID`,
-`WEIGHT_COMPETITION_SHARE` to 0.20). `WEIGHT_COLLECTOR_UID` and `WEIGHT_COLLECTOR_HOTKEY`
-are accepted as older names for `WEIGHT_TREASURY_UID` and `WEIGHT_TREASURY_HOTKEY`.
+mainnet both are configurable (`WEIGHT_TREASURY_UID` defaults to `WEIGHT_BURN_UID`, itself
+121 by default; `WEIGHT_COMPETITION_SHARE` to 0.20). `WEIGHT_COLLECTOR_UID` and
+`WEIGHT_COLLECTOR_HOTKEY` are accepted as older names for `WEIGHT_TREASURY_UID` and
+`WEIGHT_TREASURY_HOTKEY`.
 
 Setting `WEIGHT_TREASURY_HOTKEY` to the treasury's registered SS58 hotkey guards against uid
 reassignment: an absent hotkey causes a recorded skip, with no fallback to a different
@@ -216,10 +217,11 @@ allocation. Historical `burn` labels in score reports mean unpaid competition al
 normal weight setting routes it to the treasury. No schema migration is required.
 
 `WEIGHT_DRY_RUN=1` remains the default. `WEIGHT_BURN_MODE=1` pauses the competition: its
-share goes to `WEIGHT_BURN_UID` (to the treasury if that uid is absent) and the treasury's
-share is paid as usual. Restart the weight setter after configuration changes. Run only one
-weight-setting worker for a validator wallet, and do not also run conjectures-validator's
-retired emissions worker: this worker constructs the complete subnet vector.
+share goes to `WEIGHT_BURN_UID` (default 121, the treasury itself; the treasury too if that
+uid is absent) and the treasury's share is paid as usual. Restart the weight setter after
+configuration changes. Run only one weight-setting worker for a validator wallet, and do not
+also run conjectures-validator's retired emissions worker: this worker constructs the
+complete subnet vector.
 
 
 ### Scoring boundaries and benchmark timeouts
