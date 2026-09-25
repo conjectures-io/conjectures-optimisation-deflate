@@ -222,7 +222,7 @@ db-up:
     docker compose up -d db
     printf 'waiting for postgres'
     for _ in $(seq 1 60); do
-        if docker exec conjectures_miniz_db pg_isready -q -U "${POSTGRES_USER:-conjectures}" -d "${POSTGRES_DB:-conjectures}" 2>/dev/null; then
+        if docker exec conjectures_lz77_db pg_isready -q -U "${POSTGRES_USER:-conjectures}" -d "${POSTGRES_DB:-conjectures}" 2>/dev/null; then
             printf ' ready\n'; exit 0
         fi
         printf '.'; sleep 1
@@ -245,7 +245,7 @@ db-migrate:
 db-grant-platform:
     #!/usr/bin/env bash
     set -euo pipefail
-    psql=(docker exec -i -e PLATFORM_API_PASSWORD conjectures_miniz_db
+    psql=(docker exec -i -e PLATFORM_API_PASSWORD conjectures_lz77_db
           psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-conjectures}" -d "${POSTGRES_DB:-conjectures}")
     if [ -n "${PLATFORM_API_PASSWORD:-}" ]; then
         "${psql[@]}" <<'SQL'
@@ -272,12 +272,12 @@ db-reset:
 
 # A psql shell on the validator's database.
 db-psql:
-    docker exec -it conjectures_miniz_db psql -U "${POSTGRES_USER:-conjectures}" -d "${POSTGRES_DB:-conjectures}"
+    docker exec -it conjectures_lz77_db psql -U "${POSTGRES_USER:-conjectures}" -d "${POSTGRES_DB:-conjectures}"
 
 # What the last weight vector paid, and why.
 db-weights:
     #!/usr/bin/env bash
-    docker exec -i conjectures_miniz_db psql -U "${POSTGRES_USER:-conjectures}" -d "${POSTGRES_DB:-conjectures}" <<'SQL'
+    docker exec -i conjectures_lz77_db psql -U "${POSTGRES_USER:-conjectures}" -d "${POSTGRES_DB:-conjectures}" <<'SQL'
     SELECT w.id, w.block, w.accepted, w.dry_run, w.summary, w.created_at
       FROM weight_sets w ORDER BY w.id DESC LIMIT 5;
     SELECT s.hotkey, s.on_frontier, round(s.pareto_weight::numeric, 5) AS pareto,

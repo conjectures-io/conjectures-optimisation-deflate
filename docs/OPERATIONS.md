@@ -47,6 +47,23 @@ just up
 `just up`/`just down`/`just status` recognise the old names, so `just up` alone never
 duplicates a process; it warns and leaves the old one running until it is deleted.
 
+The database moved with the rename too: compose project `conjectures-lz77`, container
+`conjectures_lz77_db`, volume `conjectures-lz77_pgdata`. A host that ran the old
+`conjectures-miniz` project would otherwise start an empty database beside its old one, so
+carry the data across once, with everything stopped (after the PM2 step above):
+
+```bash
+docker stop conjectures_miniz_db
+docker compose create db                  # the new container and its empty volume
+docker run --rm -v conjectures-miniz_pgdata:/from:ro -v conjectures-lz77_pgdata:/to \
+  alpine cp -a /from/. /to/
+docker rm conjectures_miniz_db            # the old volume stays until you delete it
+just db-up && just db-migrate && just db-grant-platform
+```
+
+The platform's `COMPETITION_DATABASE_URL` then names `conjectures_lz77_db`. Once the new
+database checks out, `docker volume rm conjectures-miniz_pgdata`.
+
 Or one at a time, in four shells: `just service`, `just service-worker`,
 `just chain-watcher`, `just weight-setter`.
 
@@ -96,7 +113,7 @@ and reads what they publish. To wire it up:
 3. **Platform side**, in conjectures-validator's `.env`:
 
        COMPETITIONS_ENABLED=1
-       COMPETITION_DATABASE_URL=postgresql+psycopg://platform_api:<password>@conjectures_miniz_db:5432/<POSTGRES_DB>
+       COMPETITION_DATABASE_URL=postgresql+psycopg://platform_api:<password>@conjectures_lz77_db:5432/<POSTGRES_DB>
        COMPETITION_SLUG=lz77
 
    The platform refuses the whole surface (503 `COMPETITION_SCHEMA_UNAVAILABLE`) and fails

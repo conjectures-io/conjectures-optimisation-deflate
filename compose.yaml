@@ -5,12 +5,12 @@
 #
 #   just db-up        postgres, healthy
 #   just db-migrate   alembic upgrade head
-name: conjectures-miniz
+name: conjectures-lz77
 
 services:
   db:
     image: postgres:17
-    container_name: conjectures_miniz_db
+    container_name: conjectures_lz77_db
     restart: unless-stopped
     env_file: .env
     environment:
@@ -48,7 +48,7 @@ services:
     build:
       context: .
       dockerfile: deploy/migrate/Dockerfile
-    container_name: conjectures_miniz_migrate
+    container_name: conjectures_lz77_migrate
     env_file: .env
     environment:
       # Inside the compose network the host is the service name, never localhost.
