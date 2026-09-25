@@ -56,6 +56,21 @@ def discover() -> dict[str, Path]:
     return found
 
 
+def toolchain_path() -> str:
+    """PATH as the gate resolves its tools: verifier/config.sh puts the repo's own elan,
+    and so `lake`, ahead of the operator's PATH. Setup installs Lean under
+    validator/.work, so checking the bare PATH refused to seed on a validator whose gate
+    runs fine."""
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1" >/dev/null 2>&1 && printf %s "$PATH"', "config"]
+        + [str(ROOT / "verifier/config.sh")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
 def identity(corpus: corpora.Corpus) -> CorpusIdentity:
     corpus.require()
     files = sorted(p for p in corpus.path.iterdir() if p.is_file())
@@ -226,8 +241,9 @@ def main(argv: list[str] | None = None) -> int:
     config = Config.from_env(ROOT)
     check(config)
     required_fingerprint()  # Reads the installed trusted translator binaries.
+    search = toolchain_path()
     for tool in ("lake", "rustc", "cargo"):
-        if shutil.which(tool) is None:
+        if shutil.which(tool, path=search) is None:
             ap.error(f"required tool is missing: {tool}")
     engine = create_db_engine()
     failures: list[str] = []

@@ -11,7 +11,8 @@ from typing import cast
 
 from tools.service_start import ROOT, SERVICES, Pm2Process, process_list, start_background
 
-WORKERS = ("service-worker", "chain-watcher", "weight-setter")
+# baseline-seed is a one-shot: it seeds miner/examples as the reference frontier and exits.
+WORKERS = ("baseline-seed", "service-worker", "chain-watcher", "weight-setter")
 
 
 def command(*args: str) -> int:

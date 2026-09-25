@@ -1,11 +1,12 @@
-// The validator under PM2: four processes, each doing one thing.
+// The validator under PM2: four processes, each doing one thing, and one one-shot.
 //
 //   submission-api   serves /submit, /submissions, /leaderboard
 //   gate-worker      drains the queue through the six-stage gate
 //   chain-watcher    streams subnet registrations into the store
 //   weight-setter    scores the round and sets weights, once an epoch
+//   baseline-seed    seeds miner/examples as the reference frontier, then exits
 //
-//   pm2 start pm2/service.config.js                      all four
+//   pm2 start pm2/service.config.js                      all of them
 //   pm2 start pm2/service.config.js --only miniz-oxide-gate-worker    one machine's gate only
 //
 // They are separate processes on purpose. The gate is a ~45 minute subprocess per
@@ -81,6 +82,19 @@ module.exports = {
       env,
       autorestart: true,
       max_restarts: 10,
+    },
+    {
+      // One-shot: without it the Pareto frontier has no reference points and a fresh
+      // validator scores miners against nothing. Incremental, so only the first start on a
+      // new validator is slow (about an hour); later starts reuse what is stored. It exits
+      // when done and is not restarted. BASELINE_SEED_ON_START=0 skips it.
+      name: "miniz-oxide-baseline-seed",
+      cwd,
+      script: python,
+      interpreter: "none",
+      args: "-m tools.seed_baselines",
+      env,
+      autorestart: false,
     },
   ],
 };
