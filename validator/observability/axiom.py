@@ -8,7 +8,7 @@ read both. That only works if every record has the platform's shape exactly:
      critical, "source": <process>, "event_type": <what happened>, "environ": AXIOM_ENVIRON}
 
 with the envelope written last, so a details key named `source` cannot displace the label every
-query filters on. Every event here also carries `competition: "miniz-oxide"` and, in the two
+query filters on. Every event here also carries `competition: "lz77"` and, in the two
 chain processes, `netuid` and `network`.
 
 Environment (the platform's names and meanings):
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 AXIOM_API_URL: Final = "https://api.axiom.co"
 DEFAULT_ENVIRON: Final = "default"
-COMPETITION: Final = "miniz-oxide"
+COMPETITION: Final = "lz77"
 
 # The platform's `Severity` values, verbatim: one ladder whichever side emitted the event.
 Severity: TypeAlias = Literal["debug", "info", "warning", "error", "critical"]
@@ -103,7 +103,7 @@ BATCH_EVENTS: Final = 100
 FLUSH_SECONDS: Final = 2.0
 TIMEOUT_SECONDS: Final = 10.0
 SHUTDOWN_SECONDS: Final = 5.0
-USER_AGENT: Final = "conjectures-miniz-oxide-axiom/1"
+USER_AGENT: Final = "conjectures-lz77-axiom/1"
 
 # A failed ingest is reported through loguru at WARNING: below the bridge's ERROR floor, so a
 # dead Axiom can never enqueue events about failing to enqueue events.

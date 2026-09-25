@@ -9,7 +9,14 @@ import subprocess
 import sys
 from typing import cast
 
-from tools.service_start import ROOT, SERVICES, Pm2Process, process_list, start_background
+from tools.service_start import (
+    ROOT,
+    SERVICES,
+    Pm2Process,
+    managed,
+    process_list,
+    start_background,
+)
 
 # baseline-seed is a one-shot: it seeds miner/examples as the reference frontier and exits.
 WORKERS = ("baseline-seed", "service-worker", "chain-watcher", "weight-setter")
@@ -28,22 +35,6 @@ def inspect() -> list[Pm2Process]:
     if result.returncode:
         raise ValueError("Cannot inspect PM2 processes")
     return process_list(result.stdout)
-
-
-def selected(processes: list[Pm2Process], service: str) -> list[Pm2Process]:
-    name, module = SERVICES[service]
-    return [
-        p
-        for p in processes
-        if p.get("name") == f"miniz-oxide-{name}"
-        or (
-            p.get("pm2_env", {}).get("pm_cwd") == str(ROOT / "validator")
-            and (
-                p.get("name") == name
-                or p.get("pm2_env", {}).get("args") in (["-m", module], f"-m {module}")
-            )
-        )
-    ]
 
 
 @dataclasses.dataclass
@@ -98,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             return command("docker", "compose", "stop", "db")
         if args.action == "status":
             for service in SERVICES:
-                matches = selected(processes, service)
+                matches = managed(processes, service)
                 if not matches:
                     print(f"{service}: not registered")
                 for process in matches:
@@ -125,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         paths: list[str] = []
         for service in [args.service] if args.service else SERVICES:
-            for process in selected(processes, service):
+            for process in managed(processes, service):
                 for key in ("pm_out_log_path", "pm_err_log_path"):
                     path = cast("str | None", process["pm2_env"].get(key))
                     if path and path not in paths:

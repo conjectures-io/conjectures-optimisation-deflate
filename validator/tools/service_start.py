@@ -22,6 +22,11 @@ SERVICES = {
     # One-shot: exits when the baselines are seeded; `just up` restarts it to re-check.
     "baseline-seed": ("baseline-seed", "tools.seed_baselines"),
 }
+# PM2 app names are `lz77-<name>`. Before the competition was renamed they were
+# `miniz-oxide-<name>`, and a host upgraded in place still runs those: they are matched too,
+# so `up` never starts a second weight setter beside one, and `down`/`status`/`logs` see them.
+PM2_PREFIX = "lz77-"
+LEGACY_PM2_PREFIXES = ("miniz-oxide-",)
 
 
 class Pm2Env(TypedDict, total=False):
@@ -66,6 +71,25 @@ def process_list(output: str) -> list[Pm2Process]:
     raise ValueError("missing complete PM2 process list")
 
 
+def managed(processes: list[Pm2Process], service: str) -> list[Pm2Process]:
+    """The PM2 entries that are `service`: by name, current or legacy, or by this checkout's
+    cwd and module, whatever they were named."""
+    name, module = SERVICES[service]
+    names = {prefix + name for prefix in (PM2_PREFIX, *LEGACY_PM2_PREFIXES)}
+    return [
+        p
+        for p in processes
+        if p.get("name") in names
+        or (
+            p.get("pm2_env", {}).get("pm_cwd") == str(ROOT / "validator")
+            and (
+                p.get("name") == name
+                or p.get("pm2_env", {}).get("args") in (["-m", module], f"-m {module}")
+            )
+        )
+    ]
+
+
 def start_background(service: str, *, stop: bool = False, restart: bool = False) -> int:
     pm2 = shutil.which("pm2")
     if pm2 is None:
@@ -75,8 +99,7 @@ def start_background(service: str, *, stop: bool = False, restart: bool = False)
             file=sys.stderr,
         )
         return 2
-    name, module = SERVICES[service]
-    managed_name = f"miniz-oxide-{name}"
+    managed_name = PM2_PREFIX + SERVICES[service][0]
     # Serialize duplicate checks and starts for concurrent invocations in this checkout.
     lock_dir = ROOT / "validator/.work"
     lock_dir.mkdir(parents=True, exist_ok=True)
@@ -89,19 +112,7 @@ def start_background(service: str, *, stop: bool = False, restart: bool = False)
             print("Cannot inspect PM2 processes; no service changed.", file=sys.stderr)
             return result.returncode
         try:
-            processes = process_list(result.stdout)
-            matches = [
-                p
-                for p in processes
-                if p.get("name") == managed_name
-                or (
-                    p.get("pm2_env", {}).get("pm_cwd") == str(ROOT / "validator")
-                    and (
-                        p.get("name") == name
-                        or p.get("pm2_env", {}).get("args") in (["-m", module], f"-m {module}")
-                    )
-                )
-            ]
+            matches = managed(process_list(result.stdout), service)
         except (ValueError, AttributeError, TypeError):
             print("Cannot parse PM2 process list; no service changed.", file=sys.stderr)
             return 2
@@ -133,6 +144,12 @@ def start_background(service: str, *, stop: bool = False, restart: bool = False)
                     "Use pm2 restart <id> to restart it.",
                     file=sys.stderr,
                 )
+                if process.get("name") != managed_name:
+                    print(
+                        f"  It predates the {managed_name} name; to adopt it, "
+                        f"`pm2 delete {process.get('pm_id')}` and start again.",
+                        file=sys.stderr,
+                    )
             return 0
         return subprocess.run(
             [pm2, "start", str(ROOT / "pm2/service.config.js"), "--only", managed_name],
