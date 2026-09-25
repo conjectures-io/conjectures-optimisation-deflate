@@ -23,7 +23,7 @@ sys.path.insert(0, str(VALIDATOR))
 import db as store_pkg  # noqa: E402
 import scoring  # noqa: E402
 from chain.schedule import blocks_until_next_epoch, should_set  # noqa: E402
-from chain.types import MetagraphView, PollState, SubnetParams  # noqa: E402
+from chain.types import EpochEmission, MetagraphView, PollState, SubnetParams  # noqa: E402
 from db import SubmissionState, models  # noqa: E402
 from scoring.split import COMPETITION_BPS, TREASURY_UID, split  # noqa: E402
 from workers.weight_setter import StepResult, TickLog, WeightSetterConfig, run, step  # noqa: E402
@@ -37,13 +37,22 @@ class FakeChain:
     """A chain that is always ready to take a vector, unless told otherwise."""
 
     def __init__(
-        self, *, uids=(0, 1, 2, TREASURY_UID), hotkeys=None, block=1000, since=1000, accept=True
+        self,
+        *,
+        uids=(0, 1, 2, TREASURY_UID),
+        hotkeys=None,
+        block=1000,
+        since=1000,
+        accept=True,
+        epoch: EpochEmission | None = None,
     ):
         self._uids = tuple(uids)
         self._hotkeys = hotkeys or {}
         self.block = block
         self.since = since
         self.accept = accept
+        # The latest epoch's emission, for the bounty ledger; none paid by default.
+        self.epoch = epoch or EpochEmission(0, block, 100, 0, ())
         self.submitted: list[tuple[list[int], list[float]]] = []
         self.param_calls = 0
 
@@ -63,6 +72,12 @@ class FakeChain:
     def set_weights(self, netuid, uids, weights) -> bool:
         self.submitted.append((list(uids), list(weights)))
         return self.accept
+
+    def last_epoch_block(self, netuid: int) -> int:
+        return self.epoch.epoch_block
+
+    def epoch_emission(self, netuid: int) -> EpochEmission:
+        return self.epoch
 
 
 PARAMS = SubnetParams(uid=9, tempo=100, weights_rate_limit=10)
@@ -505,7 +520,9 @@ def test_api_snapshot_captures_public_membership_without_changing_scores(store):
     result = step(chain, store, replace(CONFIG, dry_run=True), SCORING, PARAMS)
     assert chain.submitted == []
     assert result.scoring is not None
-    assert result.scoring.scores == expected.scores
+    # The bounty only adds its bookkeeping: nothing has been received, nothing capped.
+    assert [(s.bounty_rao, s.bounty_capped) for s in result.scoring.scores] == [(0, False)]
+    assert tuple(replace(s, bounty_rao=None) for s in result.scoring.scores) == expected.scores
     row = weight_sets(store)[0]
     payload = row.api_snapshot
     assert payload is not None
