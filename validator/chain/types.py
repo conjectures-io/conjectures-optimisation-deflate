@@ -96,3 +96,37 @@ class WeightPlan:
     submittable: bool
     skip_reason: str | None
     summary: str
+
+
+@dc.dataclass(frozen=True, slots=True)
+class NeuronEmission:
+    """What one uid was emitted in an epoch, in alpha rao, and who held it then."""
+
+    uid: int
+    hotkey: str
+    coldkey: str
+    emission_rao: int
+    incentive: float
+
+
+@dc.dataclass(frozen=True, slots=True)
+class EpochEmission:
+    """The subnet's most recent epoch, read at one block: what each uid received from it.
+
+    `epoch_block` is the chain's LastMechansimStepBlock, the epoch's identity. The bounty
+    ledger records each epoch once, so reading the same one on every tick is harmless.
+    `reveal_epochs` is 0 without commit-reveal: how many epochs a vector set now waits
+    before consensus reads it.
+    """
+
+    epoch_block: int
+    block: int
+    tempo: int
+    reveal_epochs: int
+    neurons: tuple[NeuronEmission, ...]
+
+    @property
+    def miner_pool_rao(self) -> int:
+        # What the epoch paid for incentive: the uids that earned any. A validator uid's
+        # dividends are in Emission too, but it has no incentive, so it is left out.
+        return sum(n.emission_rao for n in self.neurons if n.incentive > 0)

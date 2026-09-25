@@ -1,4 +1,4 @@
-"""The validator's store: one Postgres database, one Store, four repositories.
+"""The validator's store: one Postgres database, one Store, its repositories.
 
     from db import connect
     store = connect()
@@ -15,6 +15,7 @@ from typing import final
 
 from sqlalchemy import Engine, literal, select
 
+from .bounty import BountyDb
 from .clock import iso, now
 from .engine import create_db_engine, database_url, session_factory, session_scope
 from .ratelimit import RateLimiter
@@ -26,6 +27,7 @@ from .submissions import SubmissionsDb
 from .verification import VerificationDb
 
 __all__ = [
+    "BountyDb",
     "NoSlot",
     "PENDING",
     "RateLimiter",
@@ -65,6 +67,7 @@ class Store:
         self.verification = VerificationDb(self.sessions)
         self.registrations = RegistrationsDb(self.sessions)
         self.scoring = ScoringDb(self.sessions)
+        self.bounty = BountyDb(self.sessions)
         self.rate = RateLimiter(self.sessions, limit=rate_limit, window_seconds=rate_window_seconds)
 
     def ping(self) -> bool:

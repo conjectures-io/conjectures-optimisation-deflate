@@ -33,8 +33,10 @@ from .types import (
     ARCHIVE,
     FINNEY,
     ChainHead,
+    EpochEmission,
     MetagraphSnapshot,
     MetagraphView,
+    NeuronEmission,
     NeuronInfo,
     PollState,
     SubnetParams,
@@ -84,6 +86,7 @@ class _SdkMetagraph(Protocol):
     hotkeys: _SdkKeyVector
     coldkeys: _SdkKeyVector
     stake: _SdkFloatVector
+    incentive: _SdkFloatVector
 
 
 def _as_metagraph(meta: object) -> _SdkMetagraph:
@@ -282,3 +285,42 @@ class BittensorWeightChain:
                 f"[chain] set_weights rejected (error={response.error} message={response.message})"
             )
         return bool(response.success)
+
+    def _storage(self, name: str, netuid: int, block: int) -> object:
+        # `.value` is the decoded SCALE value; its type depends on the storage item.
+        return cast(
+            _HasScaleValue, self._subtensor.query_subtensor(name, block=block, params=[netuid])
+        ).value
+
+    def last_epoch_block(self, netuid: int) -> int:
+        # The pallet's own spelling of the storage item.
+        block = self.current_block()
+        return int(cast(SupportsInt, self._storage("LastMechansimStepBlock", netuid, block)))
+
+    def epoch_emission(self, netuid: int) -> EpochEmission:
+        # Everything from one block, so the epoch, its emission and the keys that received
+        # it cannot straddle an epoch boundary.
+        block = self.current_block()
+        epoch_block = int(cast(SupportsInt, self._storage("LastMechansimStepBlock", netuid, block)))
+        emission = cast(list[SupportsInt], self._storage("Emission", netuid, block) or [])
+        tempo = int(cast(SupportsInt, self._storage("Tempo", netuid, block) or 0))
+        reveal = bool(self._storage("CommitRevealWeightsEnabled", netuid, block))
+        period = int(cast(SupportsInt, self._storage("RevealPeriodEpochs", netuid, block) or 0))
+        meta = _as_metagraph(self._subtensor.metagraph(netuid=netuid, block=block))
+        count = min(meta.n.item(), len(emission))
+        return EpochEmission(
+            epoch_block=epoch_block,
+            block=block,
+            tempo=tempo,
+            reveal_epochs=period if reveal else 0,
+            neurons=tuple(
+                NeuronEmission(
+                    uid=int(meta.uids[i]),
+                    hotkey=str(meta.hotkeys[i]),
+                    coldkey=str(meta.coldkeys[i]),
+                    emission_rao=int(emission[int(meta.uids[i])]),
+                    incentive=float(meta.incentive[i]),
+                )
+                for i in range(count)
+            ),
+        )

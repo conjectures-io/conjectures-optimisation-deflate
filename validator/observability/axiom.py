@@ -89,6 +89,8 @@ EventType: TypeAlias = Literal[
     "weights_set",
     "weights_skipped",
     "weights_failed",
+    "bounty_recorded",
+    "bounty_capped",
     "log_error",
 ]
 

@@ -16,6 +16,10 @@ reconstructed from the validator's own records.
 Set `WEIGHT_DRY_RUN=1` to compute and record the vector without submitting it. That is
 the whole path except the last call, which is what makes it useful before a validator
 hotkey is registered.
+
+Each tick also keeps the submission bounty ledger (`scoring.bounty`): after every epoch it
+credits the alpha each paid hotkey received to the submission it was paid for, and scoring
+zeroes any submission that has received, or would pass, `ALPHA_TOTAL_SUBMISSION_BOUNTY`.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ from chain.types import (  # noqa: E402
 )
 from chain.weights import WeightChain  # noqa: E402
 from observability.axiom import EventType, Severity, config_error, get_events, init  # noqa: E402
+from scoring import bounty  # noqa: E402
 from scoring.split import (  # noqa: E402
     burn,
     competition_share_for,
@@ -97,6 +102,8 @@ class WeightSetterConfig:
     # Off mainnet only: the competition's fraction of the validator's weight (default 0.20).
     # On netuid 66 it is a code constant and a different value here refuses to start.
     competition_share_override: float | None = None
+    # The most alpha one (hotkey, submission) pair is ever paid; see `scoring.bounty`.
+    bounty_alpha: float = bounty.DEFAULT_BOUNTY_ALPHA
 
     def __post_init__(self) -> None:
         if self.burn_uid < 0:
@@ -111,6 +118,8 @@ class WeightSetterConfig:
             raise ValueError("set_margin must be >= 0")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
+        if not self.bounty_alpha > 0:
+            raise ValueError("ALPHA_TOTAL_SUBMISSION_BOUNTY must be positive")
 
     @property
     def treasury_uid(self) -> int:
@@ -139,6 +148,7 @@ class WeightSetterConfig:
             treasury_override=_aliased_int(env, "WEIGHT_TREASURY_UID", "WEIGHT_COLLECTOR_UID"),
             treasury_hotkey=_aliased(env, "WEIGHT_TREASURY_HOTKEY", "WEIGHT_COLLECTOR_HOTKEY"),
             competition_share_override=float(share) if share else None,
+            bounty_alpha=bounty.bounty_alpha_from_env(env),
         )
 
 
@@ -207,6 +217,7 @@ def plan_for(
                 "max_balanced_time_ratio": scoring_config.speed_floor,
                 "max_mean_file_compression_pct": scoring_config.max_ratio_pct,
                 "competition_share": share,
+                "alpha_total_submission_bounty": config.bounty_alpha,
                 "confidence_level": 0.95,
                 "bootstrap_draws": 2000,
             }
@@ -218,10 +229,77 @@ def plan_for(
         }
         result = scoring.score(points, points, scoring_config, eligible_hotkeys=eligible)
         result = replace(result, api_snapshot=snapshot)
+        result = apply_bounty(store, config, result, share)
     except Exception as exc:  # noqa: BLE001 - any scoring failure pays the treasury
         logger.exception(f"[weights] scoring failed; paying the treasury this epoch: {exc}")
         return split(None, meta, treasury_uid=treasury, reason=f"scoring failed: {exc}"), None
     return split(result.weights, meta, treasury_uid=treasury, competition_share=share), result
+
+
+def apply_bounty(
+    store: db.Store, config: WeightSetterConfig, result: scoring.Scoring, share: float
+) -> scoring.Scoring:
+    """Zero the submissions that have reached the bounty; their share goes to the treasury."""
+    ledgers = store.bounty.ledgers(s.submission_id for s in result.scores if s.hotkey)
+    result, caps = bounty.apply(
+        result,
+        ledgers,
+        bounty_alpha=config.bounty_alpha,
+        outlook=store.bounty.outlook(config.netuid),
+        competition_share=share,
+    )
+    bounty_rao = int(config.bounty_alpha * bounty.RAO_PER_ALPHA)
+    store.bounty.cap(caps, bounty_rao=bounty_rao)
+    if result.api_snapshot is not None:
+        # score_snapshots stays as it was; the read API takes the totals from here.
+        published = bounty.publication(result, bounty_alpha=config.bounty_alpha)
+        result = dc.replace(result, api_snapshot={**result.api_snapshot, "bounty": published})
+    for cap in caps:
+        logger.info(
+            f"[bounty] submission {cap.submission_id} ({cap.hotkey}) capped: earned "
+            f"{cap.earned_rao / bounty.RAO_PER_ALPHA:.3f} + projected "
+            f"{cap.projected_rao / bounty.RAO_PER_ALPHA:.3f} of {config.bounty_alpha:g} alpha"
+        )
+        get_events().info(
+            "bounty_capped",
+            submission_id=cap.submission_id,
+            hotkey=cap.hotkey,
+            earned_alpha=cap.earned_rao / bounty.RAO_PER_ALPHA,
+            projected_alpha=cap.projected_rao / bounty.RAO_PER_ALPHA,
+            bounty_alpha=config.bounty_alpha,
+        )
+    return result
+
+
+def accrue(chain: WeightChain, store: db.Store, config: WeightSetterConfig) -> int | None:
+    """Credit the latest epoch's emission once; the number of credits, or None if known."""
+    latest = chain.last_epoch_block(config.netuid)
+    known = store.bounty.latest_epoch(config.netuid)
+    if known is not None and latest <= known:
+        return None
+    epoch = chain.epoch_emission(config.netuid)
+    if known is not None and epoch.tempo > 0 and epoch.epoch_block - known > epoch.tempo + 1:
+        # Emission is only readable for the latest epoch; the ones in between are lost.
+        logger.warning(
+            f"[bounty] epochs between blocks {known} and {epoch.epoch_block} were not read; "
+            "their emission is not counted toward any bounty"
+        )
+    credits = store.bounty.record_epoch(config.netuid, epoch)
+    if credits is None:
+        return None
+    total = sum(c.alpha_rao for c in credits) / bounty.RAO_PER_ALPHA
+    logger.info(
+        f"[bounty] epoch {epoch.epoch_block}: credited {total:.3f} alpha to "
+        f"{len({c.submission_id for c in credits})} submission(s)"
+    )
+    get_events().info(
+        "bounty_recorded",
+        epoch_block=epoch.epoch_block,
+        credits=len(credits),
+        credited_alpha=total,
+        miner_pool_alpha=epoch.miner_pool_rao / bounty.RAO_PER_ALPHA,
+    )
+    return len(credits)
 
 
 def step(
@@ -233,6 +311,11 @@ def step(
 ) -> StepResult:
     """Score and persist first, then check whether chain submission is possible."""
     block = chain.current_block()
+    try:
+        accrue(chain, store, config)
+    except Exception as exc:  # noqa: BLE001 - a chain read must not stop scoring
+        # The epoch is read again next tick; only one that ends first is lost.
+        logger.warning(f"[bounty] epoch emission not recorded this tick: {exc}")
     meta = chain.metagraph(config.netuid)
     plan, result = plan_for(store, meta, config, scoring_config)
     weight_set_id = record(
