@@ -253,7 +253,7 @@ def meta(**hotkeys_by_uid) -> MetagraphView:
 
 def test_the_vector_covers_every_uid_and_sums_to_one():
     view = meta(u0="burn", u1="a", u2="b", u3="nobody")
-    plan = scoring.to_vector({"a": 0.6, "b": 0.4}, view)
+    plan = scoring.to_vector({"a": 0.6, "b": 0.4}, view, burn_uid=0)
     assert plan.submittable and plan.uids == (0, 1, 2, 3)
     assert sum(plan.weights) == pytest.approx(1.0)
     assert plan.weights == pytest.approx((0.0, 0.6, 0.4, 0.0))
@@ -262,14 +262,14 @@ def test_the_vector_covers_every_uid_and_sums_to_one():
 def test_a_deregistered_hotkeys_share_burns_rather_than_being_shared_out():
     # Redistributing it would quietly pay everyone else for someone else's work.
     view = meta(u0="burn", u1="a")
-    plan = scoring.to_vector({"a": 0.6, "gone": 0.4}, view)
+    plan = scoring.to_vector({"a": 0.6, "gone": 0.4}, view, burn_uid=0)
     assert plan.weights[view.uids.index(1)] == pytest.approx(0.6)
     assert plan.weights[view.uids.index(0)] == pytest.approx(0.4)
     assert "unregistered" in plan.summary
 
 
 def test_nobody_scored_means_everything_burns():
-    plan = scoring.to_vector({}, meta(u0="burn", u1="a"))
+    plan = scoring.to_vector({}, meta(u0="burn", u1="a"), burn_uid=0)
     assert plan.submittable and plan.weights == pytest.approx((1.0, 0.0))
 
 

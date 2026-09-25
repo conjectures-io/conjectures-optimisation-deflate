@@ -324,7 +324,7 @@ def test_a_dry_run_computes_and_records_but_never_submits(store):
 def test_burn_mode_pays_nobody_and_scores_nothing(store):
     accept(store, "alice", 2_100_000, 2.0)
     chain = FakeChain(hotkeys={"burn": 0, "alice": 1}, block=at_epoch_boundary(), since=1000)
-    config = WeightSetterConfig(netuid=NETUID, burn_mode=True, dry_run=False)
+    config = WeightSetterConfig(netuid=NETUID, burn_uid=0, burn_mode=True, dry_run=False)
     result = step(chain, store, config, SCORING, PARAMS)
     assert result.action == "set"
     uids, weights = chain.submitted[0]
@@ -457,11 +457,23 @@ def test_the_competition_share_on_mainnet_is_a_code_constant(monkeypatch):
 
 def test_burn_mode_without_a_burn_uid_pays_the_treasury(store):
     chain = FakeChain(uids=(1, TREASURY_UID), block=at_epoch_boundary(), since=1000)
-    config = WeightSetterConfig(netuid=NETUID, burn_mode=True, dry_run=False)
+    config = WeightSetterConfig(netuid=NETUID, burn_uid=0, burn_mode=True, dry_run=False)
     result = step(chain, store, config, SCORING, PARAMS)
     assert result.action == "set"
     assert chain.submitted[0][1] == [0.0, 1.0]
     assert "burn uid 0 absent" in (weight_sets(store)[0].summary or "")
+
+
+def test_the_burn_uid_defaults_to_the_treasury_so_burn_mode_pays_it_everything(store, monkeypatch):
+    monkeypatch.delenv("WEIGHT_BURN_UID", raising=False)
+    assert WeightSetterConfig().burn_uid == WeightSetterConfig.from_env().burn_uid == TREASURY_UID
+    accept(store, "alice", 2_100_000, 2.0)
+    chain = FakeChain(hotkeys={"zero": 0, "alice": 1}, block=at_epoch_boundary(), since=1000)
+    config = WeightSetterConfig(netuid=NETUID, burn_mode=True, dry_run=False)
+    assert step(chain, store, config, SCORING, PARAMS).action == "set"
+    uids, weights = chain.submitted[0]
+    assert weights[uids.index(TREASURY_UID)] == pytest.approx(1.0)
+    assert weights[uids.index(0)] == weights[uids.index(1)] == 0.0
 
 
 def test_a_pinned_treasury_hotkey_must_sit_at_the_treasury_uid_on_mainnet(store):

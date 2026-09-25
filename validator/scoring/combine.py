@@ -22,6 +22,7 @@ from .config import ScoringConfig
 from .eligibility import bounds_detail
 from .frontier import FrontierScore, score_frontier
 from .improvement import Improvement, decay_shares, score_improvements
+from .split import TREASURY_UID
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -179,7 +180,9 @@ def score(
     return Scoring(tuple(scores), frontier, tuple(improvements), eligible_hotkeys is not None)
 
 
-def to_vector(weights: dict[str, float], meta: MetagraphView, *, burn_uid: int = 0) -> WeightPlan:
+def to_vector(
+    weights: dict[str, float], meta: MetagraphView, *, burn_uid: int = TREASURY_UID
+) -> WeightPlan:
     """Map per-hotkey weights onto the metagraph's uids; burn whatever is unclaimed.
 
     A hotkey that has since deregistered has no uid, so its share cannot be paid to

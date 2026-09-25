@@ -51,6 +51,7 @@ from chain.weights import WeightChain  # noqa: E402
 from observability.axiom import EventType, Severity, config_error, get_events, init  # noqa: E402
 from scoring import bounty  # noqa: E402
 from scoring.split import (  # noqa: E402
+    TREASURY_UID,
     burn,
     competition_share_for,
     resolve_treasury,
@@ -79,8 +80,9 @@ class WeightSetterConfig:
     wallet_path: str = "~/.bittensor/wallets"
 
     # Burn mode's destination for the competition's share, and, off mainnet with no
-    # WEIGHT_TREASURY_UID, the treasury's. Never eligible for miner payment.
-    burn_uid: int = 0
+    # WEIGHT_TREASURY_UID, the treasury's. Never eligible for miner payment. Defaults to the
+    # treasury uid, so on netuid 66 burn mode pays the treasury the whole vector.
+    burn_uid: int = TREASURY_UID
     # Burn the competition's share, ignoring the scores; the treasury is still paid its share.
     # A deliberate, restart-toggled switch for a round that is paused or not yet open.
     burn_mode: bool = False
