@@ -21,9 +21,16 @@ just db-up                      # Postgres 17 from compose.yaml
 just db-migrate                 # the schema
 just corpus-pull                # the scoring corpora
 
-pm2 start pm2/service.config.js # all four processes
+pm2 start pm2/service.config.js # all four processes, and the baseline seed
 pm2 logs
 ```
+
+The fifth entry, `miniz-oxide-baseline-seed`, is a one-shot: it seeds `miner/template` and
+every example in `miner/examples` as operator baselines, the reference Pareto frontier
+miners are scored against, then exits. The first start on a fresh validator takes about
+an hour (each baseline is verified, then benchmarked on both corpora); later starts reuse
+what is stored and finish in seconds. Follow it with `pm2 logs miniz-oxide-baseline-seed`.
+`just up` starts it too. Set `BASELINE_SEED_ON_START=0` on a host that must not seed.
 
 Or one at a time, in four shells: `just service`, `just service-worker`,
 `just chain-watcher`, `just weight-setter`.
@@ -167,7 +174,8 @@ blocks or raises) when Axiom is slow or down. Module: `validator/observability/a
 
 ## Seed and inspect the reference frontier
 
-Apply the additive migrations, then seed the downloaded corpora:
+The validator seeds these on every start (`miniz-oxide-baseline-seed`, above). To seed by
+hand, apply the additive migrations, then seed the downloaded corpora:
 
 ```bash
 just db-migrate

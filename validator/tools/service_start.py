@@ -19,6 +19,8 @@ SERVICES = {
     "service-worker": ("gate-worker", "service.worker"),
     "chain-watcher": ("chain-watcher", "workers.chain_watcher"),
     "weight-setter": ("weight-setter", "workers.weight_setter"),
+    # One-shot: exits when the baselines are seeded; `just up` restarts it to re-check.
+    "baseline-seed": ("baseline-seed", "tools.seed_baselines"),
 }
 
 

@@ -25,6 +25,7 @@ def test_up_orders_database_before_workers(monkeypatch):
     assert calls == [
         ("just", "db-up"),
         ("just", "db-migrate"),
+        ("baseline-seed",),
         ("service-worker",),
         ("chain-watcher",),
         ("weight-setter",),
