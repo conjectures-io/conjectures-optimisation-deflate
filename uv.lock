@@ -505,7 +505,7 @@ wheels = [
 ]
 
 [[package]]
-name = "conjectures-miniz-oxide-competition"
+name = "conjectures-lz77-competition"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

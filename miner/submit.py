@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sig  # noqa: E402 - the platform's signing contract, pinned by test_miner_sig.py
 
 TIMEOUT = 60
-DEFAULT_COMPETITION = "miniz-oxide"
+DEFAULT_COMPETITION = "lz77"
 # The API caps a page at 100; asking for the most means the fewest round trips.
 PAGE = 100
 

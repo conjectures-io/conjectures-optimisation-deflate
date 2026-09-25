@@ -7,7 +7,7 @@
 //   baseline-seed    seeds miner/examples as the reference frontier, then exits
 //
 //   pm2 start pm2/service.config.js                      all of them
-//   pm2 start pm2/service.config.js --only miniz-oxide-gate-worker    one machine's gate only
+//   pm2 start pm2/service.config.js --only lz77-gate-worker    one machine's gate only
 //
 // They are separate processes on purpose. The gate is a ~45 minute subprocess per
 // submission; inside the API it pinned uvicorn to a single worker and took the API down
@@ -39,7 +39,7 @@ const cwd = path.join(root, "validator");
 module.exports = {
   apps: [
     {
-      name: "miniz-oxide-submission-api",
+      name: "lz77-submission-api",
       cwd,
       script: python,
       interpreter: "none",
@@ -49,7 +49,7 @@ module.exports = {
       max_restarts: 10,
     },
     {
-      name: "miniz-oxide-gate-worker",
+      name: "lz77-gate-worker",
       cwd,
       script: python,
       interpreter: "none",
@@ -64,7 +64,7 @@ module.exports = {
     },
     {
       // Without this, no hotkey has a registration and so nobody can submit at all.
-      name: "miniz-oxide-chain-watcher",
+      name: "lz77-chain-watcher",
       cwd,
       script: python,
       interpreter: "none",
@@ -74,7 +74,7 @@ module.exports = {
       max_restarts: 10,
     },
     {
-      name: "miniz-oxide-weight-setter",
+      name: "lz77-weight-setter",
       cwd,
       script: python,
       interpreter: "none",
@@ -88,7 +88,7 @@ module.exports = {
       // validator scores miners against nothing. Incremental, so only the first start on a
       // new validator is slow (about an hour); later starts reuse what is stored. It exits
       // when done and is not restarted. BASELINE_SEED_ON_START=0 skips it.
-      name: "miniz-oxide-baseline-seed",
+      name: "lz77-baseline-seed",
       cwd,
       script: python,
       interpreter: "none",

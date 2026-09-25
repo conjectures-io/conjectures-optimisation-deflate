@@ -1,4 +1,4 @@
-# conjectures-miniz-oxide-competition
+# conjectures-lz77-competition
 
 Verification now runs in private workspaces with separate static, Lean and benchmark
 stages. See [verification commands, supported Rust and database eligibility](docs/VERIFICATION.md).
@@ -62,7 +62,7 @@ python miner/submit.py leaderboard --url ...                            # every 
 ```
 
 Submissions go to the conjectures platform API (`--url` is its origin), which serves this
-competition at `/v1/competitions/miniz-oxide`. A submission is exactly two files, `parse.rs`
+competition at `/v1/competitions/lz77`. A submission is exactly two files, `parse.rs`
 and `Parse.lean`, signed with the hotkey over the competition, their hash, your address and
 the current time; the nine references above are complete,
 passing examples to start from. Submissions are verified as they arrive and the same files

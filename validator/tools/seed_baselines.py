@@ -1,6 +1,6 @@
 """Seed the operator baselines as the validator starts: the reference Pareto frontier.
 
-Runs as the one-shot PM2 process `miniz-oxide-baseline-seed`, which `pm2 start
+Runs as the one-shot PM2 process `lz77-baseline-seed`, which `pm2 start
 pm2/service.config.js` and `just up` start beside the long-running processes. Seeding is
 incremental (bench.baselines): on a fresh validator it verifies and benchmarks every
 complete example in miner/examples plus miner/template on both corpora, about an hour;
@@ -8,7 +8,7 @@ after that a start reuses what is stored and finishes in seconds, redoing only w
 changed verifier or corpus invalidated. It exits when done and PM2 does not restart it.
 
 `BASELINE_SEED_ON_START=0` turns it off, for a host that must never seed. A gate-only
-machine started with `--only miniz-oxide-gate-worker` never runs it, so one host seeds.
+machine started with `--only lz77-gate-worker` never runs it, so one host seeds.
 """
 
 from __future__ import annotations

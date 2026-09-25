@@ -51,9 +51,11 @@ def test_down_does_not_stop_database_after_worker_failure(monkeypatch):
 
 
 def test_logs_exclude_other_competitions(monkeypatch):
+    # `miniz-oxide-*` is this competition under its pre-rename name, so it is still ours.
     def inspect():
         return [
-            {"name": "miniz-oxide-gate-worker", "pm2_env": {"pm_out_log_path": "/tmp/ours"}},
+            {"name": "lz77-gate-worker", "pm2_env": {"pm_out_log_path": "/tmp/ours"}},
+            {"name": "miniz-oxide-weight-setter", "pm2_env": {"pm_out_log_path": "/tmp/old"}},
             {"name": "other-worker", "pm2_env": {"pm_out_log_path": "/tmp/theirs"}},
         ]
 
@@ -66,4 +68,4 @@ def test_logs_exclude_other_competitions(monkeypatch):
     monkeypatch.setattr(services, "inspect", inspect)
     monkeypatch.setattr(services, "command", command)
     assert services.main(["logs", "--no-follow"]) == 0
-    assert calls == [("tail", "-n", "100", "--", "/tmp/ours")]
+    assert calls == [("tail", "-n", "100", "--", "/tmp/ours", "/tmp/old")]
