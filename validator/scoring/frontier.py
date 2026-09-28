@@ -1,4 +1,4 @@
-"""The 60% share: turn accepted submissions into a frontier, and weigh it.
+"""The Pareto share: turn accepted submissions into a frontier, and weigh it.
 
 One point is one verified submission; payout ownership is applied after weighting. Everything
 below is pure -- it takes the rows the store already read and returns numbers -- so the

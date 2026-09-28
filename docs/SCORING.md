@@ -12,21 +12,25 @@ share, and the unpaid part goes to the treasury, not the burn uid (see "Treasury
 competition budget" at the end). If scoring fails the treasury is paid everything for that
 epoch rather than the epoch being skipped.
 
-Two components, on every accepted submission the validator holds.
+The competition's share is paid by one component: position on the Pareto frontier,
+weighted by how much that position actually buys (`SCORING_PARETO_SHARE=1.0`). A second
+component, recent improvement on the record, is implemented but switched off
+(`SCORING_IMPROVEMENT_SHARE=0.0`); it is described at the end of this page. Both are set in
+`.env.example`. Keep them set: when they are missing, `validator/scoring/config.py`, which
+is in the verifier pins, still falls back to its old 0.60/0.40 split.
 
-| share | what it pays for | why it exists |
-|---|---|---|
-| **60%** | position on the Pareto frontier, weighted by how much that position actually buys | the frontier is where the engineering is, and it stays paid for as long as it stands |
-| **40%** | the last ten improvements on the record, decaying, newest most | a field that stops improving stops collecting this, so the competition keeps moving |
+The published policy (`api_snapshot["policy"]`, which the platform serves at
+`/v1/competitions/deflate`) records the shares each scoring pass used, so the competition
+page follows what was actually paid.
 
-What neither claims burns. So does the share of a hotkey that has since deregistered:
+What the frontier does not claim burns. So does the share of a hotkey that has since deregistered:
 redistributing it would quietly pay everyone else for someone else's work.
 
 `just weights-preview` reads the database without chain writes. Without a supplied
 metagraph, miner payouts are labeled provisional; use `--metagraph hotkeys.json` with a
 hotkey-to-UID map for eligibility-aware results.
 
-## The 60%: the frontier
+## The frontier
 
 Each verified, accepted submission with a valid published aggregation is a point.
 All points are scored before checking payout eligibility. Baselines and deregistered
@@ -44,8 +48,8 @@ Each competitor is a point on two axes, both "lower is better":
 
 The Pareto frontier is the set of points nothing else beats on both axes at once. A
 dominated point — something both slower and larger than another submission — earns nothing
-from this component. There is no sense in which it bought anything. It can still earn from
-the other 40%, which is the point of having two.
+from this component. There is no sense in which it bought anything, and with the
+improvement component off it earns nothing at all.
 
 ### Which weight function, and why
 
@@ -89,7 +93,10 @@ Baseline allocations burn explicitly. With only baselines and no miner improveme
 all emission burns. These controls do not by themselves solve near-duplicate frontier
 manipulation; novelty thresholds remain a separate policy decision.
 
-## The 40%: recent improvement
+## Recent improvement (off)
+
+Paid only when `SCORING_IMPROVEMENT_SHARE` is above zero; the competition runs with it at 0.
+With it on, the Pareto share and this one split the competition's share between them.
 
 An accepted submission is an **improvement** when it beats the record by at least
 0.25%, relative.
@@ -106,14 +113,14 @@ An accepted submission is an **improvement** when it beats the record by at leas
   the record; it may still be a frontier point.
 - The threshold is a policy setting in `.env.example`.
 
-The last **ten** improvements share the 40%, decaying geometrically at 0.6, newest first:
+The last **ten** improvements share `SCORING_IMPROVEMENT_SHARE`, decaying geometrically at 0.6, newest first.
 
 A hotkey holding several of the last ten accumulates their shares: shipping three of the
 last ten advances is worth three slots, not one. Past ten, an improvement has been
 superseded often enough that rewarding it is the frontier's job, not recency's.
 
 If nothing has beaten the reference record yet, this share burns. There is no recent progress to
-reward, and spreading it over the frontier would quietly turn 60/40 into something else.
+reward, and spreading it over the frontier would quietly change the split.
 
 ## Cadence
 
@@ -308,7 +315,7 @@ there are no other payable miners. An empty or baseline-only round, or one whose
 raises, sends 100% to the treasury. The burn uid is never eligible for miner payment.
 
 `SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within** the
-competition budget (defaults 0.60/0.40). Set them to 1/0 for Pareto-only rewards. Score
+competition budget: 1/0 (Pareto only) in `.env.example`, 0.60/0.40 if unset. Score
 snapshots and weights-preview report competition-local fractions; the weight-set audit
 vector contains actual subnet fractions and its summary records the budget and treasury
 allocation. Historical `burn` labels in score reports mean unpaid competition allocation;

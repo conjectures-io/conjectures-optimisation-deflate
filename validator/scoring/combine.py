@@ -1,8 +1,8 @@
 """Both components, added, then turned into a uid-aligned weight vector.
 
-The split is the design: 60% of emission follows the Pareto frontier -- where the
-engineering is, and where it stays rewarded for as long as it stands -- and 40% follows
-recent improvement, decaying, so a field that stops moving stops collecting it.
+The Pareto frontier takes `pareto_share` -- where the engineering is, and where it stays
+rewarded for as long as it stands -- and recent improvement, decaying, takes
+`improvement_share`. The competition runs frontier only (1.0/0.0, `.env.example`).
 
 Everything here is pure. `score` takes rows the store read and returns numbers;
 `to_vector` takes those numbers and a view of the metagraph and returns the vector. The

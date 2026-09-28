@@ -1,4 +1,4 @@
-"""Scoring a round: 60% by Pareto position, 40% by recent improvement.
+"""Scoring a round: by Pareto position, plus optionally by recent improvement.
 
     from scoring import ScoringConfig, score, to_vector
 

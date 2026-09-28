@@ -1,4 +1,5 @@
-"""The 40% share: who has moved the record lately, newest most.
+"""The improvement share: who has moved the record lately, newest most. Off (0.0) in the
+competition's configuration; see docs/SCORING.md.
 
 The frontier alone would keep paying a field that has stopped improving -- a knee stays
 a knee forever. This component is the part of emission that only exists while the
@@ -8,7 +9,7 @@ than becoming an annuity.
 An improvement is measured on the balanced compression ratio: lower wins.
 Legacy standalone callers without aggregation metrics retain byte comparisons.
 A submission that is merely faster at the same
-size does not move the record -- it may well be a new frontier point, and the other 60%
+size does not move the record -- it may well be a new frontier point, and the Pareto share
 is where it is paid for that.
 """
 
@@ -113,8 +114,8 @@ def score_improvements(
 
     With no improvements at all -- an empty round, or one where nothing has beaten the
     incumbent yet -- this pays nobody and the share burns. That is deliberate: there is
-    no recent progress to reward, and spreading it over the frontier would quietly turn
-    the 60/40 split into something else.
+    no recent progress to reward, and spreading it over the frontier would quietly change
+    the split.
     """
     events = improvement_events(history, config.improvement_threshold)
     recent = list(reversed(events))[: config.improvement_window]

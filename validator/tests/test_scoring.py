@@ -1,4 +1,4 @@
-"""The 60/40 rule: what each component pays, and what neither does.
+"""The scoring rule: what each component pays, and what neither does.
 
 All pure. Points and improvement events are built directly rather than through a database,
 because the rule is arithmetic and the arithmetic is what is worth pinning down.
@@ -205,6 +205,26 @@ def test_a_round_with_no_improvement_burns_the_share():
 
 
 # ── Both together ─────────────────────────────────────────────────────────
+
+
+def _env_example() -> dict[str, str]:
+    lines = (VALIDATOR.parent / ".env.example").read_text().splitlines()
+    return dict(line.split("=", 1) for line in lines if line.startswith("SCORING_"))
+
+
+def test_the_shipped_configuration_pays_the_frontier_only():
+    # What the platform publishes as the policy is this configuration, so the competition
+    # page says frontier-only exactly when the example does.
+    config = scoring.ScoringConfig.from_env(_env_example())
+    assert (config.pareto_share, config.improvement_share) == (1.0, 0.0)
+
+
+def test_frontier_only_pays_all_of_the_share_and_nothing_for_improvements():
+    config = scoring.ScoringConfig.from_env(_env_example())
+    best = [sub("a", 2_100_000, 2.0, sid=1), sub("b", 2_200_000, 0.5, sid=2)]
+    result = scoring.score(best, best, config)
+    assert sum(result.weights.values()) == pytest.approx(1.0)
+    assert all(s.improvement_weight == 0 for s in result.scores)
 
 
 def test_the_two_components_add_to_one_when_both_have_something_to_pay():
