@@ -58,6 +58,7 @@ METHOD_ORDER = [
     "hc-d4",
     "hc-sparse",
     "hash-chains",
+    "hc-scan-end",
     "hc-d64",
     "lazy",
     "mo-lazy",

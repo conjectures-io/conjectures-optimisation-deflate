@@ -14,6 +14,7 @@ COLORS = {
     "hc-d4": "#7fb3ff",
     "hc-sparse": "#aec7e8",
     "hash-chains": "#ff7f0e",
+    "hc-scan-end": "#ffbb78",
     "hc-d64": "#c96a00",
     "lazy": "#2ca02c",
     "mo-lazy": "#8c564b",
