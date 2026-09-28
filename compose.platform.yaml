@@ -1,6 +1,6 @@
 # Opt-in, for a host that also runs the conjectures platform's API stack: attach this
 # database to that stack's network, so its API container reaches it as
-# conjectures_lz77_db:5432 (docs/OPERATIONS.md, "Serving through the conjectures
+# conjectures_deflate_db:5432 (docs/OPERATIONS.md, "Serving through the conjectures
 # platform"). Enable it in .env, which `docker compose` and every `just db-*` recipe read:
 #
 #   COMPOSE_FILE=compose.yaml:compose.platform.yaml

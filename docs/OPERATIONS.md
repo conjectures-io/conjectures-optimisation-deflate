@@ -46,6 +46,25 @@ pm2 save
 `just up`/`just down`/`just status` recognise the old names, so `just up` alone never
 duplicates a process; it warns and leaves the old one running until it is deleted.
 
+The database stack was renamed with it: compose project `conjectures-deflate`, containers
+`conjectures_deflate_db` and `conjectures_deflate_migrate`, volume `conjectures-deflate_pgdata`.
+A host that ran the old `conjectures-lz77` (or `conjectures-miniz`) project would otherwise
+start an empty database beside the old one, which still holds the port. Either reseed (the
+baseline seed rebuilds the reference frontier, about an hour; miner submissions are lost), or
+carry the data across once, with every PM2 process stopped:
+
+```bash
+docker stop conjectures_lz77_db           # or conjectures_miniz_db
+docker compose create db                  # the new container and its empty volume
+docker run --rm -v conjectures-lz77_pgdata:/from:ro -v conjectures-deflate_pgdata:/to \
+  alpine cp -a /from/. /to/
+docker rm conjectures_lz77_db             # the old volume stays until you delete it
+just db-up && just db-migrate && just db-grant-platform
+```
+
+The platform's `COMPETITION_DATABASE_URL` then names `conjectures_deflate_db`. Once the new
+database checks out, `docker volume rm conjectures-lz77_pgdata`.
+
 Or one at a time, in four shells: `just service`, `just service-worker`,
 `just chain-watcher`, `just weight-setter`.
 
@@ -94,7 +113,7 @@ and reads what they publish. To wire it up:
 3. **Platform side**, in conjectures-validator's `.env`:
 
        COMPETITIONS_ENABLED=1
-       COMPETITION_DATABASE_URL=postgresql+psycopg://platform_api:<password>@conjectures_lz77_db:5432/<POSTGRES_DB>
+       COMPETITION_DATABASE_URL=postgresql+psycopg://platform_api:<password>@conjectures_deflate_db:5432/<POSTGRES_DB>
        COMPETITION_SLUG=deflate
 
    The platform refuses the whole surface (503 `COMPETITION_SCHEMA_UNAVAILABLE`) and fails
