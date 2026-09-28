@@ -19,7 +19,7 @@ just corpus-pull
 cp -r miner/template my-submission
 just bench my-submission
 VERIFY_CORPUS=corpus-stage1 just check my-submission
-python miner/submit.py submit my-submission --hotkey <hotkey file> --url https://<api>
+python miner/submit.py submit my-submission --hotkey <hotkey file>
 ```
 
 ## 1. Set up
@@ -226,12 +226,13 @@ hard-coded proof edit. Inspect the actual gate output before submitting.
 Activate the virtual environment first if this is a new shell: `source .venv/bin/activate`.
 
 ```bash
-python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url https://<api>
-python miner/submit.py status <id> --url ...         # the stage report, bytes, time ratio, minutes later
-python miner/submit.py leaderboard --url ...         # every hotkey's best accepted submission, ranked
+python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h>
+python miner/submit.py status <id>         # the stage report, bytes, time ratio, minutes later
+python miner/submit.py leaderboard         # every hotkey's best accepted submission, ranked
 ```
 
-`--url` is the conjectures platform API's origin; it serves every competition, and this one at `/v1/competitions/deflate` (`--competition` picks another). The two files are signed with your hotkey over the competition, their hash, your address and the current time, so a signature for one competition cannot be replayed against another; the platform refuses a timestamp more than five minutes from its own clock, so keep your clock right. Submissions are verified as they arrive; the same files twice return the same id.
+`--url` overrides the default conjectures platform API origin,
+`https://conjectures.io`; it serves every competition, and this one at `/v1/competitions/deflate` (`--competition` picks another). The two files are signed with your hotkey over the competition, their hash, your address and the current time, so a signature for one competition cannot be replayed against another; the platform refuses a timestamp more than five minutes from its own clock, so keep your clock right. Submissions are verified as they arrive; the same files twice return the same id.
 
 **Submitting costs one registration on the subnet.** Register, submit, and the slot is spent when the gate accepts. A rejection costs nothing, so fix the proof and resubmit on the same registration; `submit` prints how many slots you have left.
 
