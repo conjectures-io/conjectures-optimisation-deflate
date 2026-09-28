@@ -47,7 +47,7 @@
   "sandbox/__init__.py": "33fedd1220d771d1567e26a57fc5701c795070bf3759aa7d2da330a5c5d0030b",
   "sandbox/bwrap.py": "ba35cd059a2d9ceda03aa7edca35370d0380d3849d14d7513f758476017470bb",
   "scoring/admission.py": "eb1a5dd8c3b356153150da0b2ec5879b6489de5e81965889ac4bdea9f4e298fc",
-  "scoring/config.py": "ea0868c6db9ca3dc3a5f7c7d1c4cfde0e05529e425a0d774521ea024c9f7d23e",
+  "scoring/config.py": "090986cb0e908d57f1b4faf31f26d242a04328c58c8e6aba425e680630659607",
   "scoring/eligibility.py": "5183807efe062ff77e55ecb9febcf22908fee5fa1e3c1028253fef81321bacb0",
   "service/worker.py": "57a396f462abc26496345e07926aad6402b8e637823d96e05b3dfab371f78144",
   "slot/Cargo.lock": "f4c9796598e1278b7b283f1f5661542de091b04dd0135471a5a2525330d1f286",

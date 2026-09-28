@@ -16,8 +16,7 @@ The competition's share is paid by one component: position on the Pareto frontie
 weighted by how much that position actually buys (`SCORING_PARETO_SHARE=1.0`). A second
 component, recent improvement on the record, is implemented but switched off
 (`SCORING_IMPROVEMENT_SHARE=0.0`); it is described at the end of this page. Both are set in
-`.env.example`. Keep them set: when they are missing, `validator/scoring/config.py`, which
-is in the verifier pins, still falls back to its old 0.60/0.40 split.
+`.env.example`, and the defaults in `validator/scoring/config.py` are the same.
 
 The published policy (`api_snapshot["policy"]`, which the platform serves at
 `/v1/competitions/deflate`) records the shares each scoring pass used, so the competition
@@ -315,7 +314,7 @@ there are no other payable miners. An empty or baseline-only round, or one whose
 raises, sends 100% to the treasury. The burn uid is never eligible for miner payment.
 
 `SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within** the
-competition budget: 1/0 (Pareto only) in `.env.example`, 0.60/0.40 if unset. Score
+competition budget: 1/0 (Pareto only) by default. Score
 snapshots and weights-preview report competition-local fractions; the weight-set audit
 vector contains actual subnet fractions and its summary records the budget and treasury
 allocation. Historical `burn` labels in score reports mean unpaid competition allocation;

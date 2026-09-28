@@ -42,6 +42,8 @@ def sub(hotkey, byte_count, seconds, *, minutes=0, incumbent=INCUMBENT_BYTES, si
 
 
 CONFIG = scoring.ScoringConfig()
+# The improvement component is off by default; these tests turn it on to exercise it.
+WITH_RECENCY = scoring.ScoringConfig(pareto_share=0.5, improvement_share=0.5)
 
 
 # ── Configuration refuses nonsense ────────────────────────────────────────
@@ -73,7 +75,7 @@ def test_the_environment_is_read_strictly():
         scoring.ScoringConfig.from_env({"SCORING_PARETO_SHARE": "most of it"})
 
 
-# ── The 60%: the frontier ─────────────────────────────────────────────────
+# ── The frontier ─────────────────────────────────────────────────────
 
 
 def test_the_frontier_share_sums_to_the_pareto_share():
@@ -112,7 +114,7 @@ def test_an_empty_round_pays_nobody_from_the_frontier():
     assert result.weights == {} and result.frontier == ()
 
 
-# ── The 40%: recent improvement ───────────────────────────────────────────
+# ── Recent improvement (off by default) ───────────────────────────────────────────────
 
 
 def test_only_a_submission_that_beats_the_record_counts():
@@ -170,8 +172,8 @@ def test_the_newest_improvement_is_paid_most():
         sub("old", 2_100_000, 0.5, minutes=0),
         sub("new", 2_000_000, 0.5, minutes=10),
     ]
-    weights, events = scoring.score_improvements(history, CONFIG)
-    assert sum(weights.values()) == pytest.approx(CONFIG.improvement_share)
+    weights, events = scoring.score_improvements(history, WITH_RECENCY)
+    assert sum(weights.values()) == pytest.approx(WITH_RECENCY.improvement_share)
     assert weights["new"] > weights["old"]
     assert [e.hotkey for e in events] == ["new", "old"]
 
@@ -191,15 +193,15 @@ def test_several_improvements_from_one_hotkey_accumulate():
         sub("a", 2_000_000, 0.5, minutes=10, sid=2),
         sub("b", 1_900_000, 0.5, minutes=20, sid=3),
     ]
-    weights, _ = scoring.score_improvements(history, CONFIG)
+    weights, _ = scoring.score_improvements(history, WITH_RECENCY)
     # Three events, two of them a's: a holds two decaying slots to b's one.
-    assert sum(weights.values()) == pytest.approx(CONFIG.improvement_share)
+    assert sum(weights.values()) == pytest.approx(WITH_RECENCY.improvement_share)
     assert weights["a"] > 0 and weights["b"] > 0
 
 
 def test_a_round_with_no_improvement_burns_the_share():
     # Nothing has beaten the incumbent, so there is no recent progress to reward, and
-    # spreading it over the frontier would quietly turn 60/40 into something else.
+    # spreading it over the frontier would quietly change the split.
     weights, events = scoring.score_improvements([sub("a", INCUMBENT_BYTES + 1, 0.5)], CONFIG)
     assert weights == {} and events == []
 
@@ -229,7 +231,7 @@ def test_frontier_only_pays_all_of_the_share_and_nothing_for_improvements():
 
 def test_the_two_components_add_to_one_when_both_have_something_to_pay():
     best = [sub("a", 2_100_000, 2.0, sid=1), sub("b", 2_200_000, 0.5, sid=2)]
-    result = scoring.score(best, best, CONFIG)
+    result = scoring.score(best, best, WITH_RECENCY)
     assert sum(result.weights.values()) == pytest.approx(1.0)
     by_hotkey = {s.hotkey: s for s in result.scores}
     assert by_hotkey["a"].pareto_weight + by_hotkey["a"].improvement_weight == pytest.approx(
@@ -242,7 +244,7 @@ def test_a_hotkey_can_earn_from_recency_without_being_on_the_frontier():
     # the most recent real improvement in bytes.
     best = [sub("fast", 2_150_000, 0.25, sid=1), sub("late", 2_100_000, 3.0, sid=2, minutes=10)]
     history = [best[0], best[1]]
-    result = scoring.score(best, history, CONFIG)
+    result = scoring.score(best, history, WITH_RECENCY)
     late = next(s for s in result.scores if s.hotkey == "late")
     assert late.improvement_weight > 0
     assert late.combined_weight > 0

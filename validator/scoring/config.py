@@ -32,20 +32,19 @@ def _int(env: Mapping[str, str], key: str, default: int) -> int:
 
 @dc.dataclass(frozen=True, slots=True)
 class ScoringConfig:
-    """The 60/40 rule and its knobs.
+    """The scoring rule and its knobs.
 
-    Sixty per cent goes to the Pareto frontier, weighted by how much each point actually
-    buys. Forty goes to whoever has moved the record recently, newest most. The split is
-    the whole design: the frontier alone pays a field that has stopped improving, and
-    recency alone pays whoever shipped last however marginal it was.
+    All of the competition's share goes to the Pareto frontier, weighted by how much each
+    point actually buys. The recent-improvement component -- paying whoever moved the record
+    lately, newest most -- is implemented but off by default; give it a share to turn it on.
     """
 
     # Frontier-relative local/global trade-off quality; see docs/SCORING.md.
     method: str = DEFAULT_METHOD
     # Emission split. They need not sum to 1: whatever is left over burns, which is how
     # an operator dials the whole competition down without changing anything else.
-    pareto_share: float = 0.60
-    improvement_share: float = 0.40
+    pareto_share: float = 1.0
+    improvement_share: float = 0.0
 
     # How many recent improvements are paid at all. Past this, an improvement has been
     # superseded often enough that it is the frontier's job to reward it, not recency's.
