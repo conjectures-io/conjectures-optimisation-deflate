@@ -126,7 +126,9 @@ reward, and spreading it over the frontier would quietly change the split.
 Once per epoch, a margin of 12 blocks before the boundary, and only when the chain's
 weights rate limit allows. Setting late means the vector lands just before consensus reads
 it, so it reflects the newest scores; setting early wastes the window and risks the rate
-limit blocking the one that would have mattered.
+limit blocking the one that would have mattered. The boundary is the chain's own: the
+subnet's last epoch block (`LastMechansimStepBlock`) plus the tempo, read every tick, not a
+formula from the netuid, which on finney ran 85-91 blocks late (`validator/chain/schedule.py`).
 
 Every attempt — set, skipped, or refused by the chain — writes a `weight_sets` row with a
 `score_snapshots` row per competitor beside it, in one transaction. `just db-weights`

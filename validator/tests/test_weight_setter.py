@@ -11,6 +11,7 @@ store is real, because the audit trail is half of what this worker is for.
 from __future__ import annotations
 
 import sys
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -45,12 +46,15 @@ class FakeChain:
         since=1000,
         accept=True,
         epoch: EpochEmission | None = None,
+        last_epoch: int = 0,
     ):
         self._uids = tuple(uids)
         self._hotkeys = hotkeys or {}
         self.block = block
         self.since = since
         self.accept = accept
+        # The subnet's last epoch block as poll() reports it: the schedule's anchor.
+        self.last_epoch = last_epoch
         # The latest epoch's emission, for the bounty ledger; none paid by default.
         self.epoch = epoch or EpochEmission(0, block, 100, 0, ())
         self.submitted: list[tuple[list[int], list[float]]] = []
@@ -64,7 +68,11 @@ class FakeChain:
         return SubnetParams(uid=9, tempo=100, weights_rate_limit=10)
 
     def poll(self, netuid: int, uid: int) -> PollState:
-        return PollState(current_block=self.block, blocks_since_last_update=self.since)
+        return PollState(
+            current_block=self.block,
+            blocks_since_last_update=self.since,
+            last_epoch_block=self.last_epoch,
+        )
 
     def metagraph(self, netuid: int) -> MetagraphView:
         return MetagraphView(uids=self._uids, uid_by_hotkey=dict(self._hotkeys))
@@ -85,11 +93,11 @@ CONFIG = WeightSetterConfig(netuid=NETUID, burn_uid=0, dry_run=False)
 SCORING = scoring.ScoringConfig()
 
 
-def at_epoch_boundary(tempo: int = 100, netuid: int = NETUID, margin: int = 12) -> int:
-    # The first block at which should_set would proceed, found rather than assumed: the
-    # boundary is offset by the netuid and getting it wrong here would hide a real bug.
+def at_epoch_boundary(tempo: int = 100, last_epoch: int = 0, margin: int = 12) -> int:
+    # The first block at which should_set would proceed, found rather than assumed, for the
+    # FakeChain's default epoch anchor.
     for block in range(1, 10_000):
-        if blocks_until_next_epoch(block, tempo, netuid) <= margin:
+        if blocks_until_next_epoch(block, tempo, last_epoch) <= margin:
             return block
     raise AssertionError("no block inside the margin")
 
@@ -191,21 +199,54 @@ def test_a_wait_names_the_block_it_will_try_again_at(store):
     # waits for the margin before the next boundary.
     assert result.next_try_block is not None
     assert result.next_try_block >= chain.block + 10
-    assert blocks_until_next_epoch(result.next_try_block, 100, NETUID) <= CONFIG.set_margin
+    until = blocks_until_next_epoch(result.next_try_block, 100, chain.last_epoch)
+    assert until <= CONFIG.set_margin
 
 
 def test_the_cadence_is_pure_arithmetic():
     decision = should_set(
         current_block=at_epoch_boundary(),
         tempo=100,
-        netuid=NETUID,
+        last_epoch_block=0,
         blocks_since_last_update=1000,
         weights_rate_limit=10,
         set_margin=12,
     )
     assert decision.proceed and decision.rate_off_blocks == 0
     # A degenerate tempo means every block is a boundary, not a division by zero.
-    assert blocks_until_next_epoch(1234, 0, NETUID) == 0
+    assert blocks_until_next_epoch(1234, 0, 0) == 0
+
+
+# SN66 on finney, read from the chain on 2026-09-28: LastMechansimStepBlock went 9168521,
+# 9168881, 9169241 (every 360 blocks, tempo 360), and get_next_epoch_start_block said 9169601.
+SN66_TEMPO = 360
+SN66_EPOCH = 9169241
+
+
+def test_the_next_epoch_is_the_chains_last_one_plus_tempo():
+    assert blocks_until_next_epoch(SN66_EPOCH, SN66_TEMPO, SN66_EPOCH) == SN66_TEMPO
+    assert blocks_until_next_epoch(9169589, SN66_TEMPO, SN66_EPOCH) == 12
+    assert blocks_until_next_epoch(9169600, SN66_TEMPO, SN66_EPOCH) == 1
+    # Past the next epoch (an anchor read a little late) it keeps the same 360-block rhythm.
+    assert blocks_until_next_epoch(9169601 + 5, SN66_TEMPO, SN66_EPOCH) == SN66_TEMPO - 5
+
+
+def test_the_vector_is_set_just_before_the_real_epoch_not_the_netuid_formula():
+    decide = partial(
+        should_set,
+        tempo=SN66_TEMPO,
+        last_epoch_block=SN66_EPOCH,
+        blocks_since_last_update=1000,
+        weights_rate_limit=100,
+        set_margin=12,
+    )
+    # 12 blocks before the epoch the chain actually runs: set.
+    assert decide(current_block=9169589).proceed
+    # Where the old netuid-offset formula set (block 9169320, "12 before 9169332"): 281 blocks
+    # early, so the vector sat most of an hour before consensus read it. Not any more.
+    early = decide(current_block=9169320)
+    assert not early.proceed and early.epoch_blocks == 281
+    assert early.next_try_block == 9169589
 
 
 # ── Setting ───────────────────────────────────────────────────────────────

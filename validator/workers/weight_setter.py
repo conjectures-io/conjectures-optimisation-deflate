@@ -352,7 +352,7 @@ def step(
     decision = should_set(
         current_block=poll.current_block,
         tempo=params.tempo,
-        netuid=config.netuid,
+        last_epoch_block=poll.last_epoch_block,
         blocks_since_last_update=poll.blocks_since_last_update,
         weights_rate_limit=params.weights_rate_limit,
         set_margin=config.set_margin,

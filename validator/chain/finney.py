@@ -259,8 +259,12 @@ class BittensorWeightChain:
     def poll(self, netuid: int, uid: int) -> PollState:
         block = int(self._subtensor.get_current_block())
         since = self._subtensor.blocks_since_last_update(netuid, uid, block=block)
+        # The epoch's real schedule, not one derived from the netuid: see chain.schedule.
+        epoch = int(cast(SupportsInt, self._storage("LastMechansimStepBlock", netuid, block)))
         return PollState(
-            current_block=block, blocks_since_last_update=int(since) if since is not None else 0
+            current_block=block,
+            blocks_since_last_update=int(since) if since is not None else 0,
+            last_epoch_block=epoch,
         )
 
     def metagraph(self, netuid: int) -> MetagraphView:
