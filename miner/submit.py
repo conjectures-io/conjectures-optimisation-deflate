@@ -1,13 +1,14 @@
 """Miner client: submit a parser and its proof, read the score, read the leaderboard.
 
 Talks to conjectures-validator, which serves every competition from one API under
-`/v1/competitions/{slug}`. `--url` is that API's origin; `--competition` picks the
-competition and defaults to this one. Activate the project environment first with
+`/v1/competitions/{slug}`. `--url` overrides the default API origin;
+`--competition` picks the competition and defaults to this one. Activate the
+project environment first with
 `source .venv/bin/activate`.
 
-python miner/submit.py submit my-submission --hotkey <file> --url https://api.host
-python miner/submit.py status <submission id> --url …
-python miner/submit.py leaderboard --url …
+python miner/submit.py submit my-submission --hotkey <file>
+python miner/submit.py status <submission id>
+python miner/submit.py leaderboard
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import sig  # noqa: E402 - the platform's signing contract, pinned by test_miner
 
 TIMEOUT = 60
 DEFAULT_COMPETITION = "deflate"
+DEFAULT_URL = "https://conjectures.io"
 # The API caps a page at 100; asking for the most means the fewest round trips.
 PAGE = 100
 
@@ -286,7 +288,7 @@ def main() -> None:
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
-            "--url", required=True, help="the platform API's origin, e.g. https://api.host"
+            "--url", default=DEFAULT_URL, help=f"platform API origin (default: {DEFAULT_URL})"
         )
         p.add_argument(
             "--competition",

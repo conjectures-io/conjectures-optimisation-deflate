@@ -40,14 +40,15 @@ use `just extract my-submission` to inspect the extracted Lean model and
 
 ## Submit
 
-The submission client requires the platform API origin and a Bittensor hotkey.
-In a new shell, run `source .venv/bin/activate` first:
+The submission client uses `https://conjectures.io` by default and requires a
+Bittensor hotkey to submit. In a new shell, run `source .venv/bin/activate` first:
 
 ```bash
-python miner/submit.py submit my-submission --hotkey <hotkey-file> --url <api-origin>
-python miner/submit.py status <submission-id> --url <api-origin>
-python miner/submit.py leaderboard --url <api-origin>
+python miner/submit.py submit my-submission --hotkey <hotkey-file>
+python miner/submit.py status <submission-id>
+python miner/submit.py leaderboard
 ```
 
-The client signs the submission. See `python miner/submit.py --help` and the
+Pass `--url <api-origin>` to any command to use another deployment. The client
+signs the submission. See `python miner/submit.py --help` and the
 [proof manual](../miner/MANUAL.md) for requirements and failure diagnosis.

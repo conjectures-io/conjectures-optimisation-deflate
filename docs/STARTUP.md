@@ -162,9 +162,10 @@ The optional baseline name defaults to the source directory name.
 
 ### Frozen baseline admission order
 
-`examples-slow-to-fast-v2` uses the scored, incumbent-normalized speed order
+`examples-slow-to-fast-v3` uses the scored, incumbent-normalized speed order
 observed on 2026-09-24: optimal-iter, optimal, mo-lazy, lazy, hc-d64, no-lz77,
-hash-chains, hc-d4, template. This order is fixed, never dynamically sorted from
+hash-chains, hc-scan-end, hc-d4, template. hc-scan-end was added on 2026-09-28 at
+its DEV gate time. This order is fixed, never dynamically sorted from
 new timings. Admission compares each qualifying candidate to its selected slower
 admitted neighbor; the initial point needs no comparison. Later candidates can
 still dominate previously admitted points. Miner submissions remain chronological.
