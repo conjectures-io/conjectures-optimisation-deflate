@@ -1,4 +1,4 @@
-# conjectures-lz77-competition - one entry point for both sides; toolchain paths from validator/verifier/config.sh.
+# conjectures-deflate-competition - one entry point for both sides; toolchain paths from validator/verifier/config.sh.
 
 set dotenv-load := true
 

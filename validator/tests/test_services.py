@@ -54,7 +54,7 @@ def test_logs_exclude_other_competitions(monkeypatch):
     # `miniz-oxide-*` is this competition under its pre-rename name, so it is still ours.
     def inspect():
         return [
-            {"name": "lz77-gate-worker", "pm2_env": {"pm_out_log_path": "/tmp/ours"}},
+            {"name": "deflate-gate-worker", "pm2_env": {"pm_out_log_path": "/tmp/ours"}},
             {"name": "miniz-oxide-weight-setter", "pm2_env": {"pm_out_log_path": "/tmp/old"}},
             {"name": "other-worker", "pm2_env": {"pm_out_log_path": "/tmp/theirs"}},
         ]

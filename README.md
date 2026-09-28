@@ -1,4 +1,4 @@
-# LZ77 competition
+# DEFLATE competition
 
 Build a Rust LZ77 parser for DEFLATE and prove in Lean that its tokens decode to the
 original input. The validator checks the proof, runs the parser in an isolated

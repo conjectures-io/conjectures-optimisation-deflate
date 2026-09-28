@@ -25,11 +25,26 @@ pm2 start pm2/service.config.js # all four processes, and the baseline seed
 pm2 logs
 ```
 
-The fifth entry, `lz77-baseline-seed`, is a one-shot: it seeds `miner/template` and
+The fifth entry, `deflate-baseline-seed`, is a one-shot: it seeds `miner/template` and
 every example in `miner/examples` as operator baselines, the reference Pareto frontier
 miners are scored against, then exits. The initial seed verifies and benchmarks examples on the configured corpora.
-Follow it with `pm2 logs lz77-baseline-seed`.
+Follow it with `pm2 logs deflate-baseline-seed`.
 `just up` starts it too. Set `BASELINE_SEED_ON_START=0` on a host that must not seed.
+
+**Upgrading a host that ran the `lz77-*` (or `miniz-oxide-*`) names.** The competition was
+renamed to `deflate`, and with it the PM2 apps. PM2 treats a new name as a new app, so
+`pm2 start pm2/service.config.js` on such a host starts a second set beside the first -- two
+weight setters for one hotkey. Delete the old ones first:
+
+```bash
+pm2 delete lz77-gate-worker lz77-chain-watcher lz77-weight-setter \
+  lz77-baseline-seed lz77-submission-api   # whichever `pm2 ls` shows
+just up
+pm2 save
+```
+
+`just up`/`just down`/`just status` recognise the old names, so `just up` alone never
+duplicates a process; it warns and leaves the old one running until it is deleted.
 
 Or one at a time, in four shells: `just service`, `just service-worker`,
 `just chain-watcher`, `just weight-setter`.
@@ -63,7 +78,7 @@ anything. It will not invent the numbers the old schema never stored — see the
 
 ## Serving through the conjectures platform
 
-The public competition surface, `/v1/competitions/lz77/...` (what `miner/submit.py`
+The public competition surface, `/v1/competitions/deflate/...` (what `miner/submit.py`
 talks to), is served by conjectures-validator's API straight from this database. The gate,
 the chain watcher and the weight setter stay here. The platform only queues submissions
 and reads what they publish. To wire it up:
@@ -80,7 +95,7 @@ and reads what they publish. To wire it up:
 
        COMPETITIONS_ENABLED=1
        COMPETITION_DATABASE_URL=postgresql+psycopg://platform_api:<password>@conjectures_lz77_db:5432/<POSTGRES_DB>
-       COMPETITION_SLUG=lz77
+       COMPETITION_SLUG=deflate
 
    The platform refuses the whole surface (503 `COMPETITION_SCHEMA_UNAVAILABLE`) and fails
    `/readyz` until this database is at migration 0011 or later, so migrate first.
@@ -185,7 +200,7 @@ and restart the four processes; with either unset nothing is sent and nothing ch
 records use the conjectures platform's envelope exactly -- `_time` (UTC, stamped at emit),
 `severity` (`debug`/`info`/`warning`/`error`/`critical`), `source`, `event_type`, `environ` --
 so they can share the platform's dataset and dashboards. Every event also carries
-`competition: "lz77"`, and the chain watcher's and weight setter's carry `netuid` and
+`competition: "deflate"`, and the chain watcher's and weight setter's carry `netuid` and
 `network`. Ingestion is batched on a background thread, flushed at exit, and drops (never
 blocks or raises) when Axiom is slow or down. Module: `validator/observability/axiom.py`.
 
@@ -208,7 +223,7 @@ blocks or raises) when Axiom is slow or down. Module: `validator/observability/a
 
 ## Seed and inspect the reference frontier
 
-The validator seeds these on every start (`lz77-baseline-seed`, above). To seed by
+The validator seeds these on every start (`deflate-baseline-seed`, above). To seed by
 hand, apply the additive migrations, then seed the downloaded corpora:
 
 ```bash

@@ -42,7 +42,7 @@ def test_existing_service_is_not_started(monkeypatch, tmp_path, capsys, status, 
             + json.dumps(
                 [
                     {
-                        "name": "lz77-gate-worker",
+                        "name": "deflate-gate-worker",
                         "pm_id": 7,
                         "pm2_env": {"status": status},
                     }
@@ -82,7 +82,7 @@ def test_start_requires_successful_inspection(monkeypatch, tmp_path, output, cod
     assert len(calls) == expected_calls
     if expected_calls == 2:
         assert result == 0
-        assert calls[-1][-2:] == ["--only", "lz77-gate-worker"]
+        assert calls[-1][-2:] == ["--only", "deflate-gate-worker"]
     else:
         assert result != 0
 
@@ -93,7 +93,7 @@ def test_stop_only_selected_service(monkeypatch, tmp_path, present):
     monkeypatch.setattr(shutil, "which", installed_pm2)
     processes = [{"name": "unrelated", "pm_id": 9, "pm2_env": {}}]
     if present:
-        processes.append({"name": "lz77-gate-worker", "pm_id": 7, "pm2_env": {}})
+        processes.append({"name": "deflate-gate-worker", "pm_id": 7, "pm2_env": {}})
     calls = []
 
     def run(args, **kwargs):
@@ -121,7 +121,7 @@ def test_background_resumes_existing_entry(monkeypatch, tmp_path, status):
             json.dumps(
                 [
                     {
-                        "name": "lz77-gate-worker",
+                        "name": "deflate-gate-worker",
                         "pm_id": 7,
                         "pm2_env": {"status": status},
                     }
@@ -136,15 +136,17 @@ def test_background_resumes_existing_entry(monkeypatch, tmp_path, status):
 
 
 @pytest.mark.parametrize("status", ["online", "launching"])
+@pytest.mark.parametrize("old_name", ["lz77-weight-setter", "miniz-oxide-weight-setter"])
 def test_a_process_under_its_pre_rename_name_is_not_duplicated(
-    monkeypatch, tmp_path, capsys, status
+    monkeypatch, tmp_path, capsys, status, old_name
 ):
-    # A host upgraded in place still runs `miniz-oxide-weight-setter`, possibly from another
-    # checkout path; starting `lz77-weight-setter` beside it would set weights twice.
+    # A host upgraded in place still runs `lz77-weight-setter` (or `miniz-oxide-...`), possibly
+    # from another checkout path; starting `deflate-weight-setter` beside it would set weights
+    # twice.
     monkeypatch.setattr(service_start, "ROOT", tmp_path)
     monkeypatch.setattr(shutil, "which", installed_pm2)
     calls = []
-    legacy = [{"name": "miniz-oxide-weight-setter", "pm_id": 3, "pm2_env": {"status": status}}]
+    legacy = [{"name": old_name, "pm_id": 3, "pm2_env": {"status": status}}]
 
     def run(args, **kwargs):
         calls.append(args)
