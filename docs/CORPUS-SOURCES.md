@@ -6,10 +6,10 @@ Everything `data/benchmark/corpus-stage1/` and `corpus-stage2/` are cut from.
 the category map in that same script, and the byte counts recorded while the
 pools are built -- so it reflects what was actually downloaded and actually
 used, not what someone remembered to write down. Re-run
-`just corpus-build --stage 1 --repool` to refresh it.
+`.venv/bin/python scripts/make-benchmark-corpus.py --stage 1 --repool` to refresh it.
 
 Nobody redistributes the pool itself: `data/benchmark/sources/` is gitignored
-and each machine fetches its own with `just corpus-sources`. What is published
+and each machine fetches its own with `scripts/fetch-corpus-sources.sh`. What is published
 is `corpus-stage1/`, in its own repository, and it contains slices of the
 material below -- all of it permissively licensed or public domain. Attribution
 is the table at the end. This is preliminary work: a record of what each project

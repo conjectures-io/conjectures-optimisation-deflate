@@ -1,34 +1,9 @@
 # Validator startup configuration
 
-Code defaults and `.env.example` define the initial operating settings. `just` loads
-`.env`; PM2 also loads it through `pm2/service.config.js`. Setup creates `.env` only
-when absent: existing overrides are preserved, so review old values when upgrading.
-Credentials and existing local configuration are never reset by these defaults.
-
-| Setting | Default |
-| --- | --- |
-| Scoring method | `local-global-improvement-space-log` |
-| Pareto / recent improvement shares | 0.60 / 0.40 |
-| Improvement window / threshold / decay | 10 / 0.0025 / 0.6 |
-| Scoring limits | Balanced slowdown ≤ 10×; mean file compressed/original size ≤ 40% |
-| Aggregated speed | Equal corpus/file mean of median total-time ratios to incumbent |
-| Aggregated compression | Equal corpus/file mean of compressed/raw bytes |
-| Admission | 2000 bootstrap draws; one-sided 95% lower gain bound strictly above zero |
-| Benchmark repetitions / warmups | 11 / 1 |
-| External reference compressors | Off |
-| Benchmark timeout / memory / build memory | 300 s / 2048 MB / 4096 MB |
-| Sandbox | bubblewrap; systemd user limits |
-| Weight setting | Dry-run; `WEIGHT_DRY_RUN=0` explicitly enables chain writes. The only `set_weights` caller on the validator: in dry-run, nothing sets weights |
-| Treasury / competition split | 80% to treasury uid 121 / 20% by score (code constants) |
-| Burn UID / burn-only mode | 0 (burn mode only; unpaid competition allocation goes to the treasury) / off |
-| Network / subnet | finney / 66 |
-| API | 0.0.0.0:9200 |
-
-The recency threshold applies to the separate recent-improvement component; it is
-not a minimum compression gain for Pareto admission. Admission confidence and the
-aggregation formulas are versioned code policy, not environment settings.
-`weights-preview` uses the same scoring configuration and burn UID as the weight
-setter; without a metagraph its payout eligibility remains provisional.
+`./setup.sh` creates `.env` from `.env.example` only when it is absent. `just`
+loads `.env`; PM2 loads it through `pm2/service.config.js`. Review existing
+overrides when upgrading. Use `.env.example` and the implementation for current
+defaults. Scoring policy is explained in [scoring](SCORING.md).
 
 ## Machine-specific prerequisites
 
@@ -40,10 +15,24 @@ setter; without a metagraph its payout eligibility remains provisional.
   reads the chain and requires the validator identity; `just weights-preview` does not.
 - Fetch required corpora with `just corpus-pull`. Private corpus access must be
   configured locally. Never put corpus generation secrets in public configuration.
-- Use the systemd user session setup in the README so sandbox memory limits work.
+- Use the systemd user session setup below so sandbox memory limits work.
   Choose `VERIFY_BENCH_CPUS` for the actual host; there is no portable fixed CPU ID.
 - Keep `SERVICE_STALE_CLAIM_SECONDS` greater than `VERIFY_TOTAL_TIMEOUT` (defaults
   7200 and 2700 seconds). A separate scorer needs the required verification fingerprint.
+
+### Systemd user limits
+
+The benchmark sandbox uses `systemd-run --user --scope` for resource limits.
+Check that the user manager is available and that a scope can start:
+
+```bash
+systemctl --user status
+systemd-run --user --scope -p MemoryMax=2048M true
+```
+
+If the user bus is unavailable, start a user session or enable lingering for the
+validator account. Set `VERIFY_BENCH_CPUS` only to CPU IDs available on the host.
+Validator benchmarks require the resource-limit probe to succeed.
 
 ## Gate corpora
 
@@ -184,64 +173,4 @@ plots with `just weights-preview`. Historical replay records decisions but does
 not refresh verification or enable live scoring. Future order changes require a
 version bump and explicit replay.
 
-
-## Treasury and competition budget
-
-The weight setter is the validator's only `set_weights` caller and sets the whole vector
-(`validator/scoring/split.py`): the treasury takes 80% and the competition allocates up to
-20% by score. On netuid 66 the treasury uid (121) and the 20% are code constants; a
-`WEIGHT_TREASURY_UID` or `WEIGHT_COMPETITION_SHARE` that disagrees refuses to start. Off
-mainnet both are configurable (`WEIGHT_TREASURY_UID` defaults to `WEIGHT_BURN_UID`, itself
-121 by default; `WEIGHT_COMPETITION_SHARE` to 0.20). `WEIGHT_COLLECTOR_UID` and
-`WEIGHT_COLLECTOR_HOTKEY` are accepted as older names for `WEIGHT_TREASURY_UID` and
-`WEIGHT_TREASURY_HOTKEY`.
-
-Setting `WEIGHT_TREASURY_HOTKEY` to the treasury's registered SS58 hotkey guards against uid
-reassignment: an absent hotkey causes a recorded skip, with no fallback to a different
-recipient. Off mainnet it also locates the treasury uid and follows it if it changes; on
-netuid 66 it must sit at uid 121, or the epoch is skipped. A treasury uid absent from the
-metagraph is likewise a recorded skip.
-
-Scoring and speed admission still include baselines in the frontier. Miner scores are
-multiplied by the competition's share without renormalization. Baseline, deregistered,
-duplicate-hotkey and otherwise unpaid allocations go to the treasury. For example, a miner
-allocated 25% of the competition budget receives 5% overall; the treasury receives 95% if
-there are no other payable miners. An empty or baseline-only round, or one whose scoring
-raises, sends 100% to the treasury. The burn uid is never eligible for miner payment.
-
-`SCORING_PARETO_SHARE` and `SCORING_IMPROVEMENT_SHARE` remain fractions **within** the
-competition budget (defaults 0.60/0.40). Set them to 1/0 for Pareto-only rewards. Score
-snapshots and weights-preview report competition-local fractions; the weight-set audit
-vector contains actual subnet fractions and its summary records the budget and treasury
-allocation. Historical `burn` labels in score reports mean unpaid competition allocation;
-normal weight setting routes it to the treasury. No schema migration is required.
-
-`WEIGHT_DRY_RUN=1` remains the default. `WEIGHT_BURN_MODE=1` pauses the competition: its
-share goes to `WEIGHT_BURN_UID` (default 121, the treasury itself; the treasury too if that
-uid is absent) and the treasury's share is paid as usual. Restart the weight setter after
-configuration changes. Run only one weight-setting worker for a validator wallet, and do not
-also run conjectures-validator's retired emissions worker: this worker constructs the
-complete subnet vector.
-
-
-### Scoring boundaries and benchmark timeouts
-
-`SCORING_MAX_TIME_RATIO=10` and `SCORING_MAX_RATIO_PCT=40` are inclusive reward
-eligibility limits. Both use equal-corpus averages of per-file ratios. Points
-outside either limit remain stored but are excluded before Pareto construction,
-statistical neighbor selection, and both Pareto and improvement rewards. Admission
-records contain outcome `excluded`, reason `outside-scoring-bounds`, and structured
-`scoring_bounds` values, limits, and violations. Baselines use the same policy.
-
-These replace the old 8x summed-time acceptance rule. Successful benchmarks and
-aggregations are retained regardless of scoring bounds. `VERIFY_BENCH_TIMEOUT=300`
-remains the wall-clock cap per build/measurement process; a measurement includes
-one corpus and all repetitions. `VERIFY_TOTAL_TIMEOUT=2700` caps the worker gate.
-The deprecated benchmark `--speed-floor` option is metadata only.
-
-Apply migration 0010 with `just db-migrate`. Changed scoring bounds invalidate old
-admission decisions: use `just admission-replay` for current verified evidence, or
-`just admission-replay --historical` for an operator's historical baseline replay.
-`just weights-preview` recalculates historical decisions without rebenchmarking.
-Restart workers after changing environment settings. `SCORING_SPEED_FLOOR` remains
-an alias for the scoring time limit; the new setting takes precedence.
+For reward limits, treasury allocation, and benchmark eligibility, see [scoring](SCORING.md).

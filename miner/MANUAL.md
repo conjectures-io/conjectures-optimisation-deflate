@@ -1,19 +1,23 @@
-# Mining the LZ77 slot - the one manual
+# Proof manual for the LZ77 parser
+
+Start with the [miner guide](../docs/MINER.md) for the workflow and the
+[competition page](https://conjectures.io/competitions/deflate) for current
+rules and official metrics. This manual covers the parser contract and proof.
 
 ## Quick Summary
 
-- You write one Rust file, the whole LZ77 parsing stage, and one Lean file, a proof that its tokens decode back to the input. The gate accepts any proven parser inside 8x of the incumbent's time, larger ones included; emission then pays 60% for your position on the speed/ratio frontier and 40% for byte improvements over the record.
-- Setup is one command from a fresh clone and about 15 minutes. Measure before proving: `just bench` gives bytes, time and the verdict in seconds; `just check` runs the real seven-stage gate; `just probe` shows a stuck proof's goal.
+- You write one Rust file for the LZ77 parsing stage and one Lean file proving that its tokens decode back to the input. Benchmarking, admission, and rewards are separate steps; see [scoring](../docs/SCORING.md).
+- Run `just bench` to measure locally, `just check` for the full local gate, and `just probe` to inspect a stuck proof goal.
 - The proof covers only the places where you write a token. The search is free: any search needs only `Found`, which says the match is in range and its bytes were compared. Change the search and you rewrite one lemma.
-- The incumbent is lazy matching over hash chains at 2,153,387 bytes on the reference corpus; the best proven parser is at 0.976x. libdeflate sits at 0.935x and about a third of that gap is the encoder's, out of any parser's reach. An accepted submission costs one subnet registration; a rejection costs nothing.
-- Seven Rust rules and ten proof rules below. Every one was found by something failing. Every example in `miner/examples` and `miner/template` passes the gate; copy the closest one.
+- The template and examples illustrate parsing and proof strategies. Measure them on your own checkout rather than relying on fixed example results.
+- The Rust and proof rules below describe the supported subset. Copy the example closest to the change you want to make.
 
 ```bash
-git clone <repo> && cd conjectures-optimisation-lz77
-./setup.sh                                  # packages, just, .venv, .env, Lean and Aeneas toolchain
-cp -r miner/examples/lazy my-submission     # the incumbent's parser, with its proof
-just bench my-submission                    # bytes, time, verdict, seconds
-just check my-submission                    # the gate; stage 4 is your proof
+./setup.sh
+just corpus-pull
+cp -r miner/template my-submission
+just bench my-submission
+VERIFY_CORPUS=corpus-stage1 just check my-submission
 python miner/submit.py submit my-submission --hotkey <hotkey file> --url https://<api>
 ```
 
@@ -26,7 +30,7 @@ python miner/submit.py submit my-submission --hotkey <hotkey file> --url https:/
 | what is installed | `./setup.sh --check` or `just doctor` | installs nothing, exit 1 if anything is missing |
 | no root, no bubblewrap | set `VERIFY_SANDBOX=off` in `.env` | your proofs are checked unconfined; a validator never does this |
 | a wrapped C compiler | also `VERIFY_SANDBOX=off`, and set the linker through `CARGO_TARGET_<triple>_LINKER`, not `RUSTFLAGS` | the score stage builds inside a read-only sandbox; the gate refuses to run with `RUSTFLAGS` set because extraction must use the pinned compilation recipe |
-| the scoring corpus | `just corpus-pull` | fetches `corpus-stage1`, the public benchmark corpus; `VERIFY_CORPUS=corpus-initial` in `.env` selects the committed reference corpus the ladder below uses |
+| the scoring corpus | `just corpus-pull` | fetches `corpus-stage1`, the public benchmark corpus; see [benchmark and corpora](../docs/BENCHMARK.md) |
 
 Everything runs from the repository root. Submission directories can live anywhere; the recipes accept absolute paths.
 
@@ -44,38 +48,24 @@ my-submission/
 
 ## 3. What to achieve
 
-The gate accepts any proven parser whose tokens round-trip and whose time is inside 8x of the incumbent's, measured through one fixed DEFLATE encoder; a parser larger than the incumbent is accepted too, and reported as `no improvement`. The leaderboard ranks by bytes, earlier submission first on a tie. Emission is then paid two ways, described in `docs/SCORING.md`:
-
-- **60% for the frontier.** Each hotkey's best accepted submission is a point on time and ratio. Points nothing beats on both axes form the frontier, and each is weighted by how sharply the trade-off curve bends there. On the public corpus the knee is `hc-d4`: a small parser 5% slower than greedy that buys 2.6 points of ratio. `optimal` wins the bytes and earns almost nothing here, because it pays 4x the time for the last half point.
-- **40% for recent improvement.** An accepted submission that beats the record by at least 0.25% in bytes is an improvement; the last ten improvements are paid with geometric decay, newest most. The record starts at the incumbent's size.
-
-So there are two ways to earn: be the fast small parser at the knee, or keep moving the byte record. The ladder today, reference corpus:
-
-| parser | bytes | vs incumbent | time | proof lines |
-|---|---|---|---|---|
-| `no-lz77`, literals only | 5,147,015 | 2.390x | 0.01x | 51 |
-| `template`, greedy | 2,605,048 | 1.210x | 0.15x | 152 |
-| `hash-chains` 16, `hc-d4`, `hc-d64` | 2,239,367 / 2,354,578 / 2,197,601 | 1.040x / 1.093x / 1.021x | | 193 |
-| `lazy`, the incumbent | 2,153,387 | 1.000x | 1.0x | 262 |
-| `mo-lazy`, miniz level 9's strategy | 2,118,446 | 0.984x | 2.5x | 370 |
-| `optimal`, DP per block | 2,115,138 | 0.982x | 6.5x | 344 |
-| `optimal-iter`, DP plus one cost iteration | 2,102,388 | 0.976x | 7.5x | 613 |
-| miniz level 9 | 2,126,479 | 0.987x | | |
-| libdeflate 12 | 2,013,342 | 0.935x | | |
-
-Where the bytes are: the parse decision. Where the frontier weight is: the knee, a parser barely slower than greedy that finds most of the bytes. Deeper chains are saturated. The levers left inside the subset are a second cost iteration, more candidate lengths per position, and a better match finder under the DP; each is worth a quarter of a percent and each costs time under the floor. Block splitting and Huffman coding are the encoder's, fixed in `validator/measure`, identical for every submission; one to two points of libdeflate's lead cannot be reached by any parser. When the incumbent moves, the floor moves with it, and slower ideas become admissible.
+Aim for a parser that is correct, fast, and compresses well on the configured
+corpora. The validator verifies the proof and round trip, then records benchmark
+evidence. Reward eligibility and weighting are described in
+[scoring](../docs/SCORING.md); the [competition page](https://conjectures.io/competitions/deflate)
+publishes current rules and official metrics. The shared DEFLATE encoder is in
+`validator/measure`, so your change is the LZ77 parser and its proof.
 
 ## 4. How to measure
 
 | command | what it tells you | when |
 |---|---|---|
-| `just bench my-submission` | bytes, time ratio, and the verdict the gate would give, on the default corpus; with no directory it benches every example | every change to `parse.rs`, seconds |
-| `just bench my-submission --corpus corpus-initial` | the same on the committed reference corpus, the one the ladder uses | when comparing against the ladder |
+| `just bench my-submission` | local bytes and timing on the default corpus; with no directory it benchmarks the examples | when changing `parse.rs` |
+| `just bench my-submission --corpus corpus-initial` | local comparison on the committed initial corpus | when using that corpus explicitly |
 | `just check my-submission` | the seven-stage gate: intake, policy, static, extract, statement, axioms, score | before submitting, and whenever the proof changes |
 | `just check-proof my-submission` | the same without the score | when only the proof changed |
 | `just probe my-submission <line> --stop` | the goals and hypotheses at that line of your proof, against the real extraction, in a private workspace under `data/verification-workspace/` | when a proof step fails, especially inside `first \| ... \| ...` |
 | `just extract my-submission` | the Lean model of your Rust, left in a printed private workspace | before writing a proof for new Rust |
-| `just cost my-submission` | lines of Rust and of proof | for the `submission.toml` claims |
+| `just cost my-submission` | lines of Rust and of proof | when estimating proof size |
 
 The validator measures on its own machine, on a corpus you may not see, so treat your time ratio as an estimate with a margin: the reference parsers' ratios move a few percent between machines. Bytes do not move at all.
 
@@ -211,24 +201,20 @@ The invariant for a greedy parser: `pos ≤ n ∧ ntok ≤ pos ∧ out.length = 
 
 ## 8. A worked example
 
-Real output from 2026-09-22. The change is one constant.
+This example changes one search constant. Run it locally to see the results on
+your current corpus and machine.
 
 ```bash
 cp -r miner/examples/lazy my-submission
 sed -i 's/MAX_PROBES: usize = 32/MAX_PROBES: usize = 48/' my-submission/parse.rs
 
 just bench my-submission
-#   incumbent      2153387  1.00000x  0.172s  1.00x  the incumbent
-#   my-submission  2143847  0.99557x  0.207s  1.20x  ACCEPTED - 0.443% smaller than the incumbent.
-
-just check my-submission
-#   0 intake ok   1 policy ok   3 extract ok   4 statement ok   5 axioms ok
-#   submission  2143847  0.99557x  0.206s  1.20x  ACCEPTED - 0.443% smaller than the incumbent.
-
-python miner/submit.py submit my-submission --hotkey <hotkey file> --url https://<api>
+VERIFY_CORPUS=corpus-stage1 just check my-submission
 ```
 
-Zero Lean edits, because the proof's loop measure reads the depth from the extracted constant, `slot.MAX_PROBES.val - probes`. Submission directories may live anywhere; the recipes take absolute paths. The day before, the proof carried `32` as a literal in two lines and the same run failed at stage 4 with `Tactic rfl failed`; that is proof rule 8 in one incident.
+This proof reads the depth from the extracted constant,
+`slot.MAX_PROBES.val - probes`, so changing the constant does not require a
+hard-coded proof edit. Inspect the actual gate output before submitting.
 
 ## 9. Read in this order
 
@@ -255,4 +241,4 @@ python miner/submit.py leaderboard --url ...         # every hotkey's best accep
 
 ## 12. What gets you rejected
 
-A third file. `unsafe`, iterators, an external crate, a non-pure macro, an operation outside the allowlist, or an import other than the four. `sorry`, or any axiom beyond Lean's three. A weakened theorem. More than 8x the incumbent's time. A token stream that does not round-trip through two independent inflaters. A parser whose tokens differ between runs. A signature older than five minutes.
+A third file. `unsafe`, iterators, an external crate, a non-pure macro, an operation outside the allowlist, or an import other than the four. `sorry`, or any axiom beyond Lean's three. A weakened theorem. A token stream that does not round-trip through two independent inflaters. A parser whose tokens differ between runs. A signature outside the service's timestamp window. For current benchmark eligibility limits, consult the [competition page](https://conjectures.io/competitions/deflate) and [scoring](../docs/SCORING.md).

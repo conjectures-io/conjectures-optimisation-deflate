@@ -1,4 +1,9 @@
-# How emission is scored
+# Scoring and admission
+
+This page describes the repository's scoring implementation. The
+[competition page](https://conjectures.io/competitions/deflate) is the source
+for current published rules and official metrics. Defaults and policy may
+change; check `validator/scoring/` and `.env.example` when operating a validator.
 
 The validator's weight is split first: the treasury (uid 121) takes 80% and this
 competition 20% (`validator/scoring/split.py`, code constants on netuid 66). Everything below
@@ -44,20 +49,9 @@ the other 40%, which is the point of having two.
 
 ### Which weight function, and why
 
-Being *on* the frontier is not the same as being worth something. Eight weight functions
-were written and argued over in `scripts/pareto-weights.py`; they now live in
-`validator/scoring/pareto.py` so the validator scores with the code that was argued over
-rather than a reimplementation. Two of the eight fail in exactly the ways that script's
-own docstring predicted:
-
-- **hypervolume** hands `lazy` 81% of the weight on the real frontier. Its structure
-  credits each point with the empty space to its left, and `lazy` at 0.52s sits in front
-  of a 1.7s hole with `optimal` on the far side. Normalizing the axes redistributes it and
-  flips the winner to `optimal` — and a scoring function whose answer inverts under a
-  change of units is not measuring what it claims to.
-- **neighbor-improvement** hands `template` 92%, because it anchors the fastest point
-  against the 100% ratio ceiling and nothing real is near it: even a literals-only parser
-  reaches 63.5%.
+Weight functions live in `validator/scoring/pareto.py`. The comparison script
+`scripts/pareto-weights.py` can be used to explore alternatives; its example
+measurements are not official competition results.
 
 **local-global-improvement-space-log** is the default. For a point between faster/worse A and slower/better B,
 normalize its time and compression ratio within their rectangle to t and r. The default
@@ -106,21 +100,13 @@ An accepted submission is an **improvement** when it beats the record by at leas
 - It then follows whichever is smaller, the best accepted submission so far or the
   incumbent. Promoting a new incumbent mid-round therefore raises the bar rather than
   handing a free improvement to whoever submits next.
-- It is measured on **bytes**, the competition's headline metric. A submission that is
-  merely faster at the same size has not moved the record — it may well be a new frontier
-  point, and the other 60% is where it is paid for that.
-- 0.25% is above measurement noise and below what any real algorithmic step buys.
+- Current normalized evidence compares balanced compressed/raw ratios on the same
+  corpus context. Legacy evidence can retain a byte record for historical inspection.
+  A submission that is merely faster at the same compression ratio has not moved
+  the record; it may still be a frontier point.
+- The threshold is a policy setting in `.env.example`.
 
 The last **ten** improvements share the 40%, decaying geometrically at 0.6, newest first:
-
-| rank | share of the 40% | of total emission |
-|---|---|---|
-| 1 (newest) | 40.2% | 16.10% |
-| 2 | 24.1% | 9.66% |
-| 3 | 14.5% | 5.80% |
-| 4 | 8.7% | 3.48% |
-| 5 | 5.2% | 2.09% |
-| 10 (oldest) | 0.4% | 0.16% |
 
 A hotkey holding several of the last ten accumulates their shares: shipping three of the
 last ten advances is worth three slots, not one. Past ten, an improvement has been
@@ -269,9 +255,8 @@ requires explicit replay; there is no automatic admission of legacy rows. All ol
 checks remain available after replay. Publication serializes pointer and evidence access
 in one transaction.
 
-Baselines use the explicit `examples-v1` order in `scoring/admission.py`:
-`template`, `hash-chains`, `hc-d4`, `hc-d64`, `lazy`, `mo-lazy`, `no-lz77`, `optimal`,
-`optimal-iter`. Baseline seeding benchmarks the selected names, then explicitly replays
+Baselines use the versioned order in `validator/scoring/admission.py`.
+Baseline seeding benchmarks the selected names, then explicitly replays
 admission in this order. `--only` does not alter ordering; missing predecessors leave
 later entries pending. `--overwrite` appends benchmark evidence and replays affected
 successors while retaining earlier decisions. Adding/removing baseline names requires a
@@ -295,7 +280,7 @@ an API implementing the same views without requiring local benchmark files.
 
 Admission detail plots use stacked gain, normalized-time and Pareto panels. Per-file
 diagnostics are written separately as `admission/submission-<id>-files.png`.
-The proposed browser API is documented in [FRONTEND_API.md](FRONTEND_API.md).
+The competition page publishes the current miner-facing metrics.
 
 
 ## Treasury and competition budget
@@ -378,8 +363,8 @@ statistical neighbor selection, and both Pareto and improvement rewards. Admissi
 records contain outcome `excluded`, reason `outside-scoring-bounds`, and structured
 `scoring_bounds` values, limits, and violations. Baselines use the same policy.
 
-These replace the old 8x summed-time acceptance rule. Successful benchmarks and
-aggregations are retained regardless of scoring bounds. `VERIFY_BENCH_TIMEOUT=300`
+Successful benchmarks and aggregations are retained regardless of scoring
+bounds. `VERIFY_BENCH_TIMEOUT=300`
 remains the wall-clock cap per build/measurement process; a measurement includes
 one corpus and all repetitions. `VERIFY_TOTAL_TIMEOUT=2700` caps the worker gate.
 The deprecated benchmark `--speed-floor` option is metadata only.
