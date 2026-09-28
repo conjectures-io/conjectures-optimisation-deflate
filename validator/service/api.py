@@ -66,7 +66,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
                 app.state.store.close()
 
     app = FastAPI(
-        title="conjectures-lz77-competition",
+        title="conjectures-deflate-competition",
         # No interactive docs and no schema: the four endpoints are documented in the
         # README, and an unauthenticated schema endpoint is surface for nothing.
         docs_url=None,

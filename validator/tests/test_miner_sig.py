@@ -36,13 +36,13 @@ def test_the_message_is_the_platforms_format_byte_for_byte():
     # Written out by hand from conjectures-validator's submission_api/competition_sig.py.
     expected = (
         "conjectures-competition-submit-v1\n"
-        "competition: lz77\n"
+        "competition: deflate\n"
         "digest: abc123\n"
         "hotkey: 5Hot\n"
         "timestamp: 1700000000"
     )
     assert (
-        sig.submit_message(competition="lz77", digest="abc123", hotkey="5Hot", timestamp=1700000000)
+        sig.submit_message(competition="deflate", digest="abc123", hotkey="5Hot", timestamp=1700000000)
         == expected
     )
 
@@ -52,7 +52,7 @@ def test_the_competition_is_part_of_what_is_signed():
     kp = sig.load_keypair("//Alice")
     digest = sig.digest_of(RUST, LEAN)
     here = sig.submit_message(
-        competition="lz77", digest=digest, hotkey=kp.ss58_address, timestamp=1
+        competition="deflate", digest=digest, hotkey=kp.ss58_address, timestamp=1
     )
     there = sig.submit_message(
         competition="rust-competition", digest=digest, hotkey=kp.ss58_address, timestamp=1
@@ -109,7 +109,7 @@ def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypat
         return _Response(
             201,
             {
-                "competition": "lz77",
+                "competition": "deflate",
                 "submission": "7",
                 "state": "queued",
                 "digest": sig.digest_of(RUST, LEAN),
@@ -127,11 +127,11 @@ def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypat
             dir=str(_submission(tmp_path)),
             hotkey="//Alice",
             url="https://api.example/",
-            competition="lz77",
+            competition="deflate",
         )
     )
 
-    assert urls == ["https://api.example/v1/competitions/lz77/submissions"]
+    assert urls == ["https://api.example/v1/competitions/deflate/submissions"]
     # Nothing scalar in the body: the form carries the two files and nothing else.
     assert "data" not in rest
     assert set(sent_files) == {"parse.rs", "Parse.lean"}
@@ -141,7 +141,7 @@ def test_submit_signs_in_headers_and_targets_the_competition(tmp_path, monkeypat
     assert headers["X-Conjectures-Timestamp"] == "1700000000"
     # The signature verifies over exactly the message the platform will rebuild.
     rebuilt = sig.submit_message(
-        competition="lz77",
+        competition="deflate",
         digest=sig.digest_of(RUST, LEAN),
         hotkey=kp.ss58_address,
         timestamp=1_700_000_000,
@@ -170,7 +170,7 @@ def test_a_refusal_reports_the_platforms_reason_code(tmp_path, monkeypatch):
                 dir=str(_submission(tmp_path)),
                 hotkey="//Alice",
                 url="https://api.example",
-                competition="lz77",
+                competition="deflate",
             )
         )
     assert "402 NOT_REGISTERED" in str(exited.value)
@@ -209,12 +209,12 @@ def test_the_leaderboard_follows_every_page(monkeypatch, capsys):
     asked: list[str | None] = []
 
     def get(url: str, params: dict[str, str | None], **kw: object) -> _Response:
-        assert url == "https://api.example/v1/competitions/lz77/leaderboard"
+        assert url == "https://api.example/v1/competitions/deflate/leaderboard"
         asked.append(params.get("cursor"))
         return _Response(200, pages[params.get("cursor")])
 
     monkeypatch.setattr("requests.get", get)
-    submit.cmd_leaderboard(Namespace(url="https://api.example", competition="lz77"))
+    submit.cmd_leaderboard(Namespace(url="https://api.example", competition="deflate"))
     out = capsys.readouterr().out
     assert asked == [None, "page-two"]
     assert "5First" in out and "5Second" in out

@@ -22,11 +22,12 @@ SERVICES = {
     # One-shot: exits when the baselines are seeded; `just up` restarts it to re-check.
     "baseline-seed": ("baseline-seed", "tools.seed_baselines"),
 }
-# PM2 app names are `lz77-<name>`. Before the competition was renamed they were
-# `miniz-oxide-<name>`, and a host upgraded in place still runs those: they are matched too,
-# so `up` never starts a second weight setter beside one, and `down`/`status`/`logs` see them.
-PM2_PREFIX = "lz77-"
-LEGACY_PM2_PREFIXES = ("miniz-oxide-",)
+# PM2 app names are `deflate-<name>`. Before the competition's renames they were
+# `lz77-<name>` and, earlier, `miniz-oxide-<name>`, and a host upgraded in place still runs
+# those: they are matched too, so `up` never starts a second weight setter beside one, and
+# `down`/`status`/`logs` see them.
+PM2_PREFIX = "deflate-"
+LEGACY_PM2_PREFIXES = ("lz77-", "miniz-oxide-")
 
 
 class Pm2Env(TypedDict, total=False):

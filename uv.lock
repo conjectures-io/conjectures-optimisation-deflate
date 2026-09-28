@@ -505,7 +505,7 @@ wheels = [
 ]
 
 [[package]]
-name = "conjectures-lz77-competition"
+name = "conjectures-deflate-competition"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

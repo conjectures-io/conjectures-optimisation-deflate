@@ -1,5 +1,5 @@
 [project]
-name = "conjectures-lz77-competition"
+name = "conjectures-deflate-competition"
 version = "0.1.0"
 # 3.11 for tomllib, which validator/bench/corpora.py reads corpora.toml with.
 requires-python = ">=3.11"

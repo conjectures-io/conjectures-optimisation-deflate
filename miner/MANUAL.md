@@ -231,7 +231,7 @@ python miner/submit.py status <id> --url ...         # the stage report, bytes, 
 python miner/submit.py leaderboard --url ...         # every hotkey's best accepted submission, ranked
 ```
 
-`--url` is the conjectures platform API's origin; it serves every competition, and this one at `/v1/competitions/lz77` (`--competition` picks another). The two files are signed with your hotkey over the competition, their hash, your address and the current time, so a signature for one competition cannot be replayed against another; the platform refuses a timestamp more than five minutes from its own clock, so keep your clock right. Submissions are verified as they arrive; the same files twice return the same id.
+`--url` is the conjectures platform API's origin; it serves every competition, and this one at `/v1/competitions/deflate` (`--competition` picks another). The two files are signed with your hotkey over the competition, their hash, your address and the current time, so a signature for one competition cannot be replayed against another; the platform refuses a timestamp more than five minutes from its own clock, so keep your clock right. Submissions are verified as they arrive; the same files twice return the same id.
 
 **Submitting costs one registration on the subnet.** Register, submit, and the slot is spent when the gate accepts. A rejection costs nothing, so fix the proof and resubmit on the same registration; `submit` prints how many slots you have left.
 

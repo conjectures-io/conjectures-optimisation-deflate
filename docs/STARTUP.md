@@ -65,10 +65,11 @@ just service --background
 Without the flag, commands stay in the foreground. Background mode requires PM2
 on PATH; otherwise the command fails with installation instructions. Install
 Node.js/npm and then `npm install -g pm2` (setup does not install PM2 yet).
-Services use `lz77-` prefixed names. Running PM2 entries produce a warning instead of a duplicate. A single stopped or
+Services use `deflate-` prefixed names. Running PM2 entries produce a warning instead of a duplicate. A single stopped or
 errored entry is restarted in place using its saved PM2 configuration; multiple
-matching entries require operator cleanup. Old unprefixed entries from this checkout are
-also recognized. Inspect with `pm2 list`, follow `pm2 logs <name>`, and stop with
+matching entries require operator cleanup. Entries under the pre-rename
+`lz77-` and `miniz-oxide-` names, and old unprefixed entries from this checkout, are also
+recognized; `pm2 delete` them to adopt the new names. Inspect with `pm2 list`, follow `pm2 logs <name>`, and stop with
 `pm2 stop <name>`. Checks cover the current user's PM2 daemon, not independently
 started foreground processes or other users' daemons. Stop those before switching.
 Startup does not configure reboot persistence or start/migrate PostgreSQL.
