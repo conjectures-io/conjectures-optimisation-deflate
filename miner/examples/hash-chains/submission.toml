@@ -1,8 +1,8 @@
 name = "hash-chains-16"
 author = "operator"
-description = "16-deep hash chains. Same greedy decision, more candidates."
+description = "16-deep hash chains. Same greedy decision, more candidates; a candidate is compared only when its byte at the current best length agrees, which only skips work (from DEV submission 12, hotkey 5CAkr5wr3e...)."
 
 [claims]
 score = 1.040
-parse_time_vs_incumbent = 0.47
-proof_lines = 193
+parse_time_vs_incumbent = 0.52
+proof_lines = 191

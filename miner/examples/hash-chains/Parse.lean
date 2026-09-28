@@ -94,44 +94,38 @@ theorem find_match_loop_spec (input : Slice Std.U8) (prev : Slice Std.U32)
     (n pos cap bl0 bd0 cur0 probes0 : Std.Usize)
     (hn : n.val = input.length) (hprev : prev.length = 32768)
     (hcap : pos.val + cap.val ≤ n.val) (hcap258 : cap.val ≤ 258)
-    (h0 : Found input n pos bl0 bd0) :
+    (h0 : Found input n pos bl0 bd0) (h0len : bl0.val ≤ cap.val) :
     slot.find_match_loop input prev pos cap bl0 bd0 cur0 probes0
       ⦃ fun r => Found input n pos r.1 r.2 ⦄ := by
   rw [slot.find_match_loop]
   apply Std.loop.spec_decr_nat
     (measure := fun s => slot.MAX_PROBES.val - s.2.2.2.val)
-    (inv := fun s => Found input n pos s.1 s.2.1)
+    (inv := fun s => Found input n pos s.1 s.2.1 ∧ s.1.val ≤ cap.val)
   · rintro ⟨bl, bd, cur, probes⟩ hinv
     simp only at hinv
     have hmax : input.length ≤ Std.Usize.max := Std.Slice.length_ineq input
     simp only [slot.find_match_loop.body]
     step*
-    -- The window test is a `do` block behind an `if`, so it is cut off with its
-    -- own postcondition — which is just `Found` again, one probe later.
-    apply Std.WP.spec_bind (Pₘ := fun r => Found input n pos r.1 r.2.1)
+    apply Std.WP.spec_bind (Pₘ := fun r => Found input n pos r.1 r.2.1 ∧ r.1.val ≤ cap.val)
     · split
       case isTrue hw =>
-        step*
-        rw [show ((if l > bl then ok (l, i) else ok (bl, bd))
-              : Result (Std.Usize × Std.Usize))
-            = ok (if l > bl then (l, i) else (bl, bd)) from by split <;> rfl]
-        step*
-        split
-        case isTrue hbetter =>
-          step*
-          rcases Nat.lt_or_ge l.val 3 with h | h
-          · exact Or.inl h
-          · exact Or.inr ⟨h, by scalar_tac, by scalar_tac, by scalar_tac,
-              by scalar_tac, by scalar_tac,
-              by rw [show pos.val - i.val = cpos.val by scalar_tac]; exact l_post2⟩
-        case isFalse =>
-          -- the candidate was no better, so the invariant is carried through
-          -- unchanged and `step*` closes it against `hinv` itself
+        apply Std.WP.spec_bind (Pₘ := fun r => Found input n pos r.1 r.2 ∧ r.1.val ≤ cap.val)
+        · split
+          case isTrue hlt =>
+            step*
+            refine ⟨?_, by scalar_tac⟩
+            rcases Nat.lt_or_ge l.val 3 with h | h
+            · exact Or.inl h
+            · exact Or.inr ⟨h, by scalar_tac, by scalar_tac, by scalar_tac,
+                by scalar_tac, by scalar_tac,
+                by rw [show pos.val - i.val = cpos.val by scalar_tac]; exact l_post2⟩
+          case isFalse => step*
+        · rintro ⟨bl1, bd1⟩ hf
           step*
       case isFalse => exact hinv
     · rintro ⟨bl1, bd1, cur1⟩ hf
       step*
-  · exact h0
+  · exact ⟨h0, h0len⟩
 
 @[local step]
 theorem find_match_spec (input : Slice Std.U8) (prev : Slice Std.U32)
@@ -141,7 +135,7 @@ theorem find_match_spec (input : Slice Std.U8) (prev : Slice Std.U32)
     slot.find_match input prev pos cap start
       ⦃ fun r => Found input n pos r.1 r.2 ⦄ :=
   find_match_loop_spec input prev n pos cap 0#usize 0#usize start 0#usize
-    hn hprev hcap hcap258 (Or.inl (by scalar_tac))
+    hn hprev hcap hcap258 (Or.inl (by scalar_tac)) (by scalar_tac)
 
 /-! ## The parse loop
 

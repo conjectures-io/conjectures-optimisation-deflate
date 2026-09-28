@@ -90,10 +90,14 @@ pub fn find_match(
     while probes < 16 && cur > 0 && cur <= pos {
         let cpos = cur - 1;
         if pos - cpos <= 32768 {
-            let l = match_len(input, cpos, pos, cap);
-            if l > best_len {
-                best_len = l;
-                best_dist = pos - cpos;
+            // A candidate can improve best_len only if its next byte agrees.
+            // The cap guard also keeps both lookahead indices in bounds.
+            if best_len < cap && input[cpos + best_len] == input[pos + best_len] {
+                let l = match_len(input, cpos, pos, cap);
+                if l > best_len {
+                    best_len = l;
+                    best_dist = pos - cpos;
+                }
             }
             cur = prev[cpos % 32768] as usize;
         } else {
