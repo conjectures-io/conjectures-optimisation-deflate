@@ -8,8 +8,9 @@ from collections.abc import Sequence
 from typing import Literal, Protocol, TypeVar
 
 POLICY_VERSION = "fixed-corpus-speed-bounds-v2"
-BASELINE_ORDER_VERSION = "examples-slow-to-fast-v2"
-# Frozen from the 2026-09-24 preview's incumbent-normalized scored times.
+BASELINE_ORDER_VERSION = "examples-slow-to-fast-v3"
+# Frozen from the 2026-09-24 preview's incumbent-normalized scored times; v3 adds
+# hc-scan-end at its DEV gate time (2026-09-28), between hash-chains and hc-d4.
 # Never re-sort from noisy measurements; changes require a version bump and replay.
 BASELINE_ORDER = (
     "optimal-iter",
@@ -19,6 +20,7 @@ BASELINE_ORDER = (
     "hc-d64",
     "no-lz77",
     "hash-chains",
+    "hc-scan-end",
     "hc-d4",
     "template",
 )

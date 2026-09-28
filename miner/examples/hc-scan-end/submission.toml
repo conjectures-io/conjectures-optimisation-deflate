@@ -1,0 +1,8 @@
+name = "hc-scan-end"
+author = "operator"
+description = "hash-chains-16 with zlib's scan_end test: a candidate is compared only when its byte at the current best length agrees, so the same matches are found with less work. From DEV submission 12 (hotkey 5CAkr5wr3e...)."
+
+[claims]
+score = 1.040
+parse_time_vs_incumbent = 0.41
+proof_lines = 191
