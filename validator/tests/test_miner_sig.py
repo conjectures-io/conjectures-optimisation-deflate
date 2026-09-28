@@ -42,7 +42,9 @@ def test_the_message_is_the_platforms_format_byte_for_byte():
         "timestamp: 1700000000"
     )
     assert (
-        sig.submit_message(competition="deflate", digest="abc123", hotkey="5Hot", timestamp=1700000000)
+        sig.submit_message(
+            competition="deflate", digest="abc123", hotkey="5Hot", timestamp=1700000000
+        )
         == expected
     )
 
