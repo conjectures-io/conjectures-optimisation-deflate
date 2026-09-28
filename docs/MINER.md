@@ -12,11 +12,17 @@ From the repository root:
 
 ```bash
 ./setup.sh
+source .venv/bin/activate
 just corpus-pull
 cp -r miner/template my-submission
 just bench my-submission
 VERIFY_CORPUS=corpus-stage1 just check my-submission
 ```
+
+If setup installed `just` or Rust for the first time, ensure
+`$HOME/.local/bin` and `$HOME/.cargo/bin` are on your shell's `PATH` before
+running the commands above. In a container, set `VERIFY_SANDBOX=off` for local
+proof checks because bubblewrap may be unable to create namespaces.
 
 `just bench` measures locally without checking the proof. `just check` runs the
 proof gate and benchmark. The standalone benchmark uses the public corpus by
@@ -34,7 +40,8 @@ use `just extract my-submission` to inspect the extracted Lean model and
 
 ## Submit
 
-The submission client requires the platform API origin and a Bittensor hotkey:
+The submission client requires the platform API origin and a Bittensor hotkey.
+In a new shell, run `source .venv/bin/activate` first:
 
 ```bash
 python miner/submit.py submit my-submission --hotkey <hotkey-file> --url <api-origin>

@@ -2,9 +2,10 @@
 
 Talks to conjectures-validator, which serves every competition from one API under
 `/v1/competitions/{slug}`. `--url` is that API's origin; `--competition` picks the
-competition and defaults to this one.
+competition and defaults to this one. Activate the project environment first with
+`source .venv/bin/activate`.
 
-python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/w/hotkeys/h --url https://api.host
+python miner/submit.py submit my-submission --hotkey <file> --url https://api.host
 python miner/submit.py status <submission id> --url …
 python miner/submit.py leaderboard --url …
 """
