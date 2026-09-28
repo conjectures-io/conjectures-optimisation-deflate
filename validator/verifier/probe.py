@@ -13,7 +13,9 @@ Use it when a `first | ... | ...` chain or a `scalar_tac` fails and the error hi
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,13 +62,18 @@ def extract(submission: Path) -> Path:
 
 def elaborate(lean: Path, probe: Path) -> str:
     # Build the extracted model first: `lake env lean` elaborates against the oleans on disk.
+    elan_home = Path(os.environ.get("ELAN_HOME", ROOT / ".work/elan"))
+    lake = elan_home / "bin/lake"
+    lake_command = str(lake) if lake.is_file() else shutil.which("lake")
+    if lake_command is None:
+        sys.exit("lake not found; run ./setup.sh to install the Lean toolchain")
     build = subprocess.run(
-        ["lake", "build", "Lz77", "Slot"], cwd=lean, capture_output=True, text=True
+        [lake_command, "build", "Lz77", "Slot"], cwd=lean, capture_output=True, text=True
     )
     if build.returncode != 0:
         sys.exit(f"the extracted model does not build:\n{build.stderr}{build.stdout}")
     r = subprocess.run(
-        ["lake", "env", "lean", str(probe)], cwd=lean, capture_output=True, text=True
+        [lake_command, "env", "lean", str(probe)], cwd=lean, capture_output=True, text=True
     )
     return r.stdout + r.stderr
 

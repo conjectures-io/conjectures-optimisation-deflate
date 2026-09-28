@@ -14,6 +14,7 @@ rules and official metrics. This manual covers the parser contract and proof.
 
 ```bash
 ./setup.sh
+source .venv/bin/activate
 just corpus-pull
 cp -r miner/template my-submission
 just bench my-submission
@@ -221,6 +222,8 @@ hard-coded proof edit. Inspect the actual gate output before submitting.
 `miner/examples/no-lz77/Parse.lean` (one token-writing site), `miner/template` (a literal and a match site, single-slot hash), `miner/examples/hash-chains` (the search replaced, one lemma changed), `miner/examples/lazy` (a pending match), `miner/examples/optimal` (a DP whose output is re-verified before it is written). Copy the closest one.
 
 ## 10. Submit
+
+Activate the virtual environment first if this is a new shell: `source .venv/bin/activate`.
 
 ```bash
 python miner/submit.py submit my-submission --hotkey ~/.bittensor/wallets/<w>/hotkeys/<h> --url https://<api>

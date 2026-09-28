@@ -8,6 +8,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")" && pwd)"
+initial_path="$PATH"
+cargo_on_initial_path="$(command -v cargo 2>/dev/null || true)"
 CHECK=0 TOOLCHAIN=1 CHAIN=0
 for a in "$@"; do
     case "$a" in
@@ -96,7 +98,7 @@ else
     mkdir -p "$HOME/.local/bin" && install -m755 "$tmp/just" "$HOME/.local/bin/just" && rm -rf "$tmp"
     export PATH="$HOME/.local/bin:$PATH"
     ok "installed ~/.local/bin/just"
-    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) miss "add ~/.local/bin to your PATH" ;; esac
+    case ":$initial_path:" in *":$HOME/.local/bin:"*) ;; *) miss "add ~/.local/bin to your shell PATH before running just" ;; esac
     if shadowed just; then
         bad "$(command -v just) still comes first on PATH; put ~/.local/bin ahead of it"
         missing=1
@@ -123,7 +125,7 @@ else
     mkdir -p "$HOME/.local/bin" && install -m755 "$tmp/uv" "$HOME/.local/bin/uv" && rm -rf "$tmp"
     export PATH="$HOME/.local/bin:$PATH"
     ok "installed ~/.local/bin/uv"
-    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) miss "add ~/.local/bin to your PATH" ;; esac
+    case ":$initial_path:" in *":$HOME/.local/bin:"*) ;; *) miss "add ~/.local/bin to your shell PATH before running just" ;; esac
     if shadowed uv; then
         bad "$(command -v uv) still comes first on PATH; put ~/.local/bin ahead of it"
         missing=1
@@ -242,5 +244,16 @@ fi
 if [ "$CHECK" = 1 ]; then
     [ "$missing" = 0 ] && { printf '\n\033[1mready.\033[0m\n'; exit 0; }
     printf '\n\033[1mRun: ./setup.sh\033[0m\n'; exit 1
+fi
+if [ "$missing" != 0 ]; then
+    printf '\n\033[1msetup incomplete.\033[0m Review the failed steps above and retry.\n' >&2
+    exit 1
+fi
+if [ -z "$cargo_on_initial_path" ] && [ -x "$HOME/.cargo/bin/cargo" ]; then
+    miss "add ~/.cargo/bin to your shell PATH before running cargo or just bench"
+fi
+if [ "$TOOLCHAIN" = 0 ]; then
+    printf '\n\033[1mcore setup done.\033[0m Run ./setup.sh for the proof toolchain.\n'
+    exit 0
 fi
 printf '\n\033[1msetup done.\033[0m  Next:  just check miner/template     just --list\n'
