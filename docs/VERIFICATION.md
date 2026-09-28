@@ -51,8 +51,9 @@ extraction immediately, and old LLBC is truncated before invoking Charon.
 command. `VERIFY_LEAN_TIMEOUT` defaults to 900 seconds per proof/obligation/query
 command. `VERIFY_LEAN_MEMORY_MB` defaults to 16384 and applies to all expensive
 verification commands; 0 explicitly disables the cap. A requested cap requires a
-working `systemd-run --user` connection: it is never silently omitted. The README
-contains user-systemd setup instructions. Timeouts terminate process groups.
+working `systemd-run --user` connection: it is never silently omitted. See
+[validator startup](STARTUP.md#systemd-user-limits) for the user-session check.
+Timeouts terminate process groups.
 
 `VERIFY_SANDBOX=off` is for local experimentation only; DB verification refuses it.
 

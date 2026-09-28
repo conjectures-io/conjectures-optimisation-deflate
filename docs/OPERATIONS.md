@@ -15,8 +15,8 @@ a hotkey, and the watcher is the only thing that writes one.
 ## From nothing to running
 
 ```bash
-./setup.sh --chain              # packages, .venv, .env, the toolchain, and the SDK (~15 min, ~9 GB)
-$EDITOR .env                    # POSTGRES_PASSWORD, BITTENSOR_WALLET_*, VERIFY_CORPUS
+./setup.sh --chain              # packages, .venv, .env, toolchain, and SDK
+$EDITOR .env                    # database and wallet settings
 just db-up                      # Postgres 17 from compose.yaml
 just db-migrate                 # the schema
 just corpus-pull                # the scoring corpora
@@ -27,42 +27,9 @@ pm2 logs
 
 The fifth entry, `lz77-baseline-seed`, is a one-shot: it seeds `miner/template` and
 every example in `miner/examples` as operator baselines, the reference Pareto frontier
-miners are scored against, then exits. The first start on a fresh validator takes about
-an hour (each baseline is verified, then benchmarked on both corpora); later starts reuse
-what is stored and finish in seconds. Follow it with `pm2 logs lz77-baseline-seed`.
+miners are scored against, then exits. The initial seed verifies and benchmarks examples on the configured corpora.
+Follow it with `pm2 logs lz77-baseline-seed`.
 `just up` starts it too. Set `BASELINE_SEED_ON_START=0` on a host that must not seed.
-
-**Upgrading a host that ran the `miniz-oxide-*` names.** The competition was renamed to
-`lz77`, and with it the PM2 apps. PM2 treats a new name as a new app, so `pm2 start
-pm2/service.config.js` on such a host starts a second set beside the first -- two weight
-setters for one hotkey. Delete the old ones first:
-
-```bash
-pm2 delete miniz-oxide-gate-worker miniz-oxide-chain-watcher miniz-oxide-weight-setter \
-  miniz-oxide-baseline-seed miniz-oxide-submission-api   # whichever `pm2 ls` shows
-pm2 save
-just up
-```
-
-`just up`/`just down`/`just status` recognise the old names, so `just up` alone never
-duplicates a process; it warns and leaves the old one running until it is deleted.
-
-The database moved with the rename too: compose project `conjectures-lz77`, container
-`conjectures_lz77_db`, volume `conjectures-lz77_pgdata`. A host that ran the old
-`conjectures-miniz` project would otherwise start an empty database beside its old one, so
-carry the data across once, with everything stopped (after the PM2 step above):
-
-```bash
-docker stop conjectures_miniz_db
-docker compose create db                  # the new container and its empty volume
-docker run --rm -v conjectures-miniz_pgdata:/from:ro -v conjectures-lz77_pgdata:/to \
-  alpine cp -a /from/. /to/
-docker rm conjectures_miniz_db            # the old volume stays until you delete it
-just db-up && just db-migrate && just db-grant-platform
-```
-
-The platform's `COMPETITION_DATABASE_URL` then names `conjectures_lz77_db`. Once the new
-database checks out, `docker volume rm conjectures-miniz_pgdata`.
 
 Or one at a time, in four shells: `just service`, `just service-worker`,
 `just chain-watcher`, `just weight-setter`.
@@ -87,8 +54,7 @@ just weights-preview  # what the scorer would pay right now, no chain, no wallet
 just db-reset         # drop the schema and rebuild it -- destroys every submission
 ```
 
-Six tables: `registrations`, `submissions`, `entitlement_claims`, `weight_sets`,
-`score_snapshots`, `rate_limit_windows`. `DATABASE_URL` points the whole validator at a
+`DATABASE_URL` points the whole validator at a
 managed instance instead of the compose one; it overrides every `POSTGRES_*`.
 
 Upgrading from the old SQLite service: `just db-import-sqlite` once, before starting

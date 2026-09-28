@@ -105,7 +105,7 @@ def main():
 
     if not SOURCES.is_dir():
         print(f"no source pool at {SOURCES}", file=sys.stderr)
-        print("run `just corpus-sources` first.", file=sys.stderr)
+        print("run `scripts/fetch-corpus-sources.sh` first.", file=sys.stderr)
         return 2
 
     have = pool_files()
@@ -125,7 +125,7 @@ def main():
         print(f"  MISSING {len(missing)}:")
         for n in missing[:12]:
             print(f"    {n}")
-        print("  re-run `just corpus-sources` (it skips what is already there).")
+        print("  re-run `scripts/fetch-corpus-sources.sh` (it skips existing files).")
     if "html/" in want and html_n == 0:
         bad = 1
         print("  MISSING the Wikipedia pages under html/")
@@ -186,7 +186,7 @@ def main():
             shutil.rmtree(tmp, ignore_errors=True)
 
     if bad:
-        print("\nINCOMPLETE -- the pool is missing files; re-run `just corpus-sources`.")
+        print("\nINCOMPLETE -- check the diagnostics above.")
         return 1
     if drift:
         print("\nDRIFTED -- the pool is complete but no longer matches what stage 1 was")

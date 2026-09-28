@@ -1,6 +1,8 @@
 # Benchmark storage
 
-Migration 0002 adds five tables, without plans, corpus registries or scoring configuration.
+Benchmark evidence is stored in the tables introduced by migration 0002 and
+subsequent migrations. See the migration files under `deploy/migrate/` for the
+current schema.
 
 | Table | Purpose |
 | --- | --- |
@@ -106,9 +108,7 @@ A rerun B2 can be combined with A1 while the old aggregate retains A1/B1. Invali
 does not rewrite history; the operator/service must select replacement evidence and recalculate.
 
 `submissions.aggregation_id` selects the current aggregate; `score_snapshots.aggregation_id`
-preserves historical inputs. Both are nullable for existing workers. Aggregation is not
-implemented here; existing workers continue using JSON summaries. Score snapshots remain
-attached to weight publications. There are no database workflow triggers.
+preserves historical inputs. Score snapshots remain attached to weight publications.
 
 ## CLI ingestion
 
@@ -145,9 +145,5 @@ Downgrading deletes benchmark evidence and the two aggregation reference columns
 Existing submissions, registrations, scores and weight publications remain. Export any
 benchmark evidence you need before downgrading.
 
-An already-applied earlier `0002` does not update automatically: this revision was edited
-in place during development. For an empty disposable database, downgrade using its original
-migration file before replacing it, then apply the new version. For a database with evidence,
-backfill the new compression and speed tables transactionally and verify all timing samples
-before removing the previous timing table. The current local database was updated this way,
-preserving run IDs and raw data. No additional migration revision was introduced.
+For a database created with older migration files, review its actual schema and
+the migration history before changing stored evidence.
