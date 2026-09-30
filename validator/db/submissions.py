@@ -183,6 +183,30 @@ class SubmissionsDb:
                 )
             )
 
+    def requeue_interrupted(self, worker_id: str) -> int:
+        """Reclaim this worker identity's unfinished claims after its process restarts.
+
+        A restarted process has the same configured worker ID. Clearing the attempt
+        token supersedes any late verifier from the old process; its milestone writes
+        and final acceptance then fail their claim-token checks. Other workers' live
+        claims are left alone. The update is idempotent across startup retries.
+        """
+        with session_scope(self._sessions) as session:
+            result = session.execute(
+                update(models.Submission)
+                .where(
+                    models.Submission.state == SubmissionState.VERIFYING.value,
+                    models.Submission.worker_id == worker_id,
+                )
+                .values(
+                    verification_attempt=None,
+                    state=SubmissionState.QUEUED.value,
+                    worker_id=None,
+                    claimed_at=None,
+                )
+            )
+            return int(cast(CursorResult[tuple[object, ...]], result).rowcount or 0)
+
     def requeue_stale(self, older_than_seconds: float) -> int:
         """Requeue anything left mid-gate by a worker that died. Returns how many.
 

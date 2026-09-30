@@ -251,9 +251,8 @@ class ScoringDb:
                     continue
                 if aggregation.compression_seconds is None:
                     continue
-                comparison_contexts.append(
-                    json.dumps(cross_submission_context(runs, context), sort_keys=True)
-                )
+                comparison_context = cross_submission_context(runs, context)
+                comparison_contexts.append(json.dumps(comparison_context, sort_keys=True))
                 result.append(
                     dc.replace(
                         _to_scored(row),
@@ -267,6 +266,7 @@ class ScoringDb:
                         normalized_ratio_pct=values.ratio_pct,
                         normalized_incumbent_ratio_pct=values.incumbent_ratio_pct,
                         context=context,
+                        comparison_context=comparison_context,
                         aggregation_id=aggregation.id,
                     )
                 )

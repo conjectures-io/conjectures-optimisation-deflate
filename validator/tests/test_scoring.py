@@ -360,3 +360,25 @@ def test_relative_time_drives_frontier_while_snapshots_keep_seconds():
     assert "normalized_time_ratio" not in selected.as_snapshot()
     with pytest.raises(ValueError, match="absolute and relative"):
         scoring.score(points, [dc.replace(fast_absolute, normalized_time_ratio=None)], CONFIG)
+
+
+def test_scorer_uses_comparison_context_without_changing_recorded_context():
+    a = dc.replace(
+        sub("old", 2_000_000, 0.1, sid=901),
+        context={"protocol": ["old-engine"]},
+        comparison_context={"protocol": ["same-except-engine"]},
+    )
+    b = dc.replace(
+        sub("new", 1_900_000, 0.2, sid=902),
+        context={"protocol": ["new-engine"]},
+        comparison_context={"protocol": ["same-except-engine"]},
+    )
+    result = scoring.score([a, b], [a, b], CONFIG)
+    assert len(result.scores) == 2
+    assert a.context != b.context
+    with pytest.raises(ValueError, match="incomparable evaluation contexts"):
+        scoring.score(
+            [a, dc.replace(b, comparison_context={"protocol": ["different-host"]})],
+            [a],
+            CONFIG,
+        )

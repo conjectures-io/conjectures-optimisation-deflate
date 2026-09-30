@@ -294,6 +294,11 @@ def run_forever(store: db.Store, settings: Settings) -> None:
     while True:
         try:
             if not initialized:
+                requeued = store.submissions.requeue_interrupted(settings.worker_id)
+                if requeued:
+                    logger.info(
+                        f"[worker] requeued {requeued} submission(s) interrupted before restart"
+                    )
                 sweep(store, settings)
                 from db.admission import run as admit
 

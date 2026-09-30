@@ -38,6 +38,9 @@ class ScoredSubmission:
     aggregation_id: int | None = None
     baseline_key: str | None = None
     context: dict[str, object] | None = None
+    # Full recorded context stays intact for admission identity and audit. Scoring
+    # compares the same context with only the engine binary hash omitted.
+    comparison_context: dict[str, object] | None = None
 
     admission_check_id: int | None = None
     admission: dict[str, object] | None = None
