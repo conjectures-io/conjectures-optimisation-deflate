@@ -220,6 +220,37 @@ def test_publish_checks_verification_and_invalidation(store):
             publish(session, sub.id, result.id)
 
 
+def test_old_verifier_stamp_keeps_published_scoring_evidence(store):
+    from db.aggregation import aggregate, publish
+    from db.models import Submission
+    from verifier.identity import required_fingerprint
+
+    with store.sessions.begin() as session:
+        run = measured_row(session)
+        result = aggregate(session, [run])
+        sub = Submission(
+            hotkey="miner",
+            digest="f" * 64,
+            state="accepted",
+            source_sha256="b" * 64,
+            proof_sha256="e" * 64,
+            verifier_fingerprint=required_fingerprint(),
+            static_verified_at=datetime.now(timezone.utc),
+            lean_verified_at=datetime.now(timezone.utc),
+        )
+        session.add(sub)
+        session.flush()
+        publish(session, sub.id, result.id)
+        sid = sub.id
+    assert [p.submission_id for p in store.scoring.scoring_inputs()] == [sid]
+
+    with store.sessions.begin() as session:
+        session.get(Submission, sid).verifier_fingerprint = "0" * 64
+    points = store.scoring.scoring_inputs()
+    assert [p.submission_id for p in points] == [sid]
+    assert points[0].verification_current is False
+
+
 @pytest.mark.parametrize(
     "problem",
     ["source", "manifest", "incumbent", "failed", "invalidated", "nan", "missing-provenance"],

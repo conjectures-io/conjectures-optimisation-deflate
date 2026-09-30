@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session, sessionmaker
 import db.models as models
 from verifier.identity import required_fingerprint
 
-from .aggregation import CALCULATOR_VERSION, evaluation_context, reduce_runs
+from .aggregation import (
+    CALCULATOR_VERSION,
+    cross_submission_context,
+    evaluation_context,
+    reduce_runs,
+)
 from .engine import session_scope
 from .locks import publication_lock
 from .scored import ScoredSubmission
@@ -31,6 +36,7 @@ from .status import SubmissionState
 def _scorable(
     stmt: Select[tuple[models.Submission]], *, preview: bool = False
 ) -> Select[tuple[models.Submission]]:
+    del preview  # Historical and live scoring use the same verification eligibility.
     # Only accepted submissions carrying every number the frontier needs. A row missing
     # one of them predates the columns or came from a harness that did not print it;
     # scoring it would put a fabricated point on the frontier.
@@ -38,9 +44,9 @@ def _scorable(
         models.Submission.hotkey.is_not(None) | models.Submission.baseline_key.is_not(None),
         models.Submission.static_verified_at.is_not(None),
         models.Submission.lean_verified_at.is_not(None),
-        models.Submission.verifier_fingerprint.is_not(None)
-        if preview
-        else models.Submission.verifier_fingerprint == required_fingerprint(),
+        # Verification must have succeeded, but a later validator hotfix does not
+        # invalidate an already accepted submission's published evidence.
+        models.Submission.verifier_fingerprint.is_not(None),
         models.Submission.measured_source_sha256 == models.Submission.source_sha256,
         models.Submission.state == SubmissionState.ACCEPTED.value,
         models.Submission.bytes.is_not(None),
@@ -182,6 +188,7 @@ class ScoringDb:
                         )
                     overrides[item.source_sha256] = item
             result: list[ScoredSubmission] = []
+            comparison_contexts: list[str] = []
             for row in rows:
                 # _scorable's measured_source_sha256 == source_sha256 filter excludes NULL.
                 assert row.source_sha256 is not None
@@ -244,6 +251,9 @@ class ScoringDb:
                     continue
                 if aggregation.compression_seconds is None:
                     continue
+                comparison_contexts.append(
+                    json.dumps(cross_submission_context(runs, context), sort_keys=True)
+                )
                 result.append(
                     dc.replace(
                         _to_scored(row),
@@ -267,7 +277,7 @@ class ScoringDb:
                     "requested aggregation is invalid or lacks the required verified "
                     "submission identity"
                 )
-            if len({json.dumps(r.context, sort_keys=True) for r in result}) > 1:
+            if len(set(comparison_contexts)) > 1:
                 raise ValueError(
                     "incompatible published scoring contexts; select SCORING_CORPORA "
                     "and rebenchmark consistently"

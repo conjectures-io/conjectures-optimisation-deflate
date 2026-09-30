@@ -223,3 +223,77 @@ def test_the_real_gate_ranks_the_reference_submissions(
     }
     assert [x["bytes"] for x in board["ranking"]] == sorted(x["bytes"] for x in board["ranking"])
     assert len(store.scoring.best_per_hotkey()) == 3
+
+
+def test_worker_recovers_admission_before_draining_after_restart(monkeypatch, tmp_path):
+    import time
+    from types import SimpleNamespace
+    from typing import cast
+
+    import db
+    from db import admission
+    from service.settings import Settings
+
+    calls = []
+    failures = iter((True, False))
+    scoring = object()
+
+    def admit(source, *, persist):
+        assert source is scoring and persist is True
+        calls.append("admission")
+        if next(failures):
+            raise RuntimeError("database temporarily unavailable")
+        return []
+
+    def drain(_store, _settings):
+        calls.append("drain")
+        raise KeyboardInterrupt
+
+    def sweep(_store: db.Store, _settings: Settings) -> None:
+        calls.append("sweep")
+
+    def sleep(_seconds: float) -> None:
+        calls.append("sleep")
+
+    monkeypatch.setattr(admission, "run", admit)
+    monkeypatch.setattr(worker, "sweep", sweep)
+    monkeypatch.setattr(worker, "drain", drain)
+    monkeypatch.setattr(time, "sleep", sleep)
+    with pytest.raises(KeyboardInterrupt):
+        worker.run_forever(
+            cast(db.Store, cast(object, SimpleNamespace(scoring=scoring))), Settings(files=tmp_path)
+        )
+    assert calls == ["sweep", "admission", "sleep", "sweep", "admission", "drain"]
+
+
+def test_worker_drains_queue_when_startup_admission_context_is_invalid(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from typing import cast
+
+    import db
+    from db import admission
+    from service.settings import Settings
+
+    calls = []
+
+    def admit(_source, *, persist):
+        assert persist is True
+        calls.append("admission")
+        raise ValueError("incompatible published scoring contexts")
+
+    def drain(_store, _settings):
+        calls.append("drain")
+        raise KeyboardInterrupt
+
+    def sweep(_store: db.Store, _settings: Settings) -> None:
+        calls.append("sweep")
+
+    monkeypatch.setattr(admission, "run", admit)
+    monkeypatch.setattr(worker, "sweep", sweep)
+    monkeypatch.setattr(worker, "drain", drain)
+    with pytest.raises(KeyboardInterrupt):
+        worker.run_forever(
+            cast(db.Store, cast(object, SimpleNamespace(scoring=object()))),
+            Settings(files=tmp_path),
+        )
+    assert calls == ["sweep", "admission", "drain"]
