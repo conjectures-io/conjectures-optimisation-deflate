@@ -36,7 +36,7 @@
   "measure/candidate/lib.rs": "4f7d61a39d28d52001c5578fd1f1aaaab6f4a3dce815da7af46709a3d5e3c015",
   "measure/src/deflate.rs": "172c240014f65d5e2762c1287e4982dd1cd426f2999f74e17011e05f2dc5fdec",
   "measure/src/loader.rs": "b69576ba977845cc1ac505a3cc33f039e9fbb6d4daa5e7c312ff5c85271e54b8",
-  "measure/src/main.rs": "ecd3a3fc1cb8b2151a836b9ea2fb6092add5bb2be83f88b0384630fca3438266",
+  "measure/src/main.rs": "ea4d6378fb0c03681488e4471a97ae001aa0dd3a61a30e9912606d5c4bd7adaa",
   "measure/src/method.rs": "64a45cf3d8b9a23b7032b958cebd32128967ff50d17e43d703df7493551e79b1",
   "measure/src/record.rs": "e795455b539af745407a3f3ecfa6731636d25044fcd491e512523723322bc88d",
   "measure/src/token.rs": "8bf5d962324b3a0890f3c75f713198be086c4b0659797c24b8b976978cea4917",

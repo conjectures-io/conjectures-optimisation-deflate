@@ -116,6 +116,28 @@ def test_concurrent_runs_do_not_collide(corpus: corpora.Corpus):
     assert byte_disagreement == []
 
 
+def test_each_parser_call_gets_a_clean_output_buffer(tmp_path: Path):
+    if not config().engine.exists():
+        pytest.skip("the measurement engine is not built - run `just build`")
+    # The incumbent runs immediately before this parser on every round. Its first
+    # token is a nonzero literal, so a shared, uncleared buffer makes this panic.
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "text.txt").write_bytes(b"A clean output buffer matters.\n" * 8)
+    source = tmp_path / "clean_buffer.rs"
+    source.write_text(
+        "pub fn parse(input: &[u8], out: &mut [u32]) -> usize {\n"
+        "    assert!(out.iter().all(|&token| token == 0));\n"
+        "    for (i, &byte) in input.iter().enumerate() { out[i] = byte as u32; }\n"
+        "    input.len()\n"
+        "}\n"
+    )
+    local_corpus = corpora.Corpus("clean-buffer", corpus_dir, True, {})
+    run = bench.run(config(), {"clean-buffer": source}, local_corpus).only()
+    assert not run.failures("clean-buffer")
+    assert len(run.files[0].methods["clean-buffer"].reps) == 3
+
+
 def test_a_panicking_parser_is_a_correctness_failure_not_a_crash(corpus: corpora.Corpus):
     m = bench.run(config(), {"panics": PARSERS / "panics.rs"}, corpus)
     run = m.only()

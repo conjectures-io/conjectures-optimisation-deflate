@@ -56,22 +56,31 @@ fn parse_args() -> Result<Args, String> {
         let a = &argv[i];
         let mut value = |what: &str| -> Result<String, String> {
             i += 1;
-            argv.get(i).cloned().ok_or_else(|| format!("{what} needs a value"))
+            argv.get(i)
+                .cloned()
+                .ok_or_else(|| format!("{what} needs a value"))
         };
         match a.as_str() {
             "--corpus-name" => corpus_name = Some(value("--corpus-name")?),
             "--rustc-version" => rustc_version = Some(value("--rustc-version")?),
             "--speed-floor" => {
                 let v = value("--speed-floor")?;
-                speed_floor = Some(v.parse().map_err(|_| format!("--speed-floor {v} is not a number"))?);
+                speed_floor = Some(
+                    v.parse()
+                        .map_err(|_| format!("--speed-floor {v} is not a number"))?,
+                );
             }
             "--reps" => {
                 let v = value("--reps")?;
-                reps = v.parse().map_err(|_| format!("--reps {v} is not a number"))?;
+                reps = v
+                    .parse()
+                    .map_err(|_| format!("--reps {v} is not a number"))?;
             }
             "--warmup" => {
                 let v = value("--warmup")?;
-                warmup = v.parse().map_err(|_| format!("--warmup {v} is not a number"))?;
+                warmup = v
+                    .parse()
+                    .map_err(|_| format!("--warmup {v} is not a number"))?;
             }
             "--no-bars" => bars = false,
             "-h" | "--help" => return Err(USAGE.to_string()),
@@ -90,7 +99,9 @@ fn parse_args() -> Result<Args, String> {
     let corpus_dir = PathBuf::from(&positional[0]);
     let mut methods: Vec<(String, PathBuf)> = Vec::new();
     for spec in &positional[1..] {
-        let (name, dir) = spec.split_once('=').ok_or_else(|| format!("{spec} is not name=<crate-dir>"))?;
+        let (name, dir) = spec
+            .split_once('=')
+            .ok_or_else(|| format!("{spec} is not name=<crate-dir>"))?;
         if name.is_empty() {
             return Err(format!("{spec} has an empty method name"));
         }
@@ -100,9 +111,22 @@ fn parse_args() -> Result<Args, String> {
         methods.push((name.to_string(), PathBuf::from(dir)));
     }
     let corpus_name = corpus_name.unwrap_or_else(|| {
-        corpus_dir.file_name().unwrap_or_default().to_string_lossy().to_string()
+        corpus_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
     });
-    Ok(Args { corpus_dir, corpus_name, reps, warmup, speed_floor, rustc_version, bars, methods })
+    Ok(Args {
+        corpus_dir,
+        corpus_name,
+        reps,
+        warmup,
+        speed_floor,
+        rustc_version,
+        bars,
+        methods,
+    })
 }
 
 fn corpus_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
@@ -116,7 +140,9 @@ fn corpus_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 fn read_trimmed(path: &str) -> Option<String> {
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 fn cpu_model() -> Option<String> {
@@ -153,7 +179,11 @@ fn bench_file(
     if input.is_empty() {
         return Ok(());
     }
-    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     eprintln!("{corpus}/{name} ({} bytes)", input.len());
 
     let mut toks = vec![0u32; input.len()];
@@ -166,6 +196,7 @@ fn bench_file(
             if !first && !built[&m.name].errors.is_empty() {
                 continue;
             }
+            toks.fill(0);
             let once = m.run_once(&input, &mut toks, first);
             *order += 1;
 
@@ -185,7 +216,10 @@ fn bench_file(
                 order_index: *order,
                 time_s: once.parse_s,
                 encode_s: once.encode_s,
-                total_s: once.error.is_none().then_some(once.parse_s + once.encode_s.unwrap_or(0.0)),
+                total_s: once
+                    .error
+                    .is_none()
+                    .then_some(once.parse_s + once.encode_s.unwrap_or(0.0)),
             });
 
             if let Some(e) = &once.error {
@@ -261,18 +295,31 @@ fn run() -> Result<(), String> {
         warmup_rounds: args.warmup,
         measured_rounds: args.reps,
         speed_floor: args.speed_floor,
-        methods: methods.iter().map(|m| (m.name.clone(), m.meta())).collect::<BTreeMap<String, MethodMeta>>(),
+        methods: methods
+            .iter()
+            .map(|m| (m.name.clone(), m.meta()))
+            .collect::<BTreeMap<String, MethodMeta>>(),
     };
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     serde_json::to_writer(&mut out, &meta).map_err(|e| e.to_string())?;
-    out.write_all(b"\n").and_then(|()| out.flush()).map_err(|e| e.to_string())?;
+    out.write_all(b"\n")
+        .and_then(|()| out.flush())
+        .map_err(|e| e.to_string())?;
 
     let mut order = 0u64;
     for f in &files {
-        bench_file(&args.corpus_name, f, &methods, args.warmup, args.reps, &mut order, &mut out)
-            .map_err(|e| format!("writing results: {e}"))?;
+        bench_file(
+            &args.corpus_name,
+            f,
+            &methods,
+            args.warmup,
+            args.reps,
+            &mut order,
+            &mut out,
+        )
+        .map_err(|e| format!("writing results: {e}"))?;
     }
     Ok(())
 }
