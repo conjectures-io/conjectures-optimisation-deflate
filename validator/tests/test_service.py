@@ -238,6 +238,11 @@ def test_worker_recovers_admission_before_draining_after_restart(monkeypatch, tm
     failures = iter((True, False))
     scoring = object()
 
+    def recover(worker_id: str) -> int:
+        assert worker_id == "test-worker"
+        calls.append("recover")
+        return 0
+
     def admit(source, *, persist):
         assert source is scoring and persist is True
         calls.append("admission")
@@ -259,11 +264,25 @@ def test_worker_recovers_admission_before_draining_after_restart(monkeypatch, tm
     monkeypatch.setattr(worker, "sweep", sweep)
     monkeypatch.setattr(worker, "drain", drain)
     monkeypatch.setattr(time, "sleep", sleep)
+    fake_store = SimpleNamespace(
+        scoring=scoring,
+        submissions=SimpleNamespace(requeue_interrupted=recover),
+    )
     with pytest.raises(KeyboardInterrupt):
         worker.run_forever(
-            cast(db.Store, cast(object, SimpleNamespace(scoring=scoring))), Settings(files=tmp_path)
+            cast(db.Store, cast(object, fake_store)),
+            Settings(files=tmp_path, worker_id="test-worker"),
         )
-    assert calls == ["sweep", "admission", "sleep", "sweep", "admission", "drain"]
+    assert calls == [
+        "recover",
+        "sweep",
+        "admission",
+        "sleep",
+        "recover",
+        "sweep",
+        "admission",
+        "drain",
+    ]
 
 
 def test_worker_drains_queue_when_startup_admission_context_is_invalid(monkeypatch, tmp_path):
@@ -275,6 +294,11 @@ def test_worker_drains_queue_when_startup_admission_context_is_invalid(monkeypat
     from service.settings import Settings
 
     calls = []
+
+    def recover(worker_id: str) -> int:
+        assert worker_id == "test-worker"
+        calls.append("recover")
+        return 0
 
     def admit(_source, *, persist):
         assert persist is True
@@ -291,9 +315,38 @@ def test_worker_drains_queue_when_startup_admission_context_is_invalid(monkeypat
     monkeypatch.setattr(admission, "run", admit)
     monkeypatch.setattr(worker, "sweep", sweep)
     monkeypatch.setattr(worker, "drain", drain)
+    fake_store = SimpleNamespace(
+        scoring=object(),
+        submissions=SimpleNamespace(requeue_interrupted=recover),
+    )
     with pytest.raises(KeyboardInterrupt):
         worker.run_forever(
-            cast(db.Store, cast(object, SimpleNamespace(scoring=object()))),
-            Settings(files=tmp_path),
+            cast(db.Store, cast(object, fake_store)),
+            Settings(files=tmp_path, worker_id="test-worker"),
         )
-    assert calls == ["sweep", "admission", "drain"]
+    assert calls == ["recover", "sweep", "admission", "drain"]
+
+
+def test_restart_requeues_only_own_interrupted_claims_and_supersedes_old_attempt(store):
+    import db
+
+    own_id, _ = store.submissions.add("own", "a" * 64)
+    other_id, _ = store.submissions.add("other", "b" * 64)
+    old_claim = store.submissions.claim_next("same-worker")
+    other_claim = store.submissions.claim_next("other-worker")
+    assert old_claim is not None and old_claim.id == own_id
+    assert other_claim is not None and other_claim.id == other_id
+
+    assert store.submissions.requeue_interrupted("same-worker") == 1
+    assert store.submissions.requeue_interrupted("same-worker") == 0
+    assert store.submissions.get(other_id).state == "verifying"
+    resumed = store.submissions.claim_next("same-worker")
+    assert resumed is not None and resumed.id == own_id
+    assert resumed.verification_attempt != old_claim.verification_attempt
+    with pytest.raises(RuntimeError, match="stale worker claim"):
+        store.submissions.finish(
+            own_id,
+            db.SubmissionState.REJECTED,
+            expected_claim=old_claim.claimed_at,
+            expected_attempt=old_claim.verification_attempt,
+        )
