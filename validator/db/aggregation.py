@@ -511,6 +511,27 @@ def evaluation_context(rows: Sequence[BenchmarkRun]) -> EvaluationContext:
     }
 
 
+def cross_submission_context(
+    rows: Sequence[BenchmarkRun], context: EvaluationContext
+) -> EvaluationContext:
+    """Compare recorded protocols while ignoring only the benchmark engine binary hash.
+
+    The full provenance hash remains in each immutable aggregation and is checked
+    against its own runs. Other provenance fields, corpora, timings and the incumbent
+    must still match across submissions.
+    """
+    if not rows or not rows[0].raw_data:
+        raise ValueError("missing benchmark provenance")
+    provenance = rows[0].raw_data[0].get("benchmark_provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("missing benchmark engine provenance")
+    typed_provenance = cast(dict[str, object], provenance)
+    if not typed_provenance.get("engine_sha256"):
+        raise ValueError("missing benchmark engine provenance")
+    comparable = {key: value for key, value in typed_provenance.items() if key != "engine_sha256"}
+    return {**context, "protocol": [sha256(comparable), *context["protocol"][1:]]}
+
+
 def aggregate(session: Session, rows: Sequence[BenchmarkRun]) -> BenchmarkAggregation:
     """Create immutable evidence, atomically and idempotently, without publication."""
     values = reduce_runs(rows)

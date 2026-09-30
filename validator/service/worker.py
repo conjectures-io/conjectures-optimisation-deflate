@@ -286,12 +286,33 @@ def sweep(store: db.Store, settings: Settings) -> None:
 
 
 def run_forever(store: db.Store, settings: Settings) -> None:
-    # Sweep, drain, sleep when idle, and never die on one bad turn.
+    # Restore admission for submissions accepted before a restart, then drain the
+    # queue. A transient startup error is retried before accepting more work.
     logger.info(f"[worker] {settings.worker_id} draining the queue")
-    sweep(store, settings)
+    initialized = False
     turn = 0
     while True:
         try:
+            if not initialized:
+                sweep(store, settings)
+                from db.admission import run as admit
+
+                try:
+                    decisions = admit(store.scoring, persist=True)
+                except ValueError as exc:
+                    # Invalid scoring evidence needs operator action. Keep verifying
+                    # queued submissions; a restart can retry admission after repair.
+                    logger.error(f"[worker] startup admission unavailable: {exc}")
+                else:
+                    pending = sum(
+                        p.admission is not None and p.admission.get("outcome") == "pending"
+                        for p in decisions
+                    )
+                    logger.info(
+                        f"[worker] startup admission checked {len(decisions)} submission(s); "
+                        f"{pending} pending"
+                    )
+                initialized = True
             drain(store, settings)
             turn += 1
             if turn % SWEEP_EVERY == 0:

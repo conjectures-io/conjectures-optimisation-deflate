@@ -142,35 +142,27 @@ def status(store: db.Store, sid: int) -> StatusPayload:
         live_detail: dict[str, object] | None = None
         if not test and row.state == "accepted":
             from db.admission import evaluate
-            from verifier.identity import required_fingerprint
 
-            if row.verifier_fingerprint != required_fingerprint():
+            try:
+                points = store.scoring.inputs_for_admission(preview=False, session=session)
+                current = next(
+                    (p for p in evaluate(session, points) if p.submission_id == sid), None
+                )
+                live_detail = (
+                    current.admission
+                    if current
+                    else {
+                        "outcome": "pending",
+                        "reason_code": "missing-current-evidence",
+                        "message": "current compatible scoring evidence is unavailable",
+                    }
+                )
+            except ValueError as exc:
                 live_detail = {
                     "outcome": "pending",
-                    "reason_code": "stale-verification",
-                    "message": "verification must be refreshed for current policy",
+                    "reason_code": "incompatible-evidence",
+                    "message": str(exc),
                 }
-            else:
-                try:
-                    points = store.scoring.inputs_for_admission(preview=False, session=session)
-                    current = next(
-                        (p for p in evaluate(session, points) if p.submission_id == sid), None
-                    )
-                    live_detail = (
-                        current.admission
-                        if current
-                        else {
-                            "outcome": "pending",
-                            "reason_code": "missing-current-evidence",
-                            "message": "current compatible scoring evidence is unavailable",
-                        }
-                    )
-                except ValueError as exc:
-                    live_detail = {
-                        "outcome": "pending",
-                        "reason_code": "incompatible-evidence",
-                        "message": str(exc),
-                    }
             if live_detail and live_detail.get("reason_code") == "awaiting-predecessor":
                 live_detail = {
                     **live_detail,

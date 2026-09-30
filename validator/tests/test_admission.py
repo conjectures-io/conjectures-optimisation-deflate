@@ -111,6 +111,29 @@ def run_row(rid, values, incumbent=None):
     )
 
 
+def test_cross_submission_comparison_ignores_only_engine_hash():
+    from typing import cast
+
+    from db.admission_statistics import compare
+    from db.aggregation import cross_submission_context, evaluation_context
+
+    candidate = run_row(1, [0.8] * 11)
+    reference = run_row(2, [1.0] * 11)
+    provenance = cast(dict[str, object], reference.raw_data[0]["benchmark_provenance"])
+    provenance["engine_sha256"] = "4" * 64
+    candidate_context = evaluation_context([candidate])
+    reference_context = evaluation_context([reference])
+    assert candidate_context != reference_context
+    assert cross_submission_context([candidate], candidate_context) == cross_submission_context(
+        [reference], reference_context
+    )
+    assert compare([candidate], [reference], draws=100)["outcome"] == "passed"
+
+    provenance["host_sha256"] = "5" * 64
+    with pytest.raises(ValueError, match="incompatible corpus, protocol"):
+        compare([candidate], [reference], draws=100)
+
+
 @pytest.mark.parametrize(
     "values,outcome",
     [

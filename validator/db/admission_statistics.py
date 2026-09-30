@@ -16,7 +16,12 @@ from typing import TypedDict, cast
 from bench.hashing import sha256
 from bench.results import INCUMBENT
 
-from .aggregation import evaluation_context, reduce_runs, validate_evidence
+from .aggregation import (
+    cross_submission_context,
+    evaluation_context,
+    reduce_runs,
+    validate_evidence,
+)
 from .models import BenchmarkRun
 
 METHOD_VERSION = "fixed-files-independent-runs-percentile-v1"
@@ -167,7 +172,11 @@ def compare(
 ) -> AdmissionComparison:
     if draws < 100:
         raise ValueError("at least 100 bootstrap draws required")
-    if evaluation_context(candidate_rows) != evaluation_context(reference_rows):
+    candidate_context = evaluation_context(candidate_rows)
+    reference_context = evaluation_context(reference_rows)
+    if cross_submission_context(candidate_rows, candidate_context) != cross_submission_context(
+        reference_rows, reference_context
+    ):
         raise ValueError("incompatible corpus, protocol or incumbent evidence")
     candidate = evidence_files(candidate_rows)
     reference = evidence_files(reference_rows)
