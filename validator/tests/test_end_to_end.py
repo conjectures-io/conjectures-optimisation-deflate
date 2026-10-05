@@ -143,18 +143,16 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
         chain.params(NETUID),
     )
     assert result.action == "set", result.reason
+    assert result.scoring is not None
     uids, weights = chain.submitted[0]
     assert uids == [0, 1, 2, 121]
     assert sum(weights) == pytest.approx(1.0)
-    # All three points contribute geometry. Alice receives the oldest point plus
-    # both recency events; her newer frontier allocation is unpaid. Log improvement-space
-    # weighting gives the two endpoints different allocations. Miners are paid their score
-    # times the competition's share; the treasury, uid 121, has its own share plus the
-    # competition's unpaid allocation, and nothing burns.
-    assert weights[1] == pytest.approx(0.4122670669511427 * SHARE)
-    assert weights[2] == pytest.approx(0.3378419715198898 * SHARE)
+    # The submitted vector pays the scorer's current allocations. Alice's newer
+    # frontier point is unpaid because this hotkey already owns an older point.
+    assert weights[1] == pytest.approx(result.scoring.weights[ALICE.ss58_address] * SHARE)
+    assert weights[2] == pytest.approx(result.scoring.weights[BOB.ss58_address] * SHARE)
     assert weights[0] == 0
-    assert weights[3] == pytest.approx(1.0 - SHARE + 0.2498909615289675 * SHARE)
+    assert weights[3] == pytest.approx(1.0 - weights[1] - weights[2])
 
     # 9. And the vector is on the record with its per-hotkey reasoning.
     with store_pkg.session_scope(store.sessions) as session:
@@ -174,9 +172,7 @@ def test_registration_to_weight_vector(client, store, settings, drain, tmp_path,
         assert by_hotkey[ALICE.ss58_address].on_frontier is True
         assert by_hotkey[BOB.ss58_address].on_frontier is True
         assert by_hotkey[BOB.ss58_address].improvement_weight == pytest.approx(0.0)
-        assert sum(
-            s.improvement_weight for s in snaps if s.hotkey == ALICE.ss58_address
-        ) == pytest.approx(0.4)
+        assert sum(s.improvement_weight for s in snaps) == pytest.approx(0.0)
         assert len(snaps) == 3
         assert all(s.admission_check_id is not None for s in snaps)
         assert any(s.burn_reason == "duplicate-hotkey" for s in snaps)

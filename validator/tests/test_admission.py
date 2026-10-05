@@ -111,11 +111,11 @@ def run_row(rid, values, incumbent=None):
     )
 
 
-def test_cross_submission_comparison_ignores_only_engine_hash():
+def test_cross_submission_comparison_accepts_recorded_environment_drift():
     from typing import cast
 
     from db.admission_statistics import compare
-    from db.aggregation import cross_submission_context, evaluation_context
+    from db.aggregation import evaluation_context
 
     candidate = run_row(1, [0.8] * 11)
     reference = run_row(2, [1.0] * 11)
@@ -124,14 +124,24 @@ def test_cross_submission_comparison_ignores_only_engine_hash():
     candidate_context = evaluation_context([candidate])
     reference_context = evaluation_context([reference])
     assert candidate_context != reference_context
-    assert cross_submission_context([candidate], candidate_context) == cross_submission_context(
-        [reference], reference_context
-    )
     assert compare([candidate], [reference], draws=100)["outcome"] == "passed"
 
     provenance["host_sha256"] = "5" * 64
-    with pytest.raises(ValueError, match="incompatible corpus, protocol"):
-        compare([candidate], [reference], draws=100)
+    assert compare([candidate], [reference], draws=100)["outcome"] == "passed"
+
+
+def test_statistical_admission_compares_different_corpus_manifests():
+    from bench.hashing import sha256
+    from db.admission_statistics import compare
+
+    candidate = run_row(1, [0.8] * 11)
+    reference = run_row(2, [1.0] * 11)
+    reference.raw_data[1]["file"] = "renamed.txt"
+    reference.corpus_sha256 = sha256([("renamed.txt", "c" * 64, 100)])
+    result = compare([candidate], [reference], draws=100)
+    assert result["outcome"] == "passed"
+    assert result["file_sets_equal"] is False
+    assert result["files"] == []
 
 
 @pytest.mark.parametrize(

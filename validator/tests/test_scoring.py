@@ -362,7 +362,7 @@ def test_relative_time_drives_frontier_while_snapshots_keep_seconds():
         scoring.score(points, [dc.replace(fast_absolute, normalized_time_ratio=None)], CONFIG)
 
 
-def test_scorer_uses_comparison_context_without_changing_recorded_context():
+def test_scorer_keeps_points_with_different_recorded_contexts():
     a = dc.replace(
         sub("old", 2_000_000, 0.1, sid=901),
         context={"protocol": ["old-engine"]},
@@ -376,9 +376,9 @@ def test_scorer_uses_comparison_context_without_changing_recorded_context():
     result = scoring.score([a, b], [a, b], CONFIG)
     assert len(result.scores) == 2
     assert a.context != b.context
-    with pytest.raises(ValueError, match="incomparable evaluation contexts"):
-        scoring.score(
-            [a, dc.replace(b, comparison_context={"protocol": ["different-host"]})],
-            [a],
-            CONFIG,
-        )
+    changed = scoring.score(
+        [a, dc.replace(b, comparison_context={"protocol": ["different-host"]})],
+        [a],
+        CONFIG,
+    )
+    assert len(changed.scores) == 2

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup.sh - from a fresh clone to a passing self-test, in one idempotent run.
-#   ./setup.sh                 apt packages, just, .venv, pins check, .env, corpus-stage1, Lean/Aeneas toolchain (~15 min, 9 GB), self-test
+#   ./setup.sh                 apt packages, just, .venv, .env, corpus-stage1, Lean/Aeneas toolchain (~15 min, 9 GB), self-test
 #   ./setup.sh --no-toolchain  everything except the toolchain (seconds)
 #   ./setup.sh --chain         also install the bittensor SDK (validators only, large)
 #   ./setup.sh --check         report what is present; install nothing
@@ -159,23 +159,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Before the ~15 min toolchain install: fail now if the checkout of the engine,
-# spec or gate itself has drifted from PINS.json, not on the first submission.
-step "5/9  Pins (contract, engine and gate unchanged)"
-if [ -x "$py" ]; then
-    pins_out="$(mktemp)"
-    if "$py" "$root/validator/verifier/pins.py" --check >"$pins_out" 2>&1; then
-        ok "PINS.json matches the checkout"
-    else
-        bad "pins drifted:"; sed 's/^/    /' "$pins_out"
-        missing=1
-        [ "$CHECK" = 1 ] || { rm -f "$pins_out"; exit 2; }
-    fi
-    rm -f "$pins_out"
-else
-    miss ".venv missing — cannot check pins yet"
-    missing=1
-fi
+# The worker records actual trusted inputs with completed results and logs only
+# transitions. The explicit `just check-pins` diagnostic remains available.
+step "5/9  Trusted-input audit"
+ok "gate worker records observed code and benchmark identities"
 
 # ---------------------------------------------------------------------------
 step "6/9  Configuration (.env)"

@@ -17,8 +17,8 @@ just bench-import data/benchmark-runs/example.jsonl
 ```
 
 DB commands resolve the stored submission by ID and check its signed digest. The
-Lean DB command requires successful static prevalidation of the same source,
-proof and verifier fingerprint. A local Lean command cannot populate DB success.
+Lean DB command requires successful static prevalidation of the same source and
+proof. A local Lean command cannot populate DB success.
 The service reuses matching successful static/Lean verification for another
 benchmark; it does not trust an imported report or miner-provided LLBC.
 
@@ -139,15 +139,10 @@ retain the required matching static success. Publishing checks the attempt token
 stale workers cannot publish over a newer attempt. Queue claims are checked as
 well. Benchmark failure does not erase independently successful proof verification.
 
-Current official scoring requires both milestones, the current verifier fingerprint
-and a measured-source hash written by the trusted gate. Raw JSON imports cannot
-set these fields. A separate scorer can set `VERIFY_REQUIRED_FINGERPRINT` to the
-operator-published fingerprint (`just verification-fingerprint`), so it does not need a Lean installation. The default
-computes the identity from the local pinned inputs and installed translator binaries.
-
-This stores the latest verification state, not an audit history of every attempt.
-The current scorer still consumes the existing submission summary columns. A future
-raw-run aggregation worker must additionally authenticate its benchmark producer
-and match each selected run's source hash to the verified submission; an imported
-JSON source hash is not authentication. Building that aggregation service is separate
-from this hardening change.
+Official scoring requires completed static and Lean verification and a measured-source
+hash written by the trusted gate. Raw JSON imports cannot set these fields. A change
+to verifier code or tools does not invalidate completed verification of unchanged
+submitted files. Finished gate invocations retain their observed code and tool identity
+in `gate_results`; interrupted invocations leave no result row. Benchmark runs retain
+their own corpus and environment provenance. Drift produces a log warning on a new
+observed state, not a verification or scoring failure.

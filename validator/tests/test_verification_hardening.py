@@ -243,9 +243,24 @@ def test_milestones_cache_and_stale_attempts(store):
         store.verification.publish(sid, token, "measured")
     store.verification.publish(sid, new, "measured")
     new, cached = store.verification.begin(sid, source, proof, "b" * 64, reuse=True)
+    assert cached
+    assert store.submissions.get(sid).static_verified_at is not None
+    assert store.submissions.get(sid).lean_verified_at is not None
+
+
+def test_full_verification_writes_both_milestones_only_when_complete(store):
+    sid, source, proof = submission(store)
+    token, cached = store.verification.begin(sid, source, proof, "a" * 64)
     assert not cached
-    assert store.submissions.get(sid).static_verified_at is None
-    assert store.submissions.get(sid).lean_verified_at is None
+    before = store.submissions.get(sid)
+    assert before.static_verified_at is None and before.lean_verified_at is None
+    assert before.verifier_fingerprint is None
+    store.verification.publish(sid, token, "full", "a" * 64)
+    after = store.submissions.get(sid)
+    assert after.static_verified_at == after.lean_verified_at
+    assert after.verifier_fingerprint == "a" * 64
+    _, cached = store.verification.begin(sid, source, proof, "b" * 64, reuse=True)
+    assert cached
 
 
 def test_wrong_source_and_missing_predecessor_are_refused(store):
@@ -276,7 +291,7 @@ def test_scoring_requires_both_current_verification_and_trusted_measurement(stor
     store.verification.publish(sid, token, "measured")
     assert [s.submission_id for s in store.scoring.best_per_hotkey()] == [sid]
     store.verification.begin(sid, source, proof, "b" * 64)
-    assert store.scoring.best_per_hotkey() == []
+    assert [s.submission_id for s in store.scoring.best_per_hotkey()] == [sid]
 
 
 @needs_toolchain
@@ -345,13 +360,13 @@ def test_stale_queue_worker_cannot_start_a_new_verification(store, clock):
         store.verification.begin(sid, source, proof, "a" * 64, expected_claim=first.claimed_at)
 
 
-def test_new_identity_is_not_eligible_using_old_score_columns(store):
+def test_new_identity_keeps_completed_measurement(store):
     sid, source, proof = submission(store)
     token, _ = store.verification.begin(sid, source, proof, "a" * 64)
     for stage in ("static", "lean", "measured"):
         store.verification.publish(sid, token, stage)
     store.verification.begin(sid, source, proof, "b" * 64)
-    assert store.submissions.get(sid).measured_source_sha256 is None
+    assert store.submissions.get(sid).measured_source_sha256 is not None
 
 
 @pytest.mark.parametrize(

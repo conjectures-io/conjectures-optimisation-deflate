@@ -18,7 +18,8 @@ defaults. Scoring policy is explained in [scoring](SCORING.md).
 - Use the systemd user session setup below so sandbox memory limits work.
   Choose `VERIFY_BENCH_CPUS` for the actual host; there is no portable fixed CPU ID.
 - Keep `SERVICE_STALE_CLAIM_SECONDS` greater than `VERIFY_TOTAL_TIMEOUT` (defaults
-  7200 and 2700 seconds). A separate scorer needs the required verification fingerprint.
+  7200 and 2700 seconds). A separate scorer reads completed verification and benchmark
+  evidence from the database; it does not need the Lean toolchain to compare fingerprints.
 
 ### Systemd user limits
 
@@ -145,8 +146,8 @@ reusing one fails instead of silently overwriting evidence. These baselines are
 claimed by the gate, and accepted results participate in admission and scoring with
 all allocated weight burned. The predefined example baseline manifest keeps its
 fixed order; operator baselines join the ordinary submission chronology afterward.
-Existing corpus-context compatibility requirements still apply: explicit single-corpus
-overrides cannot compete against two-corpus baseline aggregations.
+Recorded corpus and environment differences are logged for operator review and do not
+automatically exclude otherwise valid results.
 
 Files are stored before the queue transaction commits. Repeated test enqueue creates
 new submission IDs, allowing repeated measurements. Migration 0008 permits ownerless
@@ -156,7 +157,7 @@ These are trusted local operator commands, not unauthenticated API endpoints.
 Status distinguishes **gate passed** from competition admission. It resolves current
 admission eligibility without computing new statistical tests or publishing decisions;
 historical recorded decisions are retained under `--verbose`. Pending baseline evidence,
-stale verification and incompatible scoring contexts are shown as pending, not success.
+missing verification or invalid benchmark evidence is shown as pending, not success.
 Identical Rust source IDs are diagnostic information, not a new rejection policy.
 The optional baseline name defaults to the source directory name.
 

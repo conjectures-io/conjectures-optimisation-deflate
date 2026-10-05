@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Pin integrity: everything a submission is judged against, hashed in PINS.json.
+"""Expected trusted-input hashes for operator drift diagnosis.
 
-Run at CI and setup time, never per submission -- verify.py's gate trusts the
-checkout it's given and no longer checks this itself.
+The explicit check exits nonzero on drift. CI and setup report it without blocking
+submissions; the gate records actual observed inputs with finished results.
 
-    verifier/pins.py --check   fail if PINS.json is stale (CI, setup)
+    verifier/pins.py --check   report whether PINS.json is stale
     verifier/pins.py --write   re-pin after an operator-side change
 
 Exit 0 unchanged, 1 drifted, 2 PINS.json itself is broken.
@@ -59,6 +59,8 @@ PINNED = [
     "verifier/resolved.py",
     "verifier/identity.py",
     "db/verification.py",
+    "db/drift.py",
+    "db/__init__.py",
     "db/aggregation.py",
     "db/admission.py",
     "db/admission_statistics.py",
@@ -69,6 +71,13 @@ PINNED = [
     "bench/hashing.py",
     "bench/artifacts.py",
     "db/scoring.py",
+    "db/scored.py",
+    "db/api_snapshot.py",
+    "scoring/combine.py",
+    "scoring/frontier.py",
+    "scoring/pareto.py",
+    "scoring/split.py",
+    "workers/weight_setter.py",
     "db/models.py",
     "db/submissions.py",
     "service/worker.py",
@@ -127,8 +136,8 @@ def pins_changed() -> list[str]:
     if not PINS_FILE.exists():
         stop("verifier/PINS.json is missing; run `verifier/pins.py --write`")
     pinned = load_pins(PINS_FILE)
-    current = {p: sha(ROOT / p) for p in pinned if (ROOT / p).exists()}
-    return sorted(p for p in pinned if current.get(p) != pinned[p])
+    current = {p: sha(ROOT / p) for p in PINNED if (ROOT / p).is_file()}
+    return sorted(p for p in set(pinned) | set(PINNED) if current.get(p) != pinned.get(p))
 
 
 def write() -> None:

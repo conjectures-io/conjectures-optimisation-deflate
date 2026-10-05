@@ -50,7 +50,7 @@ import db  # noqa: E402
 from bench import corpora, report, verdict  # noqa: E402
 from sandbox import bwrap  # noqa: E402
 from verifier import resolved  # noqa: E402
-from verifier.identity import fingerprint  # noqa: E402
+from verifier.identity import fingerprint, observed_snapshot  # noqa: E402
 from verifier.workspace import Workspace  # noqa: E402
 
 work_root = ROOT
@@ -503,9 +503,37 @@ def stage_score(
             paths = write_import_files(
                 measured, ROOT.parent / "data/benchmark-runs/service", verdict.SPEED_FLOOR
             )
-            run_ids.extend(import_file(store.engine, path) for path in paths)
+            run_ids.extend(
+                import_file(
+                    store.engine,
+                    path,
+                    submission_id=sub_id,
+                    gate_attempt_token=token,
+                )
+                for path in paths
+            )
 
     if store is not None and sub_id is not None:
+        from bench.hashing import sha256 as evidence_sha256
+
+        observed_runs: dict[str, object] = {}
+        for measured in measurements:
+            run = measured.only()
+            manifest = sorted((f.file, f.sha256, f.raw_bytes) for f in run.files)
+            observed_runs[run.meta.corpus] = {
+                "corpus_sha256": evidence_sha256(manifest),
+                "incumbent_sha256": run.meta.methods["incumbent"].source_sha256,
+                "incumbent_lib_sha256": run.meta.methods["incumbent"].lib_sha256,
+                "schema_version": run.meta.schema_version,
+                "rustc_version": run.meta.rustc_version,
+                "cpu_model": run.meta.cpu_model,
+                "cpu_governor": run.meta.cpu_governor,
+                "benchmark_provenance": run.raw_records[0].get("benchmark_provenance"),
+            }
+        try:
+            store.drift.observe("benchmark", {"corpora": observed_runs})
+        except Exception as exc:  # noqa: BLE001 - drift logging must not change the verdict
+            logger.warning("[drift] could not record benchmark identity: {}", exc)
         from db.aggregation import aggregate, publish
         from db.models import BenchmarkRun, Submission
 
@@ -627,6 +655,7 @@ def main() -> None:
     token = ""
     cached = False
     verification_id = ""
+    verification_observed: dict[str, object] | None = None
     try:
         print(f"verifying {submission}\nworkspace: {work_root}\n")
         if stage == "full" or sub_id is not None:
@@ -642,6 +671,7 @@ def main() -> None:
                 stage_intake(inputs)
         if store is not None and sub_id is not None:
             verification_id = fingerprint()
+            verification_observed = observed_snapshot()
             token, cached = store.verification.begin(
                 sub_id,
                 (work_root / "slot/generated/parse.rs").read_bytes(),
@@ -656,10 +686,8 @@ def main() -> None:
             stage_policy(check_proof=stage != "static")
             stage_static()
             active_workspace.record("static", "passed")
-            if store is not None and sub_id is not None and stage != "lean":
-                if fingerprint() != verification_id:
-                    misconfigured("trusted verification inputs changed during static analysis")
-                store.verification.publish(sub_id, token, "static")
+            if store is not None and sub_id is not None and stage == "static":
+                store.verification.publish(sub_id, token, "static", verification_id)
             if stage != "static":
                 extracted = stage_extract()
                 if stage != "extract":
@@ -667,11 +695,9 @@ def main() -> None:
                     stage_axioms(extracted)
                     active_workspace.record("lean", "passed")
                     if store is not None and sub_id is not None:
-                        if fingerprint() != verification_id:
-                            misconfigured(
-                                "trusted verification inputs changed during Lean checking"
-                            )
-                        store.verification.publish(sub_id, token, "lean")
+                        store.verification.publish(
+                            sub_id, token, "full" if stage == "full" else "lean", verification_id
+                        )
         else:
             print("reusing matching static and Lean verification")
         logger.info(f"[gate] verification accepted in {time.monotonic() - t0:.1f}s ({limits})")
@@ -683,8 +709,6 @@ def main() -> None:
             )
             code = 0
         else:
-            if store is not None and fingerprint() != verification_id:
-                misconfigured("trusted verification inputs changed before native compilation")
             code = stage_score(results, store, sub_id, token)
             if code == 0 and store is not None and sub_id is not None:
                 store.verification.publish(sub_id, token, "measured")
@@ -696,6 +720,17 @@ def main() -> None:
     finally:
         active_workspace.finish(code, cast(str, args.keep))
         if store is not None:
+            if (
+                sub_id is not None
+                and token
+                and verification_observed is not None
+                and code in (0, 1)
+            ):
+                try:
+                    store.drift.finished_gate(sub_id, token, stage, code, verification_observed)
+                    store.drift.observe("verifier", verification_observed)
+                except Exception as exc:  # noqa: BLE001 - audit must not change the verdict
+                    logger.warning("[drift] could not record completed gate identity: {}", exc)
             store.close()
     sys.exit(code)
 

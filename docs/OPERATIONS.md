@@ -119,10 +119,24 @@ and reads what they publish. To wire it up:
    The platform refuses the whole surface (503 `COMPETITION_SCHEMA_UNAVAILABLE`) and fails
    `/readyz` until this database is at migration 0011 or later, so migrate first.
 
-**After a verifier change**, the stored `verifier_fingerprint`s no longer match
-`just verification-fingerprint`, and scoring drops those submissions from the frontier.
-Re-stamp each accepted one before the next epoch: `just preverify-db ID`, then
-`just verify-lean-db ID`.
+**After a verifier or benchmark change**, accepted submissions retain their published
+results. The gate records the observed identity with each finished invocation and logs
+one warning when tracked inputs change. Review the affected submission and benchmark
+records; a hash change alone does not trigger verification or benchmarking again.
+Apply migration `0013` before starting workers with this audit code. To investigate a
+warning, inspect `observed_states.details` for the latest values and join completed
+attempts or runs to the affected submission:
+
+```sql
+SELECT submission_id, attempt_token, stage, exit_code, finished_at, observed
+  FROM gate_results ORDER BY finished_at DESC LIMIT 20;
+SELECT submission_id, gate_attempt_token, corpus, corpus_sha256,
+       raw_data->0->'benchmark_provenance' AS provenance
+  FROM benchmark_runs WHERE submission_id IS NOT NULL ORDER BY id DESC LIMIT 20;
+```
+
+Older benchmark imports may have no `submission_id`; their run IDs remain linked through
+`benchmark_aggregation_inputs`. A return to a previous identity produces another warning.
 
 **On a host that cannot reach the corpus repositories** (stage 2 is private), point
 `CORPUS_STAGE1_REMOTE` and `CORPUS_STAGE2_REMOTE` at local mirrors, then run
@@ -173,8 +187,9 @@ To dial the whole competition down without pausing it, lower `SCORING_PARETO_SHA
 
 ## Promoting a new incumbent
 
-Copy the leader's `parse.rs` over `validator/incumbent/parse.rs` (keep the header) and
-run `just repin`. Every later submission is scored against it, the speed floor moves with
+Copy the leader's `parse.rs` over `validator/incumbent/parse.rs` (keep the header).
+Use `just repin` to acknowledge the intended pin change before merging: CI fails on stale pins. Pin drift does not stop the deployed verifier.
+Every later submission is scored against it, the speed floor moves with
 it, and the improvement component re-floors on the new size rather than handing out a free
 improvement to whoever submits next.
 
@@ -255,7 +270,7 @@ Seeding includes `miner/template` and complete source/proof pairs in `miner/exam
 It verifies the exact stored revision before native benchmarking. Identical completed
 work is reused; interrupted work resumes. `--only lazy` restricts selection; `--overwrite`
 forces new measurements and aggregation while retaining prior evidence. Matching static
-and Lean verification is still reused. A changed verifier fingerprint requires rechecking.
+and Lean verification is still reused for unchanged submitted files after a pin change.
 Only one revision per baseline name is active. Over-speed-limit examples retain evidence
 but are not activated. Baselines consume no miner registration and have no payable hotkey.
 Neither seeding nor preview submits weights to the chain.

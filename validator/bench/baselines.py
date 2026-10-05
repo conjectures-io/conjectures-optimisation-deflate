@@ -16,14 +16,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from bench import corpora
 from bench.artifacts import write_import_files
-from bench.driver import Config, check, provenance, run
+from bench.driver import Config, check, run
 from bench.errors import BenchError
 from bench.hashing import sha256
 from bench.storage import import_file, preflight
 from db.aggregation import (
     CorpusIdentity,
     aggregate,
-    compatibility,
     publish,
     select_runs,
     validate_evidence,
@@ -32,7 +31,6 @@ from db.engine import create_db_engine
 from db.models import BenchmarkAggregation, Submission, SubmissionFile
 from service.settings import load
 from service.storage import write_submission
-from verifier.identity import required_fingerprint
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -138,7 +136,6 @@ def seed_one(
             if not (
                 sub.source_sha256 == hashlib.sha256(source).hexdigest()
                 and sub.proof_sha256 == hashlib.sha256(proof).hexdigest()
-                and sub.verifier_fingerprint == required_fingerprint()
                 and sub.static_verified_at is not None
                 and sub.lean_verified_at is not None
             ):
@@ -164,15 +161,8 @@ def seed_one(
                             row = select_runs(
                                 session, hashlib.sha256(source).hexdigest(), [wanted]
                             )[0]
-                            evidence = validate_evidence(row)
-                            compatibility(evidence)
-                            if (
-                                evidence.raw_records[0].get("benchmark_provenance")
-                                == provenance(config)
-                                and evidence.meta.measured_rounds == config.reps
-                                and evidence.meta.warmup_rounds == config.warmup
-                            ):
-                                existing = row.id
+                            validate_evidence(row)
+                            existing = row.id
                         except ValueError:
                             pass
                 if existing is not None:
@@ -240,7 +230,6 @@ def main(argv: list[str] | None = None) -> int:
         identity(corpus)
     config = Config.from_env(ROOT)
     check(config)
-    required_fingerprint()  # Reads the installed trusted translator binaries.
     search = toolchain_path()
     for tool in ("lake", "rustc", "cargo"):
         if shutil.which(tool, path=search) is None:

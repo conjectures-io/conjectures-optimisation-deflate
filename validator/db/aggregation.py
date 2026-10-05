@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 from bench.corpora import Corpus
 from bench.hashing import sha256
 from bench.results import INCUMBENT, SCHEMA_VERSION, FileResult, Run, parse
-from verifier.identity import required_fingerprint
 
 from .locks import publication_lock
 from .models import BenchmarkAggregation, BenchmarkAggregationInput, BenchmarkRun, Submission
@@ -179,22 +178,10 @@ class Aggregated:
 
 
 def compatibility(run: Run) -> tuple[object, ...]:
-    """Recorded protocol/environment only; absent metadata is not certification.
-
-    Provenance binds the engine, template, host and configured resource limits.
-    Only matching protocols and environments may be combined.
-    """
+    """Describe the observed protocol and environment without judging drift."""
     m = run.meta
-    missing_provenance = "benchmark provenance missing; rebenchmark before aggregation"
     raw_provenance = run.raw_records[0].get("benchmark_provenance")
-    if not isinstance(raw_provenance, dict):
-        raise ValueError(missing_provenance)
-    # isinstance narrows to the bare `dict`, erasing the `dict[str, object]` we know this
-    # is from Run.raw_records' own type; cast restores it instead of losing that back to
-    # `dict[Unknown, Unknown]`.
-    provenance = cast(dict[str, object], raw_provenance)
-    if not all(provenance.get(key) for key in ("engine_sha256", "template_sha256", "host_sha256")):
-        raise ValueError(missing_provenance)
+    provenance = cast(dict[str, object], raw_provenance) if isinstance(raw_provenance, dict) else {}
     return (
         sha256(provenance),
         m.schema_version,
@@ -325,8 +312,6 @@ def reduce_runs(rows: Sequence[BenchmarkRun]) -> Aggregated:
     if len({r.source_sha256 for r in rows}) != 1:
         raise ValueError("mixed candidate sources")
     runs = [validate_evidence(row) for row in rows]
-    if len({compatibility(run) for run in runs}) != 1:
-        raise ValueError("incompatible benchmark protocol, environment or incumbent")
     seen: set[str] = set()
     for run in runs:
         hashes = {f.sha256 for f in run.files}
@@ -486,9 +471,7 @@ def timing_statistics(rows: Sequence[BenchmarkRun], *, draws: int = 2000) -> dic
 
 
 class EvaluationContext(TypedDict):
-    # Kept as list-of-lists, not list-of-tuples: this is stored in and compared against
-    # a JSONB column, which has no tuple type, and tuple != list even with equal
-    # elements -- a tuple here would make every stale-context comparison fail.
+    # Kept as list-of-lists for stable JSONB storage and operator inspection.
     corpora: list[list[str]]
     protocol: list[object]
     calculator: str
@@ -499,8 +482,8 @@ class EvaluationContext(TypedDict):
 
 def evaluation_context(rows: Sequence[BenchmarkRun]) -> EvaluationContext:
     runs = [validate_evidence(row) for row in rows]
-    if len({compatibility(run) for run in runs}) != 1:
-        raise ValueError("incompatible measurement context")
+    if not runs:
+        raise ValueError("at least one benchmark run required")
     return {
         "corpora": sorted([[r.corpus, r.corpus_sha256] for r in rows]),
         "protocol": list(compatibility(runs[0])),
@@ -509,27 +492,6 @@ def evaluation_context(rows: Sequence[BenchmarkRun]) -> EvaluationContext:
         "compression": "equal-corpus-mean-of-nonempty-file-ratios",
         "speed": "equal-corpus-mean-of-per-file-median-time-ratios",
     }
-
-
-def cross_submission_context(
-    rows: Sequence[BenchmarkRun], context: EvaluationContext
-) -> EvaluationContext:
-    """Compare recorded protocols while ignoring only the benchmark engine binary hash.
-
-    The full provenance hash remains in each immutable aggregation and is checked
-    against its own runs. Other provenance fields, corpora, timings and the incumbent
-    must still match across submissions.
-    """
-    if not rows or not rows[0].raw_data:
-        raise ValueError("missing benchmark provenance")
-    provenance = rows[0].raw_data[0].get("benchmark_provenance")
-    if not isinstance(provenance, dict):
-        raise ValueError("missing benchmark engine provenance")
-    typed_provenance = cast(dict[str, object], provenance)
-    if not typed_provenance.get("engine_sha256"):
-        raise ValueError("missing benchmark engine provenance")
-    comparable = {key: value for key, value in typed_provenance.items() if key != "engine_sha256"}
-    return {**context, "protocol": [sha256(comparable), *context["protocol"][1:]]}
 
 
 def aggregate(session: Session, rows: Sequence[BenchmarkRun]) -> BenchmarkAggregation:
@@ -578,7 +540,7 @@ def publish(
     if (
         submission.static_verified_at is None
         or submission.lean_verified_at is None
-        or submission.verifier_fingerprint != required_fingerprint()
+        or submission.verifier_fingerprint is None
         or submission.source_sha256 != aggregation.source_sha256
     ):
         raise ValueError("matching current static and Lean verification required")
@@ -590,22 +552,19 @@ def publish(
             .with_for_update(of=BenchmarkRun)
         )
     )
-    values = reduce_runs(rows)
     if (
-        aggregation.calculator_version != CALCULATOR_VERSION
-        or aggregation.context != evaluation_context(rows)
+        not rows
+        or aggregation.source_sha256 != submission.source_sha256
+        or any(
+            row.status != "complete"
+            or row.invalidated_at is not None
+            or row.source_sha256 != submission.source_sha256
+            for row in rows
+        )
     ):
-        raise ValueError("stale aggregation context")
-    for field in (
-        "raw_bytes",
-        "bytes",
-        "incumbent_bytes",
-        "parse_seconds",
-        "compression_seconds",
-        "incumbent_seconds",
-    ):
-        if getattr(aggregation, field) != getattr(values, field):
-            raise ValueError("aggregation no longer matches evidence")
+        raise ValueError("missing, invalidated or wrong-source benchmark evidence")
+    if aggregation.compression_seconds is None or aggregation.compression_seconds <= 0:
+        raise ValueError("published aggregation requires a positive compression time")
     # Benchmark publication preserves evidence regardless of reward eligibility.
     # The legacy speed_floor argument is retained for callers; admission owns bounds.
     for field in (
@@ -616,7 +575,7 @@ def publish(
         "compression_seconds",
         "incumbent_seconds",
     ):
-        setattr(submission, field, getattr(values, field))
-    submission.time_ratio = values.time_ratio
-    submission.measured_source_sha256 = values.source_sha256
+        setattr(submission, field, getattr(aggregation, field))
+    submission.time_ratio = aggregation.compression_seconds / aggregation.incumbent_seconds
+    submission.measured_source_sha256 = aggregation.source_sha256
     submission.aggregation_id = aggregation.id

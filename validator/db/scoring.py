@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import math
 import os
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -19,14 +20,7 @@ from sqlalchemy import Select, select, true
 from sqlalchemy.orm import Session, sessionmaker
 
 import db.models as models
-from verifier.identity import required_fingerprint
 
-from .aggregation import (
-    CALCULATOR_VERSION,
-    cross_submission_context,
-    evaluation_context,
-    reduce_runs,
-)
 from .engine import session_scope
 from .locks import publication_lock
 from .scored import ScoredSubmission
@@ -81,6 +75,17 @@ def _to_scored(row: models.Submission) -> ScoredSubmission:
         aggregation_id=row.aggregation_id,
         baseline_key=row.baseline_key,
     )
+
+
+def _stored_metric(stats: dict[str, object] | None, section: str, key: str) -> float | None:
+    """Use the published calculation, not today's code, for historical points."""
+    values = stats.get(section) if isinstance(stats, dict) else None
+    typed_values = cast(dict[str, object], values) if isinstance(values, dict) else {}
+    value = typed_values.get(key)
+    if isinstance(value, bool) or not isinstance(value, (float, int)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
 
 
 @final
@@ -152,8 +157,7 @@ class ScoringDb:
         preview: bool,
         session: Session | None = None,
     ) -> list[ScoredSubmission]:
-        """SCORING_CORPORA selects exact corpus hashes; mixed contexts fail closed."""
-        current_fingerprint = required_fingerprint()
+        """Read published points; an explicit corpus selection is an operator override."""
 
         requested: Mapping[str, str] | None = corpora
         if requested is None and os.getenv("SCORING_CORPORA"):
@@ -188,7 +192,6 @@ class ScoringDb:
                         )
                     overrides[item.source_sha256] = item
             result: list[ScoredSubmission] = []
-            comparison_contexts: list[str] = []
             for row in rows:
                 # _scorable's measured_source_sha256 == source_sha256 filter excludes NULL.
                 assert row.source_sha256 is not None
@@ -197,11 +200,7 @@ class ScoringDb:
                     if aggregation_ids is not None
                     else session.get(models.BenchmarkAggregation, row.aggregation_id)
                 )
-                if (
-                    aggregation is None
-                    or aggregation.context is None
-                    or (not preview and aggregation.calculator_version != CALCULATOR_VERSION)
-                ):
+                if aggregation is None or aggregation.context is None:
                     continue
                 runs = list(
                     session.scalars(
@@ -213,32 +212,34 @@ class ScoringDb:
                         .where(models.BenchmarkAggregationInput.aggregation_id == aggregation.id)
                     )
                 )
-                try:
-                    values = reduce_runs(runs)
-                    context = evaluation_context(runs)
-                except ValueError:
-                    continue  # Invalidated evidence removes the point, not only its payout.
-                # A formula change may alter only aggregation metadata. Corpus,
-                # timing definition and measurement protocol must still agree.
-                ignored: set[str] = {"calculator", "compression", "speed"} if preview else set()
-                stored_context = {
-                    key: value for key, value in aggregation.context.items() if key not in ignored
-                }
-                computed_context = {
-                    key: value for key, value in context.items() if key not in ignored
-                }
                 if (
-                    stored_context != computed_context
-                    or values.source_sha256 != row.source_sha256
+                    not runs
+                    or any(r.status != "complete" or r.invalidated_at is not None for r in runs)
+                    or any(r.source_sha256 != row.source_sha256 for r in runs)
                     or aggregation.source_sha256 != row.source_sha256
                 ):
                     continue
-                if requested is not None and (
-                    dict((pair[0], pair[1]) for pair in context["corpora"]) != requested
-                ):
-                    continue
+                context = aggregation.context
+                if requested is not None:
+                    listed = context.get("corpora")
+                    if not isinstance(listed, list):
+                        continue
+                    pairs = cast(list[object], listed)
+                    selected: dict[str, str] = {}
+                    for pair in pairs:
+                        if not isinstance(pair, list):
+                            selected = {}
+                            break
+                        values = cast(list[object], pair)
+                        if len(values) != 2 or not all(isinstance(value, str) for value in values):
+                            selected = {}
+                            break
+                        name, digest = cast(tuple[str, str], tuple(values))
+                        selected[name] = digest
+                    if selected != requested:
+                        continue
                 if any(
-                    getattr(values, key) != getattr(aggregation, key)
+                    getattr(row, key) != getattr(aggregation, key)
                     for key in (
                         "raw_bytes",
                         "bytes",
@@ -249,10 +250,22 @@ class ScoringDb:
                     )
                 ):
                     continue
-                if aggregation.compression_seconds is None:
+                if aggregation.compression_seconds is None or aggregation.compression_seconds <= 0:
                     continue
-                comparison_context = cross_submission_context(runs, context)
-                comparison_contexts.append(json.dumps(comparison_context, sort_keys=True))
+                balanced_time = _stored_metric(
+                    aggregation.statistics, "relative_timing", "time_ratio"
+                )
+                ratio_pct = _stored_metric(aggregation.statistics, "compression", "ratio_pct")
+                incumbent_ratio_pct = _stored_metric(
+                    aggregation.statistics, "compression", "incumbent_ratio_pct"
+                )
+                if (
+                    balanced_time is None
+                    or balanced_time <= 0
+                    or ratio_pct is None
+                    or incumbent_ratio_pct is None
+                ):
+                    continue
                 result.append(
                     dc.replace(
                         _to_scored(row),
@@ -261,12 +274,12 @@ class ScoringDb:
                         time_s=aggregation.compression_seconds,
                         incumbent_bytes=aggregation.incumbent_bytes,
                         incumbent_seconds=aggregation.incumbent_seconds,
-                        verification_current=row.verifier_fingerprint == current_fingerprint,
-                        normalized_time_ratio=values.balanced_time_ratio,
-                        normalized_ratio_pct=values.ratio_pct,
-                        normalized_incumbent_ratio_pct=values.incumbent_ratio_pct,
+                        verification_current=None,
+                        normalized_time_ratio=balanced_time,
+                        normalized_ratio_pct=ratio_pct,
+                        normalized_incumbent_ratio_pct=incumbent_ratio_pct,
                         context=context,
-                        comparison_context=comparison_context,
+                        comparison_context=None,
                         aggregation_id=aggregation.id,
                     )
                 )
@@ -276,11 +289,6 @@ class ScoringDb:
                 raise ValueError(
                     "requested aggregation is invalid or lacks the required verified "
                     "submission identity"
-                )
-            if len(set(comparison_contexts)) > 1:
-                raise ValueError(
-                    "incompatible published scoring contexts; select SCORING_CORPORA "
-                    "and rebenchmark consistently"
                 )
             return result
 

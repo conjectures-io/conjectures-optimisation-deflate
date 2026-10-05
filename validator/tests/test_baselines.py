@@ -38,10 +38,6 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
         datasets.append(Corpus(name, path, False, {}))
     prov = {"engine_sha256": "1" * 64, "template_sha256": "2" * 64, "host_sha256": "3" * 64}
 
-    def provenance(config: Config):
-        return prov
-
-    monkeypatch.setattr(baselines, "provenance", provenance)
     verified, measured = [], []
 
     def verify(command, **kwargs):
@@ -167,7 +163,7 @@ def test_seed_resume_add_corpus_and_overwrite(store, tmp_path, monkeypatch):
     assert len(payload["points"]) == 1
     assert payload["preview_recalculated"]
     report_provenance = next(iter(payload["sources"].values()))
-    assert report_provenance["verification_current"] is False
+    assert report_provenance["verification_current"] is None
     assert report_provenance["source_calculator_version"] == "compression-median-v3"
     assert report_provenance["calculator_version"] == "compression-relative-time-v5"
     assert report_provenance["compression"]["ratio_pct"] == payload["points"][0]["ratio_pct"]

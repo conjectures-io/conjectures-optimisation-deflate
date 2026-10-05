@@ -109,11 +109,6 @@ def main(argv: list[str] | None = None) -> None:
                 }
     finally:
         store.close()
-    if any(row.verification_current is False for row in rows):
-        print(
-            "Historical verification used for preview; current live-scoring eligibility "
-            "is not implied."
-        )
     result = scoring.score(rows, rows, config, eligible_hotkeys=eligible)
     print(f"method={config.method} points={len(rows)} frontier={len(result.frontier.frontier)}")
     if eligible is None:

@@ -97,7 +97,13 @@ def read_artifact(path: Path) -> tuple[Run, list[dict[str, object]]]:
     return run, raw
 
 
-def import_file(engine: sa.Engine, path: Path) -> int:
+def import_file(
+    engine: sa.Engine,
+    path: Path,
+    *,
+    submission_id: int | None = None,
+    gate_attempt_token: str | None = None,
+) -> int:
     run, raw = read_artifact(path)
     identity = raw[0].get("run_uuid")
     if identity is None:
@@ -116,6 +122,8 @@ def import_file(engine: sa.Engine, path: Path) -> int:
             insert(BenchmarkRun)
             .values(
                 run_key=key,
+                submission_id=submission_id,
+                gate_attempt_token=gate_attempt_token,
                 source_sha256=run.meta.methods[candidate].source_sha256,
                 candidate_method=candidate,
                 corpus=run.meta.corpus,
