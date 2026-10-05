@@ -57,7 +57,7 @@
   "scoring/frontier.py": "3af369e1a46240915b863167ba62d7212343dbbcecea334739f3cbea1f8c9502",
   "scoring/pareto.py": "486f9b425ef6fc0bfae2fdc9eb2f342de9c40efcae3b41bf14ced18128b571dd",
   "scoring/split.py": "97f74956d7acf08c03b942483cd34dc674769e4916ff1d78793f2a87638c90cb",
-  "service/worker.py": "49983ae453d058d83bf0d1a5bf199ad9ee95b0b5547847041a9e56a11eea6d36",
+  "service/worker.py": "56360cfbbf4c48269bea3237b1d115b17f072e2d2bb23a2b5556b260bd699ad9",
   "slot/Cargo.lock": "f4c9796598e1278b7b283f1f5661542de091b04dd0135471a5a2525330d1f286",
   "slot/Cargo.toml": "f5b2d1690c66eb62d55d3e71d2ae441cf03b8fc375ed99319097bb58571b641e",
   "slot/src/lib.rs": "21e807a0fb3aac8af6cf8d633237c11ad4e5fd560607477fc546de10cc0f2588",

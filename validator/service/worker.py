@@ -215,6 +215,12 @@ def score_one(store: db.Store, settings: Settings, sub: models.Submission) -> st
         )
         return SubmissionState.ERROR.value
 
+    # Successful and rejected gates also emit drift alerts on their captured stderr.
+    for line in result.stderr.splitlines():
+        _, separator, message = line.partition(" - ")
+        if separator and message.startswith("[drift] "):
+            logger.warning("[worker] submission {}: {}", sub.id, message)
+
     fields: dict[str, object] = {"exit_code": result.returncode, "report": report}
     if state is SubmissionState.ACCEPTED:
         fields |= measured
