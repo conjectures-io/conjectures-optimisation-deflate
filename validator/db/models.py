@@ -237,6 +237,42 @@ class SubmissionFile(Base):
     )
 
 
+class GateResult(Base):
+    """A finished gate invocation and the observed trusted inputs it used."""
+
+    __tablename__: str = "gate_results"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("submissions.id", ondelete="RESTRICT"), nullable=False
+    )
+    attempt_token: Mapped[str] = mapped_column(Text, nullable=False)
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    exit_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    observed: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    finished_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("submission_id", "attempt_token", "stage", name="uq_gate_result_attempt"),
+        Index("ix_gate_results_submission", "submission_id", "finished_at"),
+    )
+
+
+class ObservedState(Base):
+    """Last logged identity per tracked input, durable across worker restarts."""
+
+    __tablename__: str = "observed_states"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    observed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class WeightSet(Base):
     """Every set_weights attempt, accepted or not -- so a disputed epoch stays
     reconstructable from the validator's own records."""
@@ -343,6 +379,10 @@ class BenchmarkRun(Base):
     __tablename__: str = "benchmark_runs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    submission_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("submissions.id", ondelete="RESTRICT")
+    )
+    gate_attempt_token: Mapped[str | None] = mapped_column(Text)
     run_key: Mapped[str | None] = mapped_column(Text)
     source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     candidate_method: Mapped[str] = mapped_column(Text, nullable=False)
@@ -369,6 +409,7 @@ class BenchmarkRun(Base):
             name="ck_benchmark_runs_invalidation",
         ),
         Index("ix_benchmark_runs_lookup", "source_sha256", "corpus_sha256", "created_at", "id"),
+        Index("ix_benchmark_runs_submission", "submission_id", "id"),
     )
 
 

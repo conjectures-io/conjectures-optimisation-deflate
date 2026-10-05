@@ -12,7 +12,6 @@ worker does the I/O around them.
 from __future__ import annotations
 
 import dataclasses as dc
-import json
 from collections.abc import Sequence
 
 from chain.types import MetagraphView, WeightPlan
@@ -110,15 +109,6 @@ def score(
     """
     if len({s.normalized_time_ratio is not None for s in [*submissions, *history]}) > 1:
         raise ValueError("cannot mix absolute and relative time coordinates")
-    contexts = {
-        json.dumps(
-            s.comparison_context if s.comparison_context is not None else s.context,
-            sort_keys=True,
-        )
-        for s in [*submissions, *history]
-    }
-    if len(contexts) > 1:
-        raise ValueError("cannot score incomparable evaluation contexts")
     if len({s.submission_id for s in submissions}) != len(submissions):
         raise ValueError("duplicate submission IDs")
     from db.admission import admitted

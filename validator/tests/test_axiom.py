@@ -310,9 +310,11 @@ def claimed(sub_id: int = 7) -> models.Submission:
     )
 
 
-def gate_exits(monkeypatch, code: int, stdout: str = "", measured=None) -> None:
+def gate_exits(
+    monkeypatch, code: int, stdout: str = "", measured=None, *, stderr: str = "stderr tail"
+) -> None:
     def fake_gate(directory, results, claim=None, attempt=None):
-        return subprocess.CompletedProcess(["verify.py"], code, stdout, "stderr tail")
+        return subprocess.CompletedProcess(["verify.py"], code, stdout, stderr)
 
     monkeypatch.setattr(worker, "run_gate", fake_gate)
 
@@ -364,6 +366,40 @@ def test_a_rejection_names_its_stage_and_reason(monkeypatch, tmp_path):
     assert event["severity"] == "warning" and event["state"] == "rejected"
     assert event["stage"] == "2 (static)" and event["reason"] == "parse.rs uses unsafe"
     assert event["bytes"] is None and event["vs_incumbent"] is None
+
+
+@pytest.mark.parametrize("code,final", [(0, "accepted"), (1, "rejected")])
+def test_gate_drift_warnings_reach_worker_logs_without_changing_verdict(
+    monkeypatch, tmp_path, code, final
+):
+    report = "all six stages passed\n" if code == 0 else "REJECTED at stage 1\n  policy\n"
+    stderr = (
+        "2026-10-05 10:00:00.000 | DEBUG | __main__:main:1 - ordinary diagnostic\n"
+        "2026-10-05 10:00:00.001 | WARNING | db.drift:observe:99 - "
+        "[drift] benchmark changed: corpora.stage1.corpus_sha256; old=a new=b\n"
+        "2026-10-05 10:00:00.002 | WARNING | __main__:main:1 - "
+        "[drift] could not record completed gate identity: database unavailable\n"
+        "2026-10-05 10:00:00.003 | DEBUG | __main__:main:1 - "
+        "ordinary diagnostic mentioning [drift]\n"
+    )
+    gate_exits(monkeypatch, code, report, MEASURED, stderr=stderr)
+    store = gate_store(final)
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        assert worker.score_one(store, Settings(files=tmp_path), claimed()) == final
+    finally:
+        logger.remove(sink)
+    assert warnings == [
+        "[worker] submission 7: [drift] benchmark changed: "
+        "corpora.stage1.corpus_sha256; old=a new=b",
+        "[worker] submission 7: [drift] could not record completed gate identity: "
+        "database unavailable",
+    ]
+    assert store.submissions.finish.call_args.kwargs["exit_code"] == code
+    assert store.submissions.finish.call_args.kwargs["report"] == report
+    if code == 0:
+        assert store.submissions.finish.call_args.kwargs["bytes"] == MEASURED["bytes"]
 
 
 def test_a_broken_validator_is_an_error_and_the_submission_goes_back(monkeypatch, tmp_path):

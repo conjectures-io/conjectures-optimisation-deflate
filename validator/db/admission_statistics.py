@@ -16,15 +16,10 @@ from typing import TypedDict, cast
 from bench.hashing import sha256
 from bench.results import INCUMBENT
 
-from .aggregation import (
-    cross_submission_context,
-    evaluation_context,
-    reduce_runs,
-    validate_evidence,
-)
+from .aggregation import reduce_runs, validate_evidence
 from .models import BenchmarkRun
 
-METHOD_VERSION = "fixed-files-independent-runs-percentile-v1"
+METHOD_VERSION = "mixed-files-independent-runs-percentile-v2"
 MIN_REPETITIONS = 3
 DEFAULT_DRAWS = 2000
 
@@ -159,6 +154,7 @@ class AdmissionComparison(TypedDict):
     shared_observations: int
     limitations: str
     per_file_sizes_equal: bool
+    file_sets_equal: bool
     files: list[PerFileComparison]
     file_wins: int
     file_ties: int
@@ -172,18 +168,9 @@ def compare(
 ) -> AdmissionComparison:
     if draws < 100:
         raise ValueError("at least 100 bootstrap draws required")
-    candidate_context = evaluation_context(candidate_rows)
-    reference_context = evaluation_context(reference_rows)
-    if cross_submission_context(candidate_rows, candidate_context) != cross_submission_context(
-        reference_rows, reference_context
-    ):
-        raise ValueError("incompatible corpus, protocol or incumbent evidence")
     candidate = evidence_files(candidate_rows)
     reference = evidence_files(reference_rows)
-    if candidate.keys() != reference.keys():
-        raise ValueError("file content or manifest membership mismatch")
-    if any(candidate[k]["incumbent_bytes"] != reference[k]["incumbent_bytes"] for k in candidate):
-        raise ValueError("inconsistent incumbent compression evidence")
+    shared = candidate.keys() & reference.keys()
     candidate_time, reference_time = coordinate(candidate), coordinate(reference)
     point_gain = 100 * (1 - candidate_time / reference_time)
     observations: dict[ObservationKey, FileEvidence] = {}
@@ -210,7 +197,8 @@ def compare(
         raise ValueError("nonfinite bootstrap gain")
     lower, upper = quantile(gains, 0.05), quantile(gains, 0.95)
     per_file: list[PerFileComparison] = []
-    for identity, c in candidate.items():
+    for identity in sorted(shared):
+        c = candidate[identity]
         r = reference[identity]
         ct, rt = [
             statistics.median(f["samples"][0]) / statistics.median(f["samples"][1]) for f in (c, r)
@@ -244,17 +232,18 @@ def compare(
         "interval": "central 90% percentile interval (5th–95th percentiles)",
         "quantile": "linear interpolation at (n-1)*p",
         "outcome": "passed" if lower > 0 else "inconclusive",
-        "uncertainty_target": "repetition timing on the fixed scored corpus",
-        "resampling": "fixed files; repetitions within files; independent distinct runs",
+        "uncertainty_target": "repetition timing within each recorded corpus",
+        "resampling": "each run's fixed files; repetitions within files; independent distinct runs",
         "pairing": "within-run interleaved rounds where order indices establish blocks",
         "paired_file_observations": sum(f["paired"] for f in observations.values()),
         "file_observations": len(observations),
         "shared_observations": len(candidate) + len(reference) - len(observations),
-        "limitations": "excludes host drift, cross-file dependence; "
+        "limitations": "excludes host/corpus drift and cross-file dependence; "
         "nominal coverage is not guaranteed for small samples",
         "per_file_sizes_equal": all(
-            candidate[k]["output_bytes"] == reference[k]["output_bytes"] for k in candidate
+            candidate[k]["output_bytes"] == reference[k]["output_bytes"] for k in shared
         ),
+        "file_sets_equal": candidate.keys() == reference.keys(),
         "files": per_file,
         "file_wins": sum(f["gain_pct"] > 0 for f in per_file),
         "file_ties": sum(f["gain_pct"] == 0 for f in per_file),

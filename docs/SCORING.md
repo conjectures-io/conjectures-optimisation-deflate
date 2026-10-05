@@ -85,8 +85,9 @@ Recalculation reuses retained evidence; preview automatically applies the new fo
 ratios within each corpus, then the equally weighted mean across corpora. Empty
 files are excluded from this ratio (an all-empty corpus is rejected), but their
 bytes and timings remain in telemetry. Total compressed/raw bytes is retained
-as byte-weighted telemetry. Recency improvements use the same balanced ratio. Compare only identical corpus-content sets and compatible
-measurement contexts, even when displaying percentages.
+as byte-weighted telemetry. Recency improvements use the same balanced ratio. Recorded
+corpus and environment identities remain available for audit; completed results are
+compared by default when those identities differ.
 
 Baseline allocations burn explicitly. With only baselines and no miner improvement,
 all emission burns. These controls do not by themselves solve near-duplicate frontier
@@ -106,8 +107,8 @@ An accepted submission is an **improvement** when it beats the record by at leas
 - It then follows whichever is smaller, the best accepted submission so far or the
   incumbent. Promoting a new incumbent mid-round therefore raises the bar rather than
   handing a free improvement to whoever submits next.
-- Current normalized evidence compares balanced compressed/raw ratios on the same
-  corpus context. Legacy evidence can retain a byte record for historical inspection.
+- Current normalized evidence compares balanced compressed/raw ratios. Legacy evidence
+  can retain a byte record for historical inspection.
   A submission that is merely faster at the same compression ratio has not moved
   the record; it may still be a frontier point.
 - The threshold is a policy setting in `.env.example`.
@@ -147,9 +148,11 @@ before you set it.
 ## Database evidence and reproducibility
 
 The scorer consumes published aggregations, not local JSONL files or legacy summary-only
-submission rows. Old rows need compatible benchmark evidence and aggregation publication.
-`SCORING_CORPORA` can select a JSON map of corpus names to content hashes. Without it,
-all selected points must share one evaluation context; incompatible contexts stop scoring.
+submission rows. `SCORING_CORPORA` remains an explicit operator filter for a JSON map of
+corpus names to content hashes. Without that override, recorded corpus and environment
+differences do not remove published points or stop scoring. Live scoring uses each
+aggregation's published values; a later calculator or harness change does not silently
+recalculate historical points.
 
 Aggregations retain exact run IDs, source hash, calculator version, environment/build
 provenance and timing statistics. Per-file sample standard deviation describes repetition
@@ -177,22 +180,19 @@ Preview automatically recalculates from stored schema-v4 evidence with the curre
 formula, including after an aggregation version change. It uses the runs linked to
 each submission's published aggregation (or explicit aggregation IDs), preserving
 the original records. It validates corpus/source identities, measurement compatibility
-and invalidation status. Successful historical static/Lean verification suffices
-for this operator-only report; `verification_current` records whether the stamp still
-matches. Neither verification nor benchmarks are executed by preview. The report
-records both the original and recalculated calculator versions.
+and invalidation status. Completed static/Lean verification remains valid across
+operator code changes. Neither verification nor benchmarks are executed by preview.
+The report records the published calculator version and can recalculate raw evidence
+for inspection without changing live published values.
 
 To update published evidence for live scoring after an aggregation version change,
 reaggregate retained schema-v4 runs with
 `just bench-aggregate --submission-id ID --corpus NAME:SHA256 --publish`
 (repeat --corpus for each corpus, optionally select --run-id). This does not
-rerun benchmarks. Old aggregations remain immutable and are excluded from live scoring.
-
-The current verifier fingerprint includes aggregation/scoring source files, so this
-update also requires refreshing static/Lean verification before publishing for live
-scoring. This restriction does not apply to the read-only preview.
-Incremental baseline seeding refreshes verification and reuses compatible benchmark
-evidence; it does not require rerunning compatible measurements.
+rerun benchmarks. Old aggregations remain immutable and usable until an operator
+explicitly replaces or invalidates them. A changed verifier fingerprint does not require
+refreshing completed static/Lean verification. Incremental baseline seeding reuses
+completed verification of unchanged submitted files.
 
 
 ## Statistical speed admission
@@ -230,7 +230,9 @@ corpus-composition uncertainty are not estimated. Fresh interleaved candidate/re
 confirmation benchmarks remain a future improvement.
 
 Outcomes are `passed`, `not_required`, `inconclusive`, or `dominated`. Missing or invalid
-evidence is an evaluation error; missing predecessors or changed contexts are pending.
+evidence is an evaluation error; missing predecessors or explicitly changed admission
+evidence may be pending. A change in recorded corpus or environment identity alone does
+not stop a statistical comparison.
 Inconclusive, dominated, pending and invalid points receive zero allocation and do not
 change frontier geometry or recency record history. Admitted baselines participate in
 weighting and burn their allocations; registration and oldest-submission duplicate-hotkey
@@ -247,9 +249,9 @@ just admission-replay --historical         # backfill historically verified evid
 just weights-preview                       # read-only recalculation and plots
 ```
 
-`--historical` permits existing successful verification stamps and recalculates from
-retained runs. It does not refresh verification, republish aggregations, or enable stale
-evidence for live scoring. Both admission commands accept `--out PATH` for decision JSON;
+`--historical` reads existing successful verification and retained runs. It does not
+refresh verification or republish aggregations. Both admission commands accept
+`--out PATH` for decision JSON;
 relative paths are relative to `validator/`. `--preview` never writes decisions.
 
 `submission_admission_checks` is append-only, including database-enforced immutability.

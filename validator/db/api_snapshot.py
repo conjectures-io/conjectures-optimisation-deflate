@@ -11,8 +11,6 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from verifier.identity import required_fingerprint
-
 from .models import BenchmarkAggregation, Submission, SubmissionAdmissionCheck
 from .scored import ScoredSubmission
 
@@ -135,7 +133,7 @@ def build_snapshot(
     return {
         "schema_version": 1,
         "computed_at": datetime.now(timezone.utc).isoformat(),
-        "verifier_fingerprint": required_fingerprint(),
+        "verifier_fingerprint": None,
         "observed_submissions": observed,
         "items": items,
         "policy": effective,

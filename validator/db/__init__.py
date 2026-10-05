@@ -17,6 +17,7 @@ from sqlalchemy import Engine, literal, select
 
 from .bounty import BountyDb
 from .clock import iso, now
+from .drift import DriftDb
 from .engine import create_db_engine, database_url, session_factory, session_scope
 from .ratelimit import RateLimiter
 from .registrations import NoSlot, RegistrationsDb
@@ -65,6 +66,7 @@ class Store:
         self.sessions = session_factory(engine)
         self.submissions = SubmissionsDb(self.sessions)
         self.verification = VerificationDb(self.sessions)
+        self.drift = DriftDb(self.sessions)
         self.registrations = RegistrationsDb(self.sessions)
         self.scoring = ScoringDb(self.sessions)
         self.bounty = BountyDb(self.sessions)

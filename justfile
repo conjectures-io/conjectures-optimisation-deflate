@@ -323,7 +323,7 @@ weights-preview *ARGS:
 repin:
     {{python}} {{val}}/verifier/pins.py --write
 
-# Fail if PINS.json is stale. CI and setup run this; no submission does.
+# Explicit diagnostic: nonzero on drift; CI requires the pins to be current.
 check-pins:
     {{python}} {{val}}/verifier/pins.py --check
 

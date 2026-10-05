@@ -171,8 +171,7 @@ def test_reduction_and_uncertainty(store):
         prov = rows[1].raw_data[0]["benchmark_provenance"]
         assert isinstance(prov, dict)
         prov["host_sha256"] = "changed"
-        with pytest.raises(ValueError, match="incompatible"):
-            reduce_runs(rows)
+        assert reduce_runs(rows).bytes == total.bytes
 
 
 def test_concurrent_aggregation_is_idempotent(store):
@@ -248,12 +247,42 @@ def test_old_verifier_stamp_keeps_published_scoring_evidence(store):
         session.get(Submission, sid).verifier_fingerprint = "0" * 64
     points = store.scoring.scoring_inputs()
     assert [p.submission_id for p in points] == [sid]
-    assert points[0].verification_current is False
+    assert points[0].verification_current is None
+
+
+def test_live_scoring_keeps_points_from_different_recorded_contexts(store):
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from db.aggregation import aggregate, publish
+    from db.models import Submission
+
+    with store.sessions.begin() as session:
+        runs = [measured_row(session), measured_row(session, "second", 1)]
+        provenance = runs[1].raw_data[0]["benchmark_provenance"]
+        assert isinstance(provenance, dict)
+        provenance["host_sha256"] = "4" * 64
+        flag_modified(runs[1], "raw_data")
+        for index, run in enumerate(runs):
+            aggregation = aggregate(session, [run])
+            sub = Submission(
+                hotkey=f"miner-{index}",
+                digest=str(index) * 64,
+                state="accepted",
+                source_sha256="b" * 64,
+                proof_sha256="e" * 64,
+                verifier_fingerprint="a" * 64,
+                static_verified_at=datetime.now(timezone.utc),
+                lean_verified_at=datetime.now(timezone.utc),
+            )
+            session.add(sub)
+            session.flush()
+            publish(session, sub.id, aggregation.id)
+    assert len(store.scoring.scoring_inputs()) == 2
 
 
 @pytest.mark.parametrize(
     "problem",
-    ["source", "manifest", "incumbent", "failed", "invalidated", "nan", "missing-provenance"],
+    ["source", "manifest", "incumbent", "failed", "invalidated", "nan"],
 )
 def test_invalid_evidence_cannot_be_aggregated(store, problem):
     from db.aggregation import reduce_runs
@@ -277,8 +306,6 @@ def test_invalid_evidence_cannot_be_aggregated(store, problem):
             methods = row.raw_data[1]["methods"]
             assert isinstance(methods, dict)
             methods["candidate"]["reps"][1]["time_s"] = float("nan")
-        else:
-            del row.raw_data[0]["benchmark_provenance"]
         with pytest.raises(ValueError):
             reduce_runs([row])
         session.rollback()
@@ -370,12 +397,12 @@ def test_recency_uses_balanced_ratio():
 
 
 @pytest.mark.parametrize("invalid", ["revoked", "source", "unverified", "context"])
-def test_preview_recalculates_historical_evidence_without_publication(store, invalid):
+def test_published_historical_evidence_stays_live_without_recalculation(store, invalid):
     from sqlalchemy import func, select
     from sqlalchemy.orm.attributes import flag_modified
 
     from bench.storage import sha256
-    from db.aggregation import CALCULATOR_VERSION, aggregate, publish
+    from db.aggregation import aggregate, publish
     from db.models import BenchmarkAggregation, Submission
     from verifier.identity import required_fingerprint
 
@@ -408,13 +435,13 @@ def test_preview_recalculates_historical_evidence_without_publication(store, inv
         sub.verifier_fingerprint = "0" * 64
         aid, sid, rid = result.id, sub.id, runs[0].id
 
-    assert store.scoring.scoring_inputs() == []
+    assert len(store.scoring.scoring_inputs()) == 1
     points = store.scoring.preview_inputs()
     assert len(points) == 1
     assert points[0].ratio_pct == pytest.approx((30 + 3) / 2)
     assert points[0].byte_weighted_ratio_pct == pytest.approx(100 * 60 / 1100)
-    assert points[0].verification_current is False
-    assert points[0].context["calculator"] == CALCULATOR_VERSION
+    assert points[0].verification_current is None
+    assert points[0].context["calculator"] == "compression-median-v3"
     assert store.scoring.preview_inputs(aggregation_ids=[aid]) == points
     with store.sessions.begin() as session:
         # Preview neither rewrites historical results nor updates verification stamps.
@@ -434,9 +461,13 @@ def test_preview_recalculates_historical_evidence_without_publication(store, inv
             sub.lean_verified_at = None
         else:
             saved.context = {**saved.context, "corpora": [["different", "c" * 64]]}
-    assert store.scoring.preview_inputs() == []
-    with pytest.raises(ValueError, match="requested aggregation"):
-        store.scoring.preview_inputs(aggregation_ids=[aid])
+    if invalid == "context":
+        assert len(store.scoring.preview_inputs()) == 1
+        assert len(store.scoring.preview_inputs(aggregation_ids=[aid])) == 1
+    else:
+        assert store.scoring.preview_inputs() == []
+        with pytest.raises(ValueError, match="requested aggregation"):
+            store.scoring.preview_inputs(aggregation_ids=[aid])
 
 
 def test_relative_timing_balances_files_and_corpora(store):

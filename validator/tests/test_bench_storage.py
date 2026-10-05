@@ -94,6 +94,20 @@ def test_import_preserves_raw_data_and_retries_concurrently(store, tmp_path):
         )
 
 
+def test_gate_import_links_run_to_submission_and_attempt(store, tmp_path):
+    sid, _ = store.submissions.add("gate-audit", "f" * 64)
+    run_id = storage.import_file(
+        store.engine,
+        save(tmp_path, evidence()),
+        submission_id=sid,
+        gate_attempt_token="attempt-1",
+    )
+    with store.sessions.begin() as session:
+        run = session.get(BenchmarkRun, run_id)
+        assert run.submission_id == sid
+        assert run.gate_attempt_token == "attempt-1"
+
+
 def test_uuid_collision_refused_and_new_execution_kept(store, tmp_path):
     raw = evidence()
     raw[0]["run_uuid"] = "00000000-0000-4000-8000-000000000001"
