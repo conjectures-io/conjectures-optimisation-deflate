@@ -9,6 +9,7 @@ reasoning behind it.
 from __future__ import annotations
 
 import dataclasses as dc
+import hashlib
 import json
 import math
 import os
@@ -346,12 +347,74 @@ class ScoringDb:
         snapshots: list[dict[str, object]] | None = None,
         api_snapshot: dict[str, object] | None = None,
     ) -> int:
+        row_id, _ = self.publish_weight_set(
+            netuid=netuid,
+            block=block,
+            uids=uids,
+            weights=weights,
+            summary=summary,
+            accepted=accepted,
+            dry_run=dry_run,
+            error=error,
+            snapshots=snapshots,
+            api_snapshot=api_snapshot,
+        )
+        return row_id
+
+    def publish_weight_set(
+        self,
+        *,
+        netuid: int,
+        block: int,
+        uids: list[int],
+        weights: list[float],
+        summary: str | None,
+        accepted: bool,
+        dry_run: bool = False,
+        error: str | None = None,
+        snapshots: list[dict[str, object]] | None = None,
+        api_snapshot: dict[str, object] | None = None,
+        reuse_unchanged: bool = False,
+    ) -> tuple[int, bool]:
         """Persist one weight vector and the per-hotkey reasoning behind it.
 
-        Both in one transaction: a vector whose explanation went missing is not an audit
-        trail. Returns the weight_sets id.
+        Returns (weight-set id, created). Reused publications remain immutable.
+        Ignore only the pass's computed_at; scores, evidence, policy, bounty totals,
+        vector and dry-run mode must all agree before a polling result can reuse it.
         """
+        public_content = (
+            {k: v for k, v in api_snapshot.items() if k != "computed_at"}
+            if api_snapshot is not None
+            else None
+        )
+        content_key = hashlib.sha256(
+            json.dumps(
+                [uids, weights, summary, dry_run, snapshots or [], public_content],
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
         with session_scope(self._sessions) as session:
+            # Separate from admission's publication lock; serialize only publishers
+            # for the same subnet so simultaneous workers cannot duplicate a pass.
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(771002002, :netuid)"), {"netuid": netuid}
+            )
+            if reuse_unchanged:
+                previous = session.execute(
+                    select(
+                        models.WeightSet.id,
+                        models.WeightSet.scoring_content_sha256,
+                        models.WeightSet.api_snapshot.is_not(None),
+                    )
+                    .where(models.WeightSet.netuid == netuid)
+                    .order_by(models.WeightSet.id.desc())
+                    .limit(1)
+                ).first()
+                if previous is not None and previous[1] == content_key:
+                    if api_snapshot is None or previous[2]:
+                        return cast(int, previous[0]), False
             row = models.WeightSet(
                 netuid=netuid,
                 block=block,
@@ -362,12 +425,13 @@ class ScoringDb:
                 accepted=accepted,
                 dry_run=dry_run,
                 error=error,
+                scoring_content_sha256=content_key,
             )
             session.add(row)
             session.flush()
             for snap in snapshots or []:
                 session.add(models.ScoreSnapshot(weight_set_id=row.id, **snap))
-            return int(row.id)
+            return int(row.id), True
 
     def prune_api_snapshots(self, *, netuid: int, retention_seconds: int, batch_size: int) -> int:
         """Clear one batch of expired payloads, keeping the latest object for this subnet.

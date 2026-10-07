@@ -94,8 +94,8 @@ class WeightSetterConfig:
     poll_seconds: float = 12.0
     # Keep API history briefly so pagination can continue across scoring passes.
     api_snapshot_retention_seconds: int = 3600
-    api_snapshot_cleanup_interval_seconds: float = 300.0
-    api_snapshot_cleanup_batch_size: int = 100
+    api_snapshot_cleanup_interval_seconds: float = 60.0
+    api_snapshot_cleanup_batch_size: int = 10
     # Compute and record the vector, but do not submit it.
     dry_run: bool = True
     # Off mainnet only: where the treasury share goes (default: the burn uid). On netuid 66 the
@@ -342,7 +342,7 @@ def step(
         logger.warning(f"[bounty] epoch emission not recorded this tick: {exc}")
     meta = chain.metagraph(config.netuid)
     plan, result = plan_for(store, meta, config, scoring_config)
-    weight_set_id = record(
+    weight_set_id, created = record(
         store,
         config,
         block,
@@ -350,12 +350,14 @@ def step(
         result,
         False,
         "chain submission not attempted: eligibility checks pending",
+        reuse_unchanged=True,
     )
 
     def finish(action: Action, reason: str, *, accepted: bool = False) -> StepResult:
-        store.scoring.weight_set_outcome(
-            weight_set_id, accepted=accepted, error=None if accepted else reason
-        )
+        if created:
+            store.scoring.weight_set_outcome(
+                weight_set_id, accepted=accepted, error=None if accepted else reason
+            )
         return StepResult(
             action, reason, block=block, plan=plan, scoring=result, weight_set_id=weight_set_id
         )
@@ -396,6 +398,18 @@ def step(
     if config.dry_run:
         emit_plan("info", "weights_planned", config, meta, block, plan)
         return finish("skip", f"dry run: not submitted | {summary}")
+    if not created:
+        # Each real chain attempt owns its block, outcome and bounty attribution.
+        # Never turn a reused historical publication into a new chain attempt.
+        weight_set_id, created = record(
+            store,
+            config,
+            block,
+            plan,
+            result,
+            False,
+            "chain submission not attempted: eligibility checks pending",
+        )
     try:
         accepted = chain.set_weights(config.netuid, list(plan.uids), list(plan.weights))
     except Exception as exc:  # noqa: BLE001 - an RPC error may have an unknown chain outcome
@@ -457,12 +471,14 @@ def record(
     result: scoring.Scoring | None,
     accepted: bool,
     error: str | None,
-) -> int:
+    *,
+    reuse_unchanged: bool = False,
+) -> tuple[int, bool]:
     # The vector and its reasoning, in one transaction. Recorded whatever happened: a
     # refused or skipped epoch is exactly the one somebody will ask about later.
     if result is not None and result.api_snapshot is None:
         raise ValueError("completed scoring requires API evidence")
-    return store.scoring.record_weight_set(
+    return store.scoring.publish_weight_set(
         netuid=config.netuid,
         block=block,
         uids=list(plan.uids),
@@ -473,6 +489,7 @@ def record(
         error=error,
         snapshots=result.snapshots() if result else None,
         api_snapshot=result.api_snapshot if result else None,
+        reuse_unchanged=reuse_unchanged,
     )
 
 

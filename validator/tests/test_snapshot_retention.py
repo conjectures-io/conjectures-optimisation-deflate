@@ -76,7 +76,7 @@ def test_cleanup_cadence_and_failure_do_not_stop_ticks(monkeypatch):
     def sleep(_seconds):
         nonlocal ticks, clock
         ticks += 1
-        clock += 100
+        clock += 20
         if ticks == 5:
             raise KeyboardInterrupt
 
@@ -91,7 +91,7 @@ def test_cleanup_cadence_and_failure_do_not_stop_ticks(monkeypatch):
     assert step.call_count == 5
     assert store.scoring.prune_api_snapshots.call_count == 2
     store.scoring.prune_api_snapshots.assert_called_with(
-        netuid=66, retention_seconds=3600, batch_size=100
+        netuid=66, retention_seconds=3600, batch_size=10
     )
 
 
