@@ -15,9 +15,9 @@
   "db/aggregation.py": "1c2b35f84fa8e211f63e68f975c1a91382e8b7ad812e4842320fcf474ebd23d1",
   "db/api_snapshot.py": "451688235c59cb67608bd94df4d1443f1dbe809e20c9fcb2ac5ca26a09f4c624",
   "db/drift.py": "7f914e3fa5f023a38cc5585b941a20b644b4e461a6dd768345a118fd0e94b137",
-  "db/models.py": "da32ee08887913feb4a8427b5a15a61696da0712847fe82079451e35a95235a4",
+  "db/models.py": "b49389144bafe11ebcee25db7b911504cda65a37d3b848ef22373902dbd18308",
   "db/scored.py": "3f74a47ced6c13691792b5a0f5ea32c54382c6780fcbf894f27de2e04ab1dd5e",
-  "db/scoring.py": "ec4a2318902fe84c4692b8b36cd1abfa6f0434c5ae424af2d039bc3088aaaaf6",
+  "db/scoring.py": "481e283da49273564e911758dcb9a8c4395c8b6526059da7d2cbf981f947fe42",
   "db/submissions.py": "92632da9d0d8db3953fcb9b52631874a7187a9deaa7491caaab1fbf6af7a91e3",
   "db/verification.py": "55613fcc56332c16f6107ca086d75ea8afe1fe8618b121a197f1dc13758bd3eb",
   "incumbent/parse.rs": "b9e0d844baf5958cf0c1c66bfb9fd1f89663fa30f21a99c3c116b3dd2e771361",
@@ -68,5 +68,5 @@
   "verifier/resolved.py": "bfb7e0b6eb16db9dcc273d428385c48f9820d2b4213b1b2997d85988b647dc27",
   "verifier/verify.py": "6dcab3d120b66cc0783c051b44b0e6c2b84ef7374301eece683432193498c58a",
   "verifier/workspace.py": "17b044fd3f60551d509b1a1df13880436f1c1b44519581a50193f989a5098dc5",
-  "workers/weight_setter.py": "3ec0e547a86e0516c56fd0e239bda0fed7e13e2a7d149350d35982b4edc49b68"
+  "workers/weight_setter.py": "eabd9bdefa64628a3fed93539ca610eaa978bd4bc6b51d987c2d586edf6d9325"
 }

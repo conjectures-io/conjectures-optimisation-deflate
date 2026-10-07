@@ -141,7 +141,7 @@ def test_submission_files_precede_scoring_bounds(migrated):
         with engine.connect() as conn:
             assert (
                 conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-                == "0013"
+                == "0014"
             )
             constraint = conn.execute(
                 sa.text(

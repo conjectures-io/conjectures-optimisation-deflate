@@ -298,7 +298,22 @@ class WeightSet(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__: tuple[SchemaItem, ...] = (Index("ix_weight_sets_created_at", "created_at"),)
+    __table_args__: tuple[SchemaItem, ...] = (
+        Index("ix_weight_sets_created_at", "created_at"),
+        Index(
+            "ix_weight_sets_snapshot_latest",
+            "netuid",
+            "id",
+            postgresql_where=text("api_snapshot IS NOT NULL"),
+        ),
+        Index(
+            "ix_weight_sets_snapshot_expiry",
+            "netuid",
+            "created_at",
+            "id",
+            postgresql_where=text("api_snapshot IS NOT NULL"),
+        ),
+    )
 
 
 class ScoreSnapshot(Base):

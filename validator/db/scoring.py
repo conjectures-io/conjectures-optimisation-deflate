@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from typing import cast, final
 
-from sqlalchemy import Select, select, true
+from sqlalchemy import Select, select, text, true
 from sqlalchemy.orm import Session, sessionmaker
 
 import db.models as models
@@ -368,6 +368,45 @@ class ScoringDb:
             for snap in snapshots or []:
                 session.add(models.ScoreSnapshot(weight_set_id=row.id, **snap))
             return int(row.id)
+
+    def prune_api_snapshots(self, *, netuid: int, retention_seconds: int, batch_size: int) -> int:
+        """Clear one batch of expired payloads, keeping the latest object for this subnet.
+
+        Separate from publishing: failure rolls back only this maintenance batch.
+        SQL NULL is intentional; JSON null is not a usable published snapshot.
+        """
+        if retention_seconds <= 0 or batch_size <= 0:
+            raise ValueError("snapshot retention and batch size must be positive")
+        with session_scope(self._sessions) as session:
+            session.execute(text("SET LOCAL lock_timeout = '1s'"))
+            session.execute(text("SET LOCAL statement_timeout = '10s'"))
+            cleared = session.scalars(
+                text("""
+                    WITH latest AS (
+                        SELECT id FROM weight_sets
+                        WHERE netuid = :netuid AND api_snapshot IS NOT NULL
+                          AND jsonb_typeof(api_snapshot) = 'object'
+                        ORDER BY id DESC LIMIT 1
+                    ), batch AS (
+                        SELECT id FROM weight_sets
+                        WHERE netuid = :netuid AND api_snapshot IS NOT NULL
+                          AND created_at < CURRENT_TIMESTAMP
+                              - make_interval(secs => :retention_seconds)
+                          AND NOT EXISTS (SELECT 1 FROM latest WHERE latest.id = weight_sets.id)
+                        ORDER BY created_at, id LIMIT :batch_size
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE weight_sets AS w SET api_snapshot = NULL
+                    FROM batch WHERE w.id = batch.id
+                    RETURNING w.id
+                """),
+                {
+                    "netuid": netuid,
+                    "retention_seconds": retention_seconds,
+                    "batch_size": batch_size,
+                },
+            ).all()
+            return len(cleared)
 
     def weight_set_outcome(self, weight_set_id: int, *, accepted: bool, error: str | None) -> None:
         """Complete the chain stage without changing its already-persisted scoring evidence."""

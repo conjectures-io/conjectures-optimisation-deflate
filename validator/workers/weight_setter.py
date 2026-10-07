@@ -92,6 +92,10 @@ class WeightSetterConfig:
     set_margin: int = 12
     # Idle sleep between ticks; about one block.
     poll_seconds: float = 12.0
+    # Keep API history briefly so pagination can continue across scoring passes.
+    api_snapshot_retention_seconds: int = 3600
+    api_snapshot_cleanup_interval_seconds: float = 300.0
+    api_snapshot_cleanup_batch_size: int = 100
     # Compute and record the vector, but do not submit it.
     dry_run: bool = True
     # Off mainnet only: where the treasury share goes (default: the burn uid). On netuid 66 the
@@ -120,6 +124,12 @@ class WeightSetterConfig:
             raise ValueError("set_margin must be >= 0")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
+        if self.api_snapshot_retention_seconds <= 0:
+            raise ValueError("API_SNAPSHOT_RETENTION_SECONDS must be positive")
+        if self.api_snapshot_cleanup_interval_seconds <= 0:
+            raise ValueError("API_SNAPSHOT_CLEANUP_INTERVAL_SECONDS must be positive")
+        if self.api_snapshot_cleanup_batch_size <= 0:
+            raise ValueError("API_SNAPSHOT_CLEANUP_BATCH_SIZE must be positive")
         if not self.bounty_alpha > 0:
             raise ValueError("ALPHA_TOTAL_SUBMISSION_BOUNTY must be positive")
 
@@ -146,6 +156,18 @@ class WeightSetterConfig:
             burn_mode=env.get("WEIGHT_BURN_MODE", "").lower() in ("1", "true", "yes"),
             set_margin=int(env.get("WEIGHT_SET_MARGIN", str(d.set_margin))),
             poll_seconds=float(env.get("WEIGHT_POLL_SECONDS", str(d.poll_seconds))),
+            api_snapshot_retention_seconds=int(
+                env.get("API_SNAPSHOT_RETENTION_SECONDS", str(d.api_snapshot_retention_seconds))
+            ),
+            api_snapshot_cleanup_interval_seconds=float(
+                env.get(
+                    "API_SNAPSHOT_CLEANUP_INTERVAL_SECONDS",
+                    str(d.api_snapshot_cleanup_interval_seconds),
+                )
+            ),
+            api_snapshot_cleanup_batch_size=int(
+                env.get("API_SNAPSHOT_CLEANUP_BATCH_SIZE", str(d.api_snapshot_cleanup_batch_size))
+            ),
             dry_run=_dry_run(env.get("WEIGHT_DRY_RUN", "1")),
             treasury_override=_aliased_int(env, "WEIGHT_TREASURY_UID", "WEIGHT_COLLECTOR_UID"),
             treasury_hotkey=_aliased(env, "WEIGHT_TREASURY_HOTKEY", "WEIGHT_COLLECTOR_HOTKEY"),
@@ -461,6 +483,7 @@ def run(
     scoring_config: scoring.ScoringConfig,
     *,
     sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     events = get_events()
     events.info("service_started", dry_run=config.dry_run, scoring_method=scoring_config.method)
@@ -469,6 +492,7 @@ def run(
         f"poll_seconds={config.poll_seconds} dry_run={config.dry_run}"
     )
     ticks = TickLog()
+    next_cleanup = 0.0
     try:
         while True:
             try:
@@ -477,6 +501,18 @@ def run(
             except Exception as exc:  # noqa: BLE001 - a bad tick must not end the worker
                 logger.exception(f"[weights] tick failed: {exc}")
                 events.error("weights_failed", dry_run=config.dry_run, error=config_error(exc))
+            if monotonic() >= next_cleanup:
+                try:
+                    cleared = store.scoring.prune_api_snapshots(
+                        netuid=config.netuid,
+                        retention_seconds=config.api_snapshot_retention_seconds,
+                        batch_size=config.api_snapshot_cleanup_batch_size,
+                    )
+                    if cleared:
+                        logger.info(f"[weights] cleared {cleared} expired API snapshot payload(s)")
+                except Exception as exc:  # noqa: BLE001 - maintenance must not stop weight setting
+                    logger.warning(f"[weights] API snapshot cleanup failed; will retry: {exc}")
+                next_cleanup = monotonic() + config.api_snapshot_cleanup_interval_seconds
             sleep(config.poll_seconds)
     except KeyboardInterrupt:
         logger.info("[weights] interrupted")
