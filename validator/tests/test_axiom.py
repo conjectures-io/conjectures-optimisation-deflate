@@ -231,7 +231,7 @@ def test_reset_removes_the_bridge():
 def weights_store() -> Mock:
     store = Mock()
     store.scoring.scoring_inputs.return_value = []
-    store.scoring.record_weight_set.return_value = 1
+    store.scoring.publish_weight_set.return_value = (1, True)
     return store
 
 

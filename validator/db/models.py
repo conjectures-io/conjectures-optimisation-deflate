@@ -288,6 +288,8 @@ class WeightSet(Base):
     weights: Mapped[list[float]] = mapped_column(JSONB, nullable=False)
     # Null for historical or treasury-only attempts without completed scoring.
     api_snapshot: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    # Content identity for unchanged polling results; excludes computed_at and chain outcome.
+    scoring_content_sha256: Mapped[str | None] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text)
     accepted: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # Set when the chain refused the vector, or when the worker skipped submitting it.
@@ -298,7 +300,23 @@ class WeightSet(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__: tuple[SchemaItem, ...] = (Index("ix_weight_sets_created_at", "created_at"),)
+    __table_args__: tuple[SchemaItem, ...] = (
+        Index("ix_weight_sets_created_at", "created_at"),
+        Index("ix_weight_sets_netuid_id", "netuid", "id"),
+        Index(
+            "ix_weight_sets_snapshot_latest",
+            "netuid",
+            "id",
+            postgresql_where=text("api_snapshot IS NOT NULL"),
+        ),
+        Index(
+            "ix_weight_sets_snapshot_expiry",
+            "netuid",
+            "created_at",
+            "id",
+            postgresql_where=text("api_snapshot IS NOT NULL"),
+        ),
+    )
 
 
 class ScoreSnapshot(Base):
