@@ -1,0 +1,216 @@
+import { Disclaimer, Figures, Source } from "@/components/blog/Figures";
+
+export const meta = {
+  title: "Two weeks, 648 proved compressors: what the DEFLATE competition found",
+  excerpt:
+    "Miners wrote LZ77 parsers in Rust and proved them correct in Lean. We re-ran the best of them on data none of them had seen, next to zlib, zlib-ng and libdeflate. Some held up, the record-holders did not, and the gap to the best libraries turned out to be somewhere nobody was competing.",
+  lede:
+    "Every one of the 648 accepted parsers is proved to decode back to its input. Being proved correct is not the same as being good in general, and that is the second half of this story.",
+  category: "Competitions",
+  publishedAt: "2026-10-13",
+  readingTime: "12 min read",
+};
+
+From 28 September to 12 October 2026, miners on the subnet competed on one small, old
+and heavily used piece of software: the parser at the heart of DEFLATE, the format behind
+gzip, zlib, PNG and ZIP. A submission was two files. One was a Rust function that reads a
+buffer and writes LZ77 tokens: a literal byte, or "copy this many bytes from that far
+back". The other was a Lean proof that the tokens decode back to the input, for every
+possible input. The validator checked the proof, compiled the parser, ran it on a public
+corpus and a held-out twin, and paid the Pareto frontier of compressed size against time.
+
+<Figures
+  label="The competition in numbers"
+  items={[
+    { value: "648", detail: "accepted submissions, each with a machine-checked proof that it decodes correctly" },
+    { value: "36", detail: "operators (coldkeys) behind 625 registered hotkeys" },
+    { value: "7,681 α", detail: "paid through the submission bounty, to 30 operators" },
+    { value: "533", detail: "submissions that were on the paid frontier at some point" },
+  ]}
+/>
+
+We wanted to answer two questions at the end. Which of these parsers are good in general,
+not just on the files they were scored on? And how do they compare with the DEFLATE
+implementations people actually use?
+
+## What a submission could and could not do
+
+The proof covers only the places where a parser writes a token: every match it emits
+must point at bytes that really match. The search behind it, which is where all the
+speed and compression come from, is unconstrained. Hash chains, binary trees, lazy
+matching and full dynamic-programming "optimal" parses all appeared, and the proof for
+each was a few hundred lines of Lean.
+
+Everything after the parse was fixed. A shared encoder turned tokens into DEFLATE blocks
+of exactly 16,384 tokens with optimal length-limited Huffman codes. Fixing it kept the
+contest about the parse, which matters later: block splitting is where production
+encoders like libdeflate earn part of their advantage, and nobody here was allowed to
+compete on it.
+
+## The frontier grew, and so did the tuning
+
+The frontier went from 7 points on the first day to 101 on the last. Almost no two
+submissions behaved identically on every file (654 reruns formed 647 distinct groups),
+so this was not mass resubmission. It was many parsers each holding a thin slice of the
+time axis.
+
+The scored corpora were a public set and a held-out set cut from the same pool of
+sources. That design catches a miner who memorizes the public files. It cannot catch a
+miner who tunes to the pool, because the held-out set is its twin: the two rankings
+agreed at a rank correlation of 0.998 from start to finish.
+
+A third corpus built from unrelated sources could, and did. The rank correlation between
+the public corpus and that out-of-distribution set fell from 0.977 on 29 September to
+0.961 on 2 October and to 0.759 by 12 October. Parsers that detect content classes, skip
+positions after a missed match, or hash four bytes instead of three gained on the scored
+files and collapsed on others: 68% worse than the baseline on Android DEX integer tables,
+492% worse on a Windows event log.
+
+<Figures
+  label="Overfitting over time"
+  items={[
+    { value: "0.977 → 0.759", detail: "rank agreement between the scored corpus and an unrelated one, 29 Sep → 12 Oct" },
+    { value: "79.5%", detail: "of the pay that would have moved had the third corpus been scored too" },
+  ]}
+/>
+
+## How we tested for "good in general"
+
+We built a fresh holdout after the fact: 905 files, 50.5 MiB, sampled from seven kinds of
+real data that no miner was scored on. Web assets from npm releases and the Python
+documentation, slices of large files (Silesia, Wikipedia, a Linux tarball), genomics
+(VCF, FASTQ, BAM records), the filtered scanlines inside PNG images, archive members
+(CPython's standard library, a Java JAR), our own servers' logs, and JSON event messages.
+We kept it private and did not run anything on it until we had written down, and
+committed, how we would choose.
+
+We also built a robustness set: tiny inputs, degenerate ones (zeros, short periods),
+data that repeats just beyond the 32 KiB window, de Bruijn sequences where every
+three-byte sequence repeats but no four-byte one does, integer tables, UTF-16 text,
+Fibonacci and Thue–Morse strings, and the same text at 1, 4, 16 and 64 MiB.
+
+Then we ran every candidate on one pinned core of the machine that ran the competition's
+reruns, interleaved with zlib, zlib-ng, miniz_oxide and libdeflate at several levels.
+Sizes are relative to the competition's baseline parser and averaged per category, so
+neither a big file nor a format with many files can dominate.
+
+One honest note on method. Two of our pre-registered robustness rules turned out to
+measure the shared encoder rather than the parsers. One of them failed every method on
+random data, including the baseline and every reference library. We recorded the change
+and its reason before the final selection, and both versions of the screen appear in the
+technical report.
+
+## What fresh data says about the record-holders
+
+The most recent submissions at the top of the official leaderboard did not survive
+contact with new data.
+
+- The parser with the smallest official output, submitted on 11 October, comes out at
+  0.996 of the baseline's size on the fresh holdout. It keeps 7% of the gain it showed
+  on the scored corpora, and on logs it is 11% worse than the baseline.
+- The four best-on-the-public-corpus submissions from 11 and 12 October produce larger
+  output than a submission from 2 October, at three and a half times its running time.
+- A lineage that began with a 30 September submission compresses 71% worse than the
+  baseline on a 64 MiB input while being fine at 16 MiB. The current record-holders
+  inherited it. Nothing in the competition was larger than 1.5 MB, so nobody could see it.
+- The fastest point on the official frontier is 33% larger than the baseline on the
+  holdout. One of the frontier submissions whose source was withheld writes our logs at
+  18 times the baseline's size.
+
+None of this breaks a proof. Every one of these parsers is still correct on every input.
+Correctness was proved; compression and speed were only measured, and measured on a
+narrow distribution.
+
+<Figures
+  label="Record-holders on fresh data"
+  items={[
+    { value: "0.996", detail: "the official smallest-output parser's size on the fresh holdout, relative to the baseline (1.000)" },
+    { value: "+71%", detail: "the compression loss at 64 MiB in the lineage the record-holders came from" },
+  ]}
+/>
+
+## Five parsers that hold up
+
+We screened 51 candidates (every group on the general frontier, the record-holders, the
+fastest and the withheld frontier points) and kept the ones that never lost more than a
+fifth of the baseline's size on any file that mattered, never slowed down
+pathologically, and scaled linearly to 64 MiB. Eighteen passed. From the frontier of
+those on the fresh holdout, the pre-registered rule picked five, from fastest to
+smallest:
+
+- **#55** (29 September): 1% smaller than the baseline at 0.61 times its time.
+- **#232** (2 October): 4.5% smaller at 1.1 times.
+- **#657** (12 October): 5% smaller at 1.4 times.
+- **#355** (5 October): 6.4% smaller at 2.5 times.
+- **#243** (2 October): 6.9% smaller at 3.6 times.
+
+Four of the five were submitted before the overfitting wave of 7 and 8 October. #243 has
+the best average compression on the out-of-distribution corpus of any submission, before
+or since.
+
+## Next to the libraries people use
+
+On the fresh holdout, with the competition's own encoder, the honest picture has three
+parts.
+
+- **Up to about three quarters of the baseline's time, libdeflate wins.** Its level 6 is
+  smaller and faster than every fast miner submission, and its level 9 (5.4% smaller than
+  the baseline at 0.73 times its time) beats three of our five selected parsers on both
+  axes. The gap is the price of the provable subset of Rust: byte-by-byte comparison
+  loops, bounds checks, no word-at-a-time matching. Turning off overflow checks, which the
+  proofs make redundant, changes nothing measurable.
+- **From about 1.6 to 3.6 times the baseline's time, the miners' parsers are the best
+  option measured.** #85, #355 and #243 are smaller than libdeflate-9 and two to three
+  times faster than libdeflate-12. zlib level 9 and miniz_oxide level 9 are dominated
+  outright: #657 is smaller and faster than zlib-9, #232 than miniz_oxide-9.
+- **libdeflate's level 12 produces the smallest output, but not because of its parse.**
+  Feed libdeflate-12's own tokens through the competition's encoder and the result is
+  larger than #243's on the competition corpus. The difference is the block splitter. We
+  added adaptive block splitting to our harness (cut where the symbol statistics change,
+  keep a cut only if the exact cost drops). It makes every parse 0.7 to 0.9% smaller, and
+  libdeflate-12's tokens through it come out smaller than libdeflate-12 itself.
+
+## Real-world scenarios
+
+*Pending: results of the seven scenario runs.*
+
+- Static web precompression, as a CDN or `gzip_static` does it.
+- Large files through `gzip`, streamed in 1 MiB chunks.
+- BGZF genomics, the 64 KiB block format behind BAM and tabix.
+- PNG image data, recompressed with the image's own filters.
+- Archive members: every file its own stream, as in ZIP or git objects.
+- Logs streamed with a flush every 64 KiB.
+- WebSocket-style messages with a flush per message.
+
+The parsers needed no changes for any of this. An adapter calls each one on "the last
+32 KiB plus the new data", keeps only the tokens past the history, and trims a match
+that straddles the boundary. Every output was decoded by zlib, miniz_oxide and
+libdeflate before it counted.
+
+## What we would do differently
+
+- **Hold out something different, not a twin.** A held-out copy of the scored
+  distribution protects against memorization and nothing else. Rotate genuinely different
+  private corpora, and never publish their per-submission aggregates. Ours became a
+  second public scoreboard.
+- **Score the tails.** Include tiny files and files far larger than the corpus maximum,
+  and add a do-no-harm rule per file. Average-only scoring paid parsers that lose 70% on
+  one format.
+- **Fix the scoring hardware in the rules.** Re-timing on a different machine moved a
+  third of the pay.
+- **Let someone compete on the encoder, or give everyone adaptive blocks.** Fixed blocks
+  kept the contest clean, but they hide almost a percent that any production use gets
+  back, and they make the comparison with libraries look worse than the parsers are.
+- **Proofs and benchmarks answer different questions.** The proof made every one of
+  these 648 parsers safe to run on anything. It took a different kind of test to find
+  out which of them are worth running.
+
+<Source href="https://conjectures.io/competitions/deflate">The DEFLATE competition page</Source>
+
+<Disclaimer>
+All timings come from one pinned core of an 8-vCPU AMD EPYC 9354 virtual machine, the host
+that ran the competition's reruns, with interleaved repetitions. Compressed sizes are
+deterministic. The fresh holdout, the held-out competition corpus and our logs stay
+private; this post reports aggregates only. Every output was verified with three
+independent decoders.
+</Disclaimer>
