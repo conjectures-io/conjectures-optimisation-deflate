@@ -88,7 +88,7 @@ def main() -> None:
     d = a.data
     sample_whole("web", d / "s1-web", min_size=256)
     sample_slices("large", d / "s2-large", MiB)
-    sample_slices("genomics", d / "s3-bgzf", MiB)
+    sample_slices("genomics", d / "s3-bgzf", 256 * 1024)
     # PNG scanlines, whole.
     used = 0
     pngs = files_under(d / "s4-png")
@@ -99,7 +99,7 @@ def main() -> None:
             add("image", p.parent.name, str(p.relative_to(d / "s4-png")) + ".scanlines", s)
             used += len(s)
     sample_whole("archive", d / "s5-archive", min_size=1)
-    sample_slices("logs", d / "s6-logs", MiB)
+    sample_slices("logs", d / "s6-logs", 256 * 1024)
     sample_slices("messages", d / "s7-messages", 256 * 1024)
 
     mapping, manifest = {}, []
