@@ -48,7 +48,7 @@ if [ ! -x "$TOOLS/bin/zopflipng" ]; then
 fi
 
 if [ ! -x "$TOOLS/bin/7zz" ]; then
-    mkdir -p 7zip && curl -fsSL https://www.7-zip.org/a/7z2408-linux-x64.tar.xz | tar -xJ -C 7zip
+    mkdir -p 7zip && curl -fsSL https://www.7-zip.org/a/7z2501-linux-x64.tar.xz | tar -xJ -C 7zip
     cp 7zip/7zz "$TOOLS/bin/"
     echo "installed bin/7zz"
 fi
