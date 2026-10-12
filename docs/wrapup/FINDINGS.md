@@ -105,17 +105,50 @@ Robustness failures found (real, not artefacts):
 | Misfires on fresh content | fast cluster #88/#34/#33/#57/#61/#23 (logs, −70–80%), #239 (Webster slice +25%), #120 (PNG scanlines +44%), #196, #148 |
 | Known c3 collapses | #87, #125 (`app.dex`) |
 
-The pre-registered screen, applied literally, passes 2 of 33 parsers and fails the
-incumbent: two of its rules measure the shared encoder and degenerate inputs, not the
-parsers. The revised screen (deviations 3–4, recorded before selection) passes 12. Both
-are reported.
+The pre-registered screen, applied literally, passes 3 of 51 parsers (#55, #521, #85) and
+fails the incumbent: two of its rules measure the shared encoder (it cannot store a block
+with any match in it, so every parser expands random data) and degenerate inputs (1 MB →
+1 KB, where a few KB is "+300%"), not the parsers. The revised screen (deviations 3–4,
+recorded before the final selection) passes 18 of 51. Both are reported.
 
-*Pending:* stage 1b (the PROD-only candidates), then the final selection.
+### The most recent submissions, on fresh data
+
+Stage 1b ran every PROD-only candidate: the recent general-frontier groups, the five best
+c1 submissions, the fastest official frontier point and the four withheld frontier points.
+
+- **The official record-holders do not generalise.** #644 (smallest output on stage 1 +
+  2, 10-11), with #636 and #635, is **0.996** of the incumbent on C4 (it keeps 7% of its
+  c1+c2 gain; overfit index +0.93) and 11% *worse* than the incumbent on logs.
+- **The 10-11/12 best-on-c1 cluster** (#649, #655, #645, #639) is 0.940 on C4: larger
+  than #243 from 10-02 (0.931) at 12.5× the incumbent's time against 3.6×.
+- **A >16 MB compression collapse runs through a lineage**: #140 (09-30), #280, #473,
+  #644/#636/#635 and #649/#655/#645/#639 all lose 71% on the 64 MiB input. No competition
+  file was larger than 1.5 MB, so the record-holders inherited a defect nobody could see.
+- **The fast end of the official frontier is unusable off-corpus**: #632 (fastest, 10-11)
+  is 33% larger than the incumbent on C4; the withheld #562 is 3.1× larger (18× on logs);
+  all four withheld frontier points (#405, #518, #562, #638) fail on c3.
 
 ## 5. Selection across the frontier
 
-*Pending.* Preliminary, public sources only (revised screen): #55 (0.61×), #232 (1.11×),
-#360 (1.64×), #355 (2.45×), #243 (3.57×).
+Revised screen, pre-registered selection rule (fastest, smallest, three log-spaced
+between; ties go to the earlier submission). Size and time are relative to the incumbent
+on C4; overfit = 1 − gain(C4)/gain(c1+c2), negative means it does *better* off-corpus.
+
+| point | submitted | size (95% CI) | time | overfit |
+|---|---|---|---|---|
+| #55 | 09-29 | 0.990 (0.982–0.999) | 0.61× | −0.07 |
+| #232 | 10-02 | 0.955 (0.943–0.967) | 1.11× | +0.10 |
+| #657 | 10-12 | 0.950 (0.944–0.956) | 1.44× | +0.05 |
+| #355 | 10-05 | 0.936 (0.928–0.944) | 2.45× | −0.14 |
+| #243 | 10-02 | 0.931 (0.918–0.943) | 3.57× | −0.22 |
+
+The other frontier points that pass: #653, #521, #360, #296, #85, #444. Under the strict
+screen only #55, #521, #85 pass; #85 (09-29) is within 0.0002 of #355's size at 1.88×.
+The scenarios run the five above, #85 and #521, and three contrasts: #649 (best c1),
+#632 (fastest official), #125 (the 09-30 dossier).
+
+For context, on C4 libdeflate-12 is 0.911 at 7.3× and libdeflate-9 0.946 at 0.73×: with
+the competition's fixed blocks, the selected points sit between them.
 
 ## 6. Real-world scenarios S1–S7
 

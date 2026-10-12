@@ -14,27 +14,18 @@ website (`conjectures-web-new/posts/<slug>.mdx`).
 
 ## In progress
 
-- Stage 1b: the PROD-only candidates on C4 and set A (`results/03-stage1b`).
+- Stage 1b and the final selection are done (`results/05-select/`: `select-{revised,strict}.{txt,json}`,
+  `withheld-fails.tsv` from a supplementary c1–c3 run of the four withheld frontier points,
+  `parsers.txt`). Selected: #55 #232 #657 #355 #243; also run: #85 #521, contrasts #649 #632 #125.
+- Scenarios S1–S7 running since 2026-10-12 16:35 (`results/06-scenarios`, log
+  `results/05-select/scenarios.log`), about 6–7 hours on core 7.
 
 ## Next
 
-1. Final screen and selection over stage 1 + 1b:
-   ```bash
-   cd /root/deflate-wrapup
-   python3 src/wrapup/scripts/select.py --rules revised \
-     --operator results/00-pool/operator-prod.json --pool results/00-pool/pool.csv \
-     --map data/c4/map.json \
-     --c4 results/02-stage1/c4-whole.jsonl results/03-stage1b/c4-whole.jsonl \
-     --setA results/02-stage1/setA-whole.jsonl results/03-stage1b/setA-whole.jsonl \
-     --json results/05-select/select.json
-   ```
-   Also run it with `--rules strict` for the report.
-2. Write `results/05-select/parsers.txt` (one `slot:NAME=PATH` per line: the selected
-   points, #649, #632, #125 and the incumbent), then run all scenarios on core 7:
-   `src/wrapup/scripts/run-scenarios.sh results/05-select/parsers.txt results/06-scenarios`
-   (about 5–6 hours).
-3. Summarise each scenario (`summarize.py`, `rank.py --ref zlib-6`), finish FINDINGS.md,
-   write the blog post.
+1. When the scenarios finish: `summarize.py` and `rank.py --ref zlib-6` per scenario
+   (`results/06-scenarios/<tag>.jsonl` and `<tag>-ext.jsonl`), finish FINDINGS.md §6–7.
+2. Write the blog post (`conjectures-web-new/posts/<slug>.mdx`: `export const meta`,
+   `Figures`/`Source`/`Disclaimer`; no pipe tables, no `$`).
 
 ## Where things are on s66 (`/root/deflate-wrapup`, nothing else touched)
 
