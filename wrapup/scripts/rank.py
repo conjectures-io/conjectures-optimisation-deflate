@@ -27,7 +27,7 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def load(paths: list[Path], mapping: dict) -> tuple[dict, set]:
+def load(paths: list[Path], mapping: dict, merge_runs: bool = False) -> tuple[dict, set]:
     """-> {method: {(category, source, label/file): (log size ratio, log time ratio | None)}}"""
     # Keyed by run as well: each run's methods are compared with that run's own
     # reference rows (times drift between runs; sizes do not).
@@ -37,6 +37,9 @@ def load(paths: list[Path], mapping: dict) -> tuple[dict, set]:
         lines = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
         meta = lines[0]
         unit = f"{meta.get('label')}" + ("" if meta.get("mode") in (None, "Whole") else f" [{meta.get('mode')}]")
+        if merge_runs:
+            # Sizes across runs (e.g. command-line tools vs linked-in methods): one unit, one run.
+            unit, run = "merged", 0
         meta_mode[unit] = meta.get("mode")
         for r in lines[1:]:
             if r.get("kind") == "file":
@@ -94,9 +97,9 @@ def kendall(a: list[float], b: list[float]) -> float:
     return (c - d) / (c + d) if c + d else 1.0
 
 
-def score(files: list[Path], ref: str, mapping: dict, boot: int = 2000, seed: int = 1):
+def score(files: list[Path], ref: str, mapping: dict, boot: int = 2000, seed: int = 1, merge_runs: bool = False):
     """-> (rows, data, cat_sources): one row per method with size/time and 95% CIs."""
-    rows, _units = load(files, mapping)
+    rows, _units = load(files, mapping, merge_runs)
     data, worst, failures = build(rows, ref, mapping)
     cat_sources: dict[str, list[str]] = defaultdict(list)
     for (cat, src, _f) in data.get(ref, {}):
