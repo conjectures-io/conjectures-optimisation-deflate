@@ -378,12 +378,24 @@ fn cpu_model() -> Option<String> {
     s.lines().find(|l| l.starts_with("model name")).and_then(|l| l.split_once(':')).map(|(_, v)| v.trim().to_string())
 }
 
+/// Every regular file under `dir`, recursively, sorted; dotfiles skipped.
 fn corpus_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file())
-        .collect();
+    let mut files = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
+            let e = e.map_err(|e| e.to_string())?;
+            if e.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let ft = e.file_type().map_err(|e| e.to_string())?;
+            if ft.is_dir() {
+                todo.push(e.path());
+            } else if ft.is_file() {
+                files.push(e.path());
+            }
+        }
+    }
     files.sort();
     Ok(files)
 }
@@ -441,7 +453,7 @@ fn cmd_bench(args: &[String]) -> Result<(), String> {
     let timed = !methods.iter().all(|m| matches!(m.kind, Kind::Retok(_)));
     for f in &files {
         let data = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
-        let fname = f.file_name().unwrap().to_string_lossy().to_string();
+        let fname = f.strip_prefix(&corpus).unwrap_or(f).to_string_lossy().to_string();
         struct Acc {
             bytes: Option<u64>,
             verified: bool,
