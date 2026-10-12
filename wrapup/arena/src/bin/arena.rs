@@ -4,7 +4,7 @@
 //! ```text
 //! arena build  --validator DIR --work DIR PARSE.rs...
 //! arena bench  --corpus DIR [--label NAME] --method M... [--mode MODE] [--huffman pinned|fast]
-//!              [--blocks fixed|adaptive] [--reps N] [--warmup N] [--out FILE.jsonl] [--validator DIR --work DIR]
+//!              [--blocks fixed|adaptive] [--container raw|zlib|gzip] [--reps N] [--warmup N] [--out FILE.jsonl] [--validator DIR --work DIR]
 //! arena gz     --method M [--mode MODE] [--format gzip|zlib|raw|bgzf] [--huffman ...] IN OUT
 //! ```
 //!
@@ -348,6 +348,7 @@ struct Meta<'a> {
     mode: String,
     huffman: String,
     blocks: String,
+    container: &'a str,
     reps: usize,
     warmup: usize,
     started_at_unix: f64,
@@ -417,7 +418,7 @@ fn corpus_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
 fn cmd_bench(args: &[String]) -> Result<(), String> {
     let a = Args::parse(
         args,
-        &["corpus", "label", "method", "mode", "huffman", "blocks", "reps", "warmup", "out", "validator", "work"],
+        &["corpus", "label", "method", "mode", "huffman", "blocks", "container", "reps", "warmup", "out", "validator", "work"],
     )?;
     let corpus = PathBuf::from(a.one("corpus").ok_or("--corpus DIR")?);
     let mode = Mode::parse(a.one("mode").unwrap_or("whole"))?;
@@ -426,6 +427,17 @@ fn cmd_bench(args: &[String]) -> Result<(), String> {
     let warmup: usize = a.one("warmup").unwrap_or("1").parse().map_err(|_| "bad --warmup")?;
     let validator = a.one("validator").map(PathBuf::from);
     let work = a.one("work").map(PathBuf::from);
+    // Framing added to every whole/stream output's size, to compare with tools that write files.
+    let (container, frame) = match a.one("container").unwrap_or("raw") {
+        "raw" => ("raw", 0u64),
+        "zlib" => ("zlib", 6),
+        "gzip" => ("gzip", 18),
+        c => return Err(format!("bad --container {c}")),
+    };
+    let frame = match mode {
+        Mode::Whole | Mode::Stream { .. } | Mode::Messages { .. } => frame,
+        Mode::Indep { .. } | Mode::Bgzf | Mode::Png => 0,
+    };
     let methods: Vec<Method> = a
         .all("method")
         .iter()
@@ -451,6 +463,7 @@ fn cmd_bench(args: &[String]) -> Result<(), String> {
         mode: format!("{mode:?}"),
         huffman: format!("{:?}", h.huffman),
         blocks: format!("{:?}", h.blocks),
+        container,
         reps,
         warmup,
         started_at_unix: std::time::SystemTime::now()
@@ -492,13 +505,13 @@ fn cmd_bench(args: &[String]) -> Result<(), String> {
                     Err(e) => ac.error = Some(e),
                     Ok(run) => {
                         if ac.bytes.is_none() {
-                            ac.bytes = Some(run.bytes);
+                            ac.bytes = Some(run.bytes + frame);
                             ac.parsed = run.parsed_bytes;
                             match check(&run, &data, mode) {
                                 Ok(()) => ac.verified = true,
                                 Err(e) => ac.error = Some(format!("round trip: {e}")),
                             }
-                        } else if ac.bytes != Some(run.bytes) {
+                        } else if ac.bytes != Some(run.bytes + frame) {
                             ac.error = Some("output size changed between runs".to_string());
                         }
                         if round >= warmup && !matches!(m.kind, Kind::Retok(_)) {
