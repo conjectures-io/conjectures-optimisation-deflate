@@ -92,38 +92,27 @@ def kendall(a: list[float], b: list[float]) -> float:
     return (c - d) / (c + d) if c + d else 1.0
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="incumbent")
-    ap.add_argument("--map", type=Path)
-    ap.add_argument("--boot", type=int, default=2000)
-    ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--json", type=Path)
-    ap.add_argument("files", nargs="+", type=Path)
-    a = ap.parse_args()
-    mapping = {k: tuple(v) for k, v in json.loads(a.map.read_text()).items()} if a.map else {}
-    rows, units = load(a.files, mapping)
-    data, worst, failures = build(rows, a.ref, mapping)
-
-    # Sources per category, from the reference's coverage.
+def score(files: list[Path], ref: str, mapping: dict, boot: int = 2000, seed: int = 1):
+    """-> (rows, data, cat_sources): one row per method with size/time and 95% CIs."""
+    rows, _units = load(files, mapping)
+    data, worst, failures = build(rows, ref, mapping)
     cat_sources: dict[str, list[str]] = defaultdict(list)
-    for (cat, src, _f) in data.get(a.ref, {}):
+    for (cat, src, _f) in data.get(ref, {}):
         if src not in cat_sources[cat]:
             cat_sources[cat].append(src)
+    rng = random.Random(seed)
+    boots = [{c: [rng.choice(s) for _ in s] for c, s in cat_sources.items()} for _ in range(boot)]
 
-    rng = random.Random(a.seed)
-    boots = [{c: [rng.choice(s) for _ in s] for c, s in cat_sources.items()} for _ in range(a.boot)]
+    def ci(xs: list[float]) -> tuple[float, float] | None:
+        if not xs:
+            return None
+        return (math.exp(xs[int(0.025 * (len(xs) - 1))]), math.exp(xs[int(0.975 * (len(xs) - 1))]))
+
     out = []
     for m, vals in data.items():
         size, time = hier(vals, 0), hier(vals, 1)
         bs = sorted(x for x in (hier(vals, 0, b) for b in boots) if x is not None)
         bt = sorted(x for x in (hier(vals, 1, b) for b in boots) if x is not None)
-
-        def ci(xs: list[float]) -> tuple[float, float] | None:
-            if not xs:
-                return None
-            return (math.exp(xs[int(0.025 * (len(xs) - 1))]), math.exp(xs[int(0.975 * (len(xs) - 1))]))
-
         out.append(
             {
                 "method": m,
@@ -136,6 +125,20 @@ def main() -> None:
                 "worst": worst.get(m),
             }
         )
+    return out, data, cat_sources
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ref", default="incumbent")
+    ap.add_argument("--map", type=Path)
+    ap.add_argument("--boot", type=int, default=2000)
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--json", type=Path)
+    ap.add_argument("files", nargs="+", type=Path)
+    a = ap.parse_args()
+    mapping = {k: tuple(v) for k, v in json.loads(a.map.read_text()).items()} if a.map else {}
+    out, data, cat_sources = score(a.files, a.ref, mapping, a.boot, a.seed)
 
     # Pareto on (time, size); methods without timing are left out of it.
     timed = sorted((r for r in out if r["time"] is not None and r["size"] is not None), key=lambda r: (r["time"], r["size"]))
