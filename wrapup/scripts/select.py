@@ -73,6 +73,10 @@ def main() -> None:
     ap.add_argument("--setA", type=Path, nargs="+", required=True)
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--extra-fails", type=Path,
+                    help="TSV method<TAB>reason: screen failures found by a supplementary run "
+                         "(e.g. withheld submissions that have no rerun data)")
+    ap.add_argument("--index", type=Path, help="PROD sources index.tsv (id, hotkey, submitted_at, sha)")
     ap.add_argument("--rules", choices=("strict", "revised"), default="revised",
                     help="strict = as pre-registered (+ deviations 1-2); revised = + deviations 3-4")
     a = ap.parse_args()
@@ -161,6 +165,12 @@ def main() -> None:
             if c4t and tr > TIME_FACTOR * c4t:
                 fails[m].append(f"setA/{f} time ratio {tr:.1f} vs C4 {c4t:.2f}")
 
+    if a.extra_fails:
+        for line in a.extra_fails.read_text().splitlines():
+            if line.strip() and not line.startswith("#"):
+                m, reason = line.split("\t", 1)
+                if m in parsers:
+                    fails[m].append(reason)
     passing = [m for m in parsers if not fails[m]]
 
     # Frontier on C4 among passing parsers.
@@ -171,10 +181,16 @@ def main() -> None:
             frontier.append(m)
             best = s
 
+    index_when = {}
+    if a.index:
+        for line in a.index.read_text().splitlines():
+            i, _hot, t, _sha = line.split("\t")
+            index_when[i] = t.replace(" ", "T")
+
     def when(m: str) -> str:
         sid = sub_id(m)
         rep = group_of.get(sid, sid) if sid else None
-        return submitted.get(rep, "0") if rep else "0"
+        return submitted.get(rep) or index_when.get(sid or "", "0") if rep else "0"
 
     chosen: list[str] = []
     if frontier:
