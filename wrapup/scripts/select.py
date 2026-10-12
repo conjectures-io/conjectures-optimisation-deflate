@@ -33,10 +33,10 @@ def is_parser(m: str) -> bool:
 
 def jsonl_rows(paths: list[Path]) -> list[dict]:
     out = []
-    for p in paths:
+    for run, p in enumerate(paths):
         lines = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
         label = lines[0].get("label")
-        out += [dict(r, label=label) for r in lines[1:] if r.get("kind") == "file"]
+        out += [dict(r, label=label, run=run) for r in lines[1:] if r.get("kind") == "file"]
     return out
 
 
@@ -118,7 +118,7 @@ def main() -> None:
                     fails[m].append(f"{c}/{name} expands")
     # ... and on C4 and set A (this run), plus errors and determinism.
     for rows in (c4_rows, sa_rows):
-        base = {(r["label"], r["file"]): r for r in rows if r["method"] == "incumbent"}
+        base = {(r["run"], r["label"], r["file"]): r for r in rows if r["method"] == "incumbent"}
         for r in rows:
             m = r["method"]
             if m not in parsers:
@@ -127,7 +127,7 @@ def main() -> None:
             if r.get("error") or not r.get("verified"):
                 fails[m].append(f"{where}: {r.get('error') or 'unverified'}")
                 continue
-            b = base.get((r["label"], r["file"]))
+            b = base.get((r["run"], r["label"], r["file"]))
             if b and b.get("bytes"):
                 f, fl = loss(r["bytes"], b["bytes"], r["raw"])
                 if f:
@@ -140,11 +140,11 @@ def main() -> None:
     # 3. Time: scaling slope and per-file blow-ups on set A.
     sa = defaultdict(dict)
     for r in sa_rows:
-        sa[r["file"]][r["method"]] = r
+        sa[(r["run"], r["file"])][r["method"]] = r
     slopes = {}
     for m in parsers:
         pts = [(math.log(d[m]["raw"]), math.log(d[m]["median_total_s"]))
-               for f, d in sa.items() if f.startswith("scale-") and m in d and d[m].get("median_total_s")]
+               for (_run, f), d in sa.items() if f.startswith("scale-") and m in d and d[m].get("median_total_s")]
         if len(pts) >= 3:
             mx = sum(x for x, _ in pts) / len(pts)
             my = sum(y for _, y in pts) / len(pts)
@@ -153,7 +153,7 @@ def main() -> None:
             if slope > SLOPE_MAX:
                 fails[m].append(f"time slope {slope:.2f} over scale-01m..64m")
         c4t = c4[m]["time"]
-        for f, d in sa.items():
+        for (_run, f), d in sa.items():
             r, b = d.get(m), d.get("incumbent")
             if not r or not b or r["raw"] < TIME_MIN_BYTES or not r.get("median_total_s") or not b.get("median_total_s"):
                 continue

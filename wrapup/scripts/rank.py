@@ -29,16 +29,18 @@ from pathlib import Path
 
 def load(paths: list[Path], mapping: dict) -> tuple[dict, set]:
     """-> {method: {(category, source, label/file): (log size ratio, log time ratio | None)}}"""
-    rows: dict[tuple[str, str], dict[str, dict]] = defaultdict(dict)
+    # Keyed by run as well: each run's methods are compared with that run's own
+    # reference rows (times drift between runs; sizes do not).
+    rows: dict[tuple[int, str, str], dict[str, dict]] = defaultdict(dict)
     meta_mode = {}
-    for p in paths:
+    for run, p in enumerate(paths):
         lines = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
         meta = lines[0]
         unit = f"{meta.get('label')}" + ("" if meta.get("mode") in (None, "Whole") else f" [{meta.get('mode')}]")
         meta_mode[unit] = meta.get("mode")
         for r in lines[1:]:
             if r.get("kind") == "file":
-                rows[(unit, r["file"])][r["method"]] = r
+                rows[(run, unit, r["file"])][r["method"]] = r
     return rows, set(meta_mode)
 
 
@@ -46,7 +48,7 @@ def build(rows: dict, ref: str, mapping: dict):
     data: dict[str, dict] = defaultdict(dict)
     worst: dict[str, tuple[str, float]] = {}
     failures: dict[str, int] = defaultdict(int)
-    for (unit, file), by in rows.items():
+    for (_run, unit, file), by in rows.items():
         base = by.get(ref)
         if not base or not base.get("bytes") or not base.get("verified"):
             continue
