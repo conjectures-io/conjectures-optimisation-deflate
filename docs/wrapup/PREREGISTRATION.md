@@ -64,3 +64,15 @@ its worst file.
 
 The selected five, plus #649 (best c1 bytes), the fastest official frontier point, and
 #125 (the 09-30 dossier's showcase), go through scenarios S1–S7.
+
+## Deviations
+
+1. **2026-10-12, after the stage-1 C4 run, before any set A result was read.** The size
+   rule ("more than 20% larger than the incumbent on any file") counts a file only if the
+   difference is also **more than 32 bytes**. C4 has files of a few bytes (TOML test data,
+   empty-ish modules) where one byte is +100%: on those, every method "fails", libdeflate-12
+   included, which says nothing about robustness.
+2. **Same time.** The 5× time rule applies to set A files of **at least 64 KiB**. On the
+   tiny inputs, time is dominated by per-call set-up (zeroing hash tables); that cost is
+   real, but it is what scenarios S5 (archive members) and S7 (messages) measure, and it is
+   reported there rather than used to disqualify.
