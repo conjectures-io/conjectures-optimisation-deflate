@@ -9,7 +9,8 @@
 //! ```
 //!
 //! A method is `slot:NAME=PATH` (a `parse.rs`, built as the gate builds it, or a
-//! built `libcandidate.so`), `builtin:NAME` (a linked-in reference example),
+//! built `libcandidate.so`), `slot-nochk:NAME=PATH` (the same without overflow
+//! checks, which an accepted proof makes redundant), `builtin:NAME` (a linked-in reference example),
 //! `ref:SPEC` (`zlib-6`, `libdeflate-12`, `miniz_oxide-9`, `zopfli-i15`), or
 //! `retok:SPEC`: that reference's parse, decoded back to tokens and re-encoded
 //! with the shared encoder (sizes only), for parse-versus-encoder comparisons.
@@ -17,14 +18,16 @@
 //! A mode is `whole` (one call, the competition's setting), `stream:CHUNK` or
 //! `stream:CHUNK:FLUSH` (32 KiB history carried across chunks, optional sync
 //! flush every FLUSH input bytes), `indep:CHUNK` (chunks with no history, one
-//! raw stream each), or `bgzf` (BGZF blocks, sizes include the framing).
+//! raw stream each), `bgzf` (BGZF blocks, sizes include the framing),
+//! `messages[:WBITS]` (one message per line, a sync flush after each, a
+//! 2^WBITS-byte window), or `png` (recompress each PNG's IDAT, filters kept).
 //! Sizes accept `k`/`m` suffixes (KiB/MiB).
 
 use deflate_arena::encoder::{self, Blocks, Coding, Huffman};
 use deflate_arena::parser::{self, FnParser, Parser, SlotParser};
 use deflate_arena::reference::{self, Reference};
 use deflate_arena::stream::{self, StreamConfig};
-use deflate_arena::{builtin, container, inflate_tokens, verify};
+use deflate_arena::{builtin, container, inflate_tokens, png, verify};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -99,6 +102,10 @@ enum Mode {
     Stream { chunk: usize, flush: Option<usize> },
     Indep { chunk: usize },
     Bgzf,
+    /// Newline-separated messages, a sync flush after each, `window_bits` of history.
+    Messages { window_bits: u8 },
+    /// Each file is a PNG: recompress its IDAT, filters unchanged; sizes are whole PNGs.
+    Png,
 }
 
 impl Mode {
@@ -110,6 +117,12 @@ impl Mode {
             ["stream", c] => Ok(Mode::Stream { chunk: size(c)?, flush: None }),
             ["stream", c, f] => Ok(Mode::Stream { chunk: size(c)?, flush: Some(size(f)?) }),
             ["indep", c] => Ok(Mode::Indep { chunk: size(c)? }),
+            ["messages"] => Ok(Mode::Messages { window_bits: 15 }),
+            ["messages", w] => match w.parse::<u8>() {
+                Ok(w) if (8..=15).contains(&w) => Ok(Mode::Messages { window_bits: w }),
+                _ => Err(format!("bad window bits {w}")),
+            },
+            ["png"] => Ok(Mode::Png),
             _ => Err(format!("bad mode {s}")),
         }
     }
@@ -157,7 +170,8 @@ impl Method {
 fn load_method(spec: &str, validator: Option<&Path>, work: Option<&Path>) -> Result<Method, String> {
     let (kind, rest) = spec.split_once(':').ok_or(format!("bad method {spec}"))?;
     match kind {
-        "slot" => {
+        "slot" | "slot-nochk" => {
+            let profile = if kind == "slot" { parser::Profile::Gate } else { parser::Profile::NoOverflowChecks };
             let (name, path) = rest.split_once('=').ok_or(format!("slot needs NAME=PATH: {spec}"))?;
             let path = PathBuf::from(path);
             let (lib, sha) = if path.extension().is_some_and(|e| e == "so") {
@@ -165,7 +179,7 @@ fn load_method(spec: &str, validator: Option<&Path>, work: Option<&Path>) -> Res
             } else {
                 let v = validator.ok_or("--validator is needed to build a parse.rs")?;
                 let w = work.ok_or("--work is needed to build a parse.rs")?;
-                parser::build_slot(v, &path, w)?
+                parser::build_slot_with(v, &path, w, profile)?
             };
             let p = SlotParser::load(name, &lib, sha.clone())?;
             Ok(Method { name: name.to_string(), kind: Kind::Slot(p), source_sha256: Some(sha) })
@@ -197,6 +211,15 @@ struct Run {
 }
 
 fn compress(m: &Method, data: &[u8], mode: Mode, h: Coding) -> Result<Run, String> {
+    if let Mode::Png = mode {
+        let img = png::parse(data)?;
+        let scan = img.scanlines()?;
+        let mut run = compress(m, &scan, Mode::Whole, h)?;
+        let out = img.with_idat(&container::zlib(&run.out[0], &scan));
+        run.bytes = out.len() as u64;
+        run.out = vec![out];
+        return Ok(run);
+    }
     let t0 = Instant::now();
     let (out, st) = match (&m.kind, mode) {
         (Kind::Retok(r), Mode::Whole) => {
@@ -215,6 +238,10 @@ fn compress(m: &Method, data: &[u8], mode: Mode, h: Coding) -> Result<Run, Strin
             (pieces.iter().map(|p| r.compress(p)).collect::<Result<Vec<_>, _>>()?, None)
         }
         (Kind::Ref(r), Mode::Bgzf) => (vec![container::bgzf(data, |p| r.compress(p))?], None),
+        (Kind::Ref(Reference::Zlib(l)), Mode::Messages { window_bits }) => {
+            (vec![reference::zlib_messages(&stream::lines(data), *l, window_bits)?], None)
+        }
+        (Kind::Ref(r), Mode::Messages { .. }) => return Err(format!("{} has no streaming mode here", r.name())),
         (_, mode) => {
             let p = m.parser().expect("parser kinds handled here");
             match mode {
@@ -230,6 +257,13 @@ fn compress(m: &Method, data: &[u8], mode: Mode, h: Coding) -> Result<Run, Strin
                     let (o, s) = stream::compress_independent(p, data, chunk, h, true)?;
                     (o, Some(s))
                 }
+                Mode::Messages { window_bits } => {
+                    let mut cfg = StreamConfig::new(1 << 20, h);
+                    cfg.window = 1usize << window_bits;
+                    let (o, s) = stream::compress_messages(p, &stream::lines(data), cfg)?;
+                    (vec![o], Some(s))
+                }
+                Mode::Png => unreachable!("handled above"),
                 Mode::Bgzf => {
                     let mut st = stream::Stats::default();
                     let o = container::bgzf(data, |piece| {
@@ -267,6 +301,12 @@ fn check(run: &Run, data: &[u8], mode: Mode) -> Result<(), String> {
             pieces.iter().zip(&run.out).try_for_each(|(p, o)| verify::raw(o, p))
         }
         Mode::Bgzf => verify::gzip(&run.out[0], data),
+        Mode::Messages { .. } => verify::raw(&run.out[0], data),
+        Mode::Png => {
+            let want = png::parse(data)?.scanlines()?;
+            let got = png::parse(&run.out[0])?;
+            verify::zlib(&got.idat, &want)
+        }
     }
 }
 
@@ -503,6 +543,7 @@ fn cmd_gz(args: &[String]) -> Result<(), String> {
     let run = compress(&m, &data, mode, h)?;
     check(&run, &data, mode)?;
     let bytes = match (format, mode) {
+        (_, Mode::Png) => run.out[0].clone(),
         ("bgzf", Mode::Bgzf) => run.out.concat(),
         ("bgzf", _) => return Err("--format bgzf needs --mode bgzf".to_string()),
         (_, Mode::Bgzf) => return Err("--mode bgzf writes --format bgzf".to_string()),

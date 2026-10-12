@@ -21,6 +21,7 @@ pub mod container;
 pub mod encoder;
 pub mod inflate_tokens;
 pub mod parser;
+pub mod png;
 pub mod reference;
 pub mod stream;
 pub mod verify;

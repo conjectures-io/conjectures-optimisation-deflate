@@ -111,3 +111,35 @@ pub fn zlib_stream(input: &[u8], level: u32, write_size: usize, flush_every: Opt
     }
     Ok(out)
 }
+
+/// zlib with a sync flush after every message and a `window_bits` window
+/// (8..=15): permessage-deflate with context takeover.
+pub fn zlib_messages(msgs: &[&[u8]], level: u32, window_bits: u8) -> Result<Vec<u8>, String> {
+    use flate2::{Compress, Compression, FlushCompress, Status};
+    // zlib refuses an 8-bit raw window; it would silently use 9 bits anyway.
+    let mut c = Compress::new_with_window_bits(Compression::new(level), false, window_bits.max(9));
+    let mut out: Vec<u8> = Vec::with_capacity(msgs.iter().map(|m| m.len()).sum::<usize>() / 2 + 1024);
+    for m in msgs {
+        let mut consumed = 0usize;
+        loop {
+            if out.capacity() - out.len() < 64 * 1024 {
+                out.reserve(256 * 1024);
+            }
+            let before = c.total_in();
+            c.compress_vec(&m[consumed..], &mut out, FlushCompress::Sync).map_err(|e| e.to_string())?;
+            consumed += (c.total_in() - before) as usize;
+            if consumed == m.len() && out.capacity() > out.len() {
+                break;
+            }
+        }
+    }
+    loop {
+        if out.capacity() - out.len() < 64 * 1024 {
+            out.reserve(256 * 1024);
+        }
+        if c.compress_vec(&[], &mut out, FlushCompress::Finish).map_err(|e| e.to_string())? == Status::StreamEnd {
+            break;
+        }
+    }
+    Ok(out)
+}

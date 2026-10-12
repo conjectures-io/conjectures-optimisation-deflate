@@ -81,13 +81,38 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// How a slot crate is compiled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profile {
+    /// Exactly the gate's `candidate` profile.
+    Gate,
+    /// The gate's profile without `overflow-checks`. The accepted proof shows
+    /// `parse` never fails, and Aeneas models every overflow as a failure, so
+    /// for an accepted submission the checks can never fire.
+    NoOverflowChecks,
+}
+
 /// Build `source` (a `parse.rs`) as the gate does: the `candidate` template, the
 /// pinned `rust-toolchain.toml`, `cargo build --release --offline`. Crates are
-/// cached under `work/<sha256[..16]>`, so a source is built once.
+/// cached under `work/<sha256[..16]>` (plus `-nochk` for that profile), so a
+/// source is built once per profile.
 pub fn build_slot(validator: &Path, source: &Path, work: &Path) -> Result<(PathBuf, String), String> {
+    build_slot_with(validator, source, work, Profile::Gate)
+}
+
+pub fn build_slot_with(
+    validator: &Path,
+    source: &Path,
+    work: &Path,
+    profile: Profile,
+) -> Result<(PathBuf, String), String> {
     let src = std::fs::read(source).map_err(|e| format!("read {}: {e}", source.display()))?;
     let sha = sha256_hex(&src);
-    let crate_dir = work.join(&sha[..16]);
+    let dir = match profile {
+        Profile::Gate => sha[..16].to_string(),
+        Profile::NoOverflowChecks => format!("{}-nochk", &sha[..16]),
+    };
+    let crate_dir = work.join(dir);
     let lib = crate_dir.join("target/release/libcandidate.so");
     if lib.exists() {
         return Ok((lib, sha));
@@ -97,7 +122,17 @@ pub fn build_slot(validator: &Path, source: &Path, work: &Path) -> Result<(PathB
     let copy = |from: PathBuf, to: PathBuf| {
         std::fs::copy(&from, &to).map(|_| ()).map_err(|e| format!("copy {}: {e}", from.display()))
     };
-    copy(template.join("Cargo.toml"), crate_dir.join("Cargo.toml"))?;
+    let manifest = std::fs::read_to_string(template.join("Cargo.toml")).map_err(|e| e.to_string())?;
+    let manifest = match profile {
+        Profile::Gate => manifest,
+        Profile::NoOverflowChecks => {
+            if !manifest.contains("overflow-checks = true") {
+                return Err("the candidate template no longer sets overflow-checks = true".to_string());
+            }
+            manifest.replace("overflow-checks = true", "overflow-checks = false")
+        }
+    };
+    std::fs::write(crate_dir.join("Cargo.toml"), manifest).map_err(|e| e.to_string())?;
     copy(template.join("lib.rs"), crate_dir.join("src/lib.rs"))?;
     copy(validator.join("rust-toolchain.toml"), crate_dir.join("rust-toolchain.toml"))?;
     std::fs::write(crate_dir.join("src/parse.rs"), &src).map_err(|e| e.to_string())?;

@@ -29,6 +29,8 @@ pub struct Stats {
     pub committed_tokens: u64,
     /// Matches cut at the history boundary.
     pub trimmed: u64,
+    /// Matches reaching further back than a reduced window, written as literals.
+    pub over_window: u64,
 }
 
 fn tok_len(t: u32) -> Result<(usize, u32), String> {
@@ -111,12 +113,15 @@ pub struct StreamConfig {
     /// Bytes parsed past the commit point and parsed again next call. At least
     /// `MAX_MATCH`, so a committed match is never cut short by the buffer end.
     pub lookahead: usize,
+    /// History kept between calls, at most 32 KiB: a smaller window is RFC 7692's
+    /// `max_window_bits`, and makes each small-message parse cheaper.
+    pub window: usize,
     pub coding: Coding,
 }
 
 impl StreamConfig {
     pub fn new(chunk: usize, coding: impl Into<Coding>) -> Self {
-        StreamConfig { chunk, lookahead: 4096, coding: coding.into() }
+        StreamConfig { chunk, lookahead: 4096, window: WINDOW, coding: coding.into() }
     }
 }
 
@@ -136,7 +141,7 @@ pub struct HistoryCompressor<'p> {
 
 impl<'p> HistoryCompressor<'p> {
     pub fn new(parser: &'p dyn Parser, cfg: StreamConfig) -> Self {
-        assert!(cfg.chunk > 0 && cfg.lookahead >= MAX_MATCH);
+        assert!(cfg.chunk > 0 && cfg.lookahead >= MAX_MATCH && cfg.window <= WINDOW);
         HistoryCompressor {
             parser,
             cfg,
@@ -240,7 +245,13 @@ impl<'p> HistoryCompressor<'p> {
             if pos >= limit {
                 break;
             }
-            if pos < hist {
+            if dist as usize > self.cfg.window {
+                // Only possible with a window below 32 KiB: the parser cannot be told.
+                self.stats.over_window += 1;
+                for &b in &input[pos.max(hist)..next] {
+                    self.commit.push(b as u32);
+                }
+            } else if pos < hist {
                 let rem = next - hist;
                 self.stats.trimmed += 1;
                 if rem >= 3 {
@@ -267,7 +278,7 @@ impl<'p> HistoryCompressor<'p> {
         self.enc.push(&self.commit)?;
         self.stats.encode_s += t1.elapsed().as_secs_f64();
 
-        let keep = committed_to.min(WINDOW);
+        let keep = committed_to.min(self.cfg.window);
         self.start += committed_to - keep;
         self.hist = keep;
         Ok(())
@@ -300,4 +311,25 @@ pub fn compress_stream(
     c.finish()?;
     out.extend(c.take());
     Ok((out, c.stats.clone()))
+}
+
+/// One message at a time, each followed by a sync flush (WebSocket
+/// permessage-deflate with context takeover): the stream decodes message by
+/// message, and history up to `cfg.window` carries over.
+pub fn compress_messages(p: &dyn Parser, msgs: &[&[u8]], cfg: StreamConfig) -> Result<(Vec<u8>, Stats), String> {
+    let mut c = HistoryCompressor::new(p, cfg);
+    let mut out = Vec::new();
+    for m in msgs {
+        c.write(m)?;
+        c.flush(Flush::Sync)?;
+        out.extend(c.take());
+    }
+    c.finish()?;
+    out.extend(c.take());
+    Ok((out, c.stats.clone()))
+}
+
+/// Split at newlines, keeping each newline with its message.
+pub fn lines(data: &[u8]) -> Vec<&[u8]> {
+    data.split_inclusive(|&b| b == b'\n').collect()
 }

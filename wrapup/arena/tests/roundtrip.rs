@@ -233,3 +233,72 @@ fn adaptive_blocks_round_trip_and_do_not_grow_the_output() {
     assert!(adaptive_total < fixed_total, "adaptive {adaptive_total} vs fixed {fixed_total}");
     eprintln!("adaptive {adaptive_total} vs fixed {fixed_total}");
 }
+
+#[test]
+fn messages_decode_one_by_one_with_any_window() {
+    let data = inputs().into_iter().find(|(n, _)| n == "text").unwrap().1;
+    let msgs = stream::lines(&data);
+    assert!(msgs.len() > 100);
+    for p in builtin::all() {
+        for wbits in [9u8, 12, 15] {
+            let mut cfg = StreamConfig::new(1 << 20, Huffman::Fast);
+            cfg.window = 1 << wbits;
+            let (out, _) = stream::compress_messages(&p, &msgs, cfg).unwrap();
+            verify::raw(&out, &data).unwrap_or_else(|e| panic!("{} w{wbits}: {e}", p.name));
+            // Every distance fits the negotiated window.
+            let d = inflate_tokens::decode(&out).unwrap();
+            for &t in &d.tokens {
+                if let deflate_arena::token::Token::Match { dist, .. } = deflate_arena::token::decode(t) {
+                    assert!(dist as usize <= 1 << wbits, "{} w{wbits}: distance {dist}", p.name);
+                }
+            }
+        }
+    }
+    for wbits in [9u8, 15] {
+        let out = reference::zlib_messages(&msgs, 6, wbits).unwrap();
+        verify::raw(&out, &data).unwrap();
+    }
+}
+
+#[test]
+fn png_idat_recompression_keeps_the_scanlines() {
+    use deflate_arena::png;
+    // A 64x48 RGB image, filter 0 on every row, built by hand.
+    let (w, h) = (64u32, 48u32);
+    let mut scan = Vec::new();
+    for y in 0..h {
+        scan.push(0u8);
+        for x in 0..w {
+            scan.extend_from_slice(&[(x * 4) as u8, (y * 5) as u8, ((x ^ y) * 3) as u8]);
+        }
+    }
+    let chunk = |kind: &[u8], body: &[u8]| {
+        let mut c = (body.len() as u32).to_be_bytes().to_vec();
+        c.extend_from_slice(kind);
+        c.extend_from_slice(body);
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(kind);
+        crc.update(body);
+        c.extend_from_slice(&crc.finalize().to_be_bytes());
+        c
+    };
+    let mut ihdr = w.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    let zl = miniz_oxide::deflate::compress_to_vec_zlib(&scan, 1);
+    let mut file = png::SIGNATURE.to_vec();
+    file.extend(chunk(b"IHDR", &ihdr));
+    file.extend(chunk(b"IDAT", &zl[..zl.len() / 2]));
+    file.extend(chunk(b"IDAT", &zl[zl.len() / 2..]));
+    file.extend(chunk(b"IEND", b""));
+
+    let img = png::parse(&file).unwrap();
+    assert_eq!(img.scanlines().unwrap(), scan);
+    let p = builtin::by_name("optimal-iter").unwrap();
+    let (raw, _) = stream::compress_whole(&p, &scan, Huffman::Fast).unwrap();
+    let out = img.with_idat(&container::zlib(&raw, &scan));
+    let again = png::parse(&out).unwrap();
+    assert_eq!(again.scanlines().unwrap(), scan);
+    assert_eq!(again.head.len(), 1);
+    assert_eq!(again.tail.len(), 1);
+}
