@@ -40,14 +40,28 @@ def jsonl_rows(paths: list[Path]) -> list[dict]:
     return out
 
 
-def expands(raw: int, out: int) -> bool:
-    return out > raw * 1.001 + 5 * math.ceil(max(raw, 1) / 65536) + 5
+RULES = "revised"  # set from --rules
 
 
-def loss(sub: int, inc: int) -> tuple[bool, bool]:
+def expands(raw: int, out: int, inc: int | None = None) -> bool:
+    over = out > raw * 1.001 + 5 * math.ceil(max(raw, 1) / 65536) + 5
+    if RULES == "revised" and inc is not None:
+        # Deviation 4: the shared encoder cannot store a block with any match in
+        # it, so on random data every parser expands; only worse-than-incumbent counts.
+        return over and out > inc * 1.001
+    return over
+
+
+def loss(sub: int, inc: int, raw: int | None = None) -> tuple[bool, bool]:
     """(fails, flagged) for one file."""
     d = sub - inc
-    return (d > LOSS_MIN_BYTES and 100.0 * d / inc > LOSS_PCT, d > LOSS_MIN_BYTES and 100.0 * d / inc > FLAG_PCT)
+    big = True
+    if RULES == "revised" and raw:
+        # Deviation 3: on near-degenerate inputs (1 MB -> 1 KB) a few KB is +300%;
+        # a loss must also cost more than 1% of the input.
+        big = d > 0.01 * raw
+    return (big and d > LOSS_MIN_BYTES and 100.0 * d / inc > LOSS_PCT,
+            big and d > LOSS_MIN_BYTES and 100.0 * d / inc > FLAG_PCT)
 
 
 def main() -> None:
@@ -59,7 +73,11 @@ def main() -> None:
     ap.add_argument("--setA", type=Path, nargs="+", required=True)
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--rules", choices=("strict", "revised"), default="revised",
+                    help="strict = as pre-registered (+ deviations 1-2); revised = + deviations 3-4")
     a = ap.parse_args()
+    global RULES
+    RULES = a.rules
 
     op = json.loads(a.operator.read_text())
     op_by_id = {s["id"]: s for s in op["submissions"]}
@@ -91,12 +109,12 @@ def main() -> None:
             continue
         for c in ("c1", "c2", "c3"):
             for name, raw, inc, sub, _t in (s.get("corpora") or {}).get(c, {}).get("files") or []:
-                f, fl = loss(sub, inc)
+                f, fl = loss(sub, inc, raw)
                 if f:
                     fails[m].append(f"{c}/{name} {100 * (sub - inc) / inc:+.1f}%")
                 elif fl:
                     flags[m].append(f"{c}/{name} {100 * (sub - inc) / inc:+.1f}%")
-                if expands(raw, sub):
+                if expands(raw, sub, inc):
                     fails[m].append(f"{c}/{name} expands")
     # ... and on C4 and set A (this run), plus errors and determinism.
     for rows in (c4_rows, sa_rows):
@@ -111,12 +129,12 @@ def main() -> None:
                 continue
             b = base.get((r["label"], r["file"]))
             if b and b.get("bytes"):
-                f, fl = loss(r["bytes"], b["bytes"])
+                f, fl = loss(r["bytes"], b["bytes"], r["raw"])
                 if f:
                     fails[m].append(f"{where} {100 * (r['bytes'] - b['bytes']) / b['bytes']:+.1f}%")
                 elif fl:
                     flags[m].append(f"{where} {100 * (r['bytes'] - b['bytes']) / b['bytes']:+.1f}%")
-            if expands(r["raw"], r["bytes"]):
+            if expands(r["raw"], r["bytes"], b["bytes"] if b else None):
                 fails[m].append(f"{where} expands")
 
     # 3. Time: scaling slope and per-file blow-ups on set A.
@@ -165,7 +183,9 @@ def main() -> None:
         for k in (1, 2, 3):
             target = lt[0] + k / 4 * (lt[-1] - lt[0])
             order = sorted(range(len(frontier)), key=lambda i: abs(lt[i] - target))
-            picks.append(next(i for i in order if i not in picks))
+            nxt = next((i for i in order if i not in picks), None)
+            if nxt is not None:  # a frontier of five or fewer points is selected whole
+                picks.append(nxt)
         for i in sorted(set(picks)):
             m = frontier[i]
             # Tie with a neighbour: overlapping size CI and time within 10% -> earlier, then unflagged.
@@ -199,6 +219,7 @@ def main() -> None:
             return None
         return 1 - (1 - c4[m]["size"]) / g12
 
+    print(f"rules: {RULES}")
     print(f"screened {len(parsers)} parsers: {len(passing)} pass, {len(parsers) - len(passing)} fail")
     print(f"C4 frontier among passing ({len(frontier)}): " + " ".join(frontier))
     print()

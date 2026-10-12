@@ -76,3 +76,16 @@ The selected five, plus #649 (best c1 bytes), the fastest official frontier poin
    tiny inputs, time is dominated by per-call set-up (zeroing hash tables); that cost is
    real, but it is what scenarios S5 (archive members) and S7 (messages) measure, and it is
    reported there rather than used to disqualify.
+3. **2026-10-12, post hoc: after the stage-1 screen was read.** Applied as written, the
+   screen passed 2 of 33 parsers and failed the incumbent, mo-lazy and optimal-iter. Two
+   causes are measurement artefacts that hit every method, references included, so the
+   **revised** screen adds: a size loss must also cost **more than 1% of the input**. On
+   near-degenerate set A inputs (zeros, period-k, runs: 1 MB → about 1 KB) a few KB is
+   +300% and every library differs from the incumbent by that much.
+4. **Same time, post hoc.** Expansion counts only when the method's output is also more
+   than 0.1% larger than the incumbent's. The shared encoder cannot store a block that has
+   any match in it, so on random data every parser, the incumbent included, ends up 0.26%
+   above the input.
+
+Both screens are reported (`select.py --rules strict|revised`). The selection uses the
+revised one, and the report says so.
