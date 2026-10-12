@@ -189,8 +189,12 @@ fn load_method(spec: &str, validator: Option<&Path>, work: Option<&Path>) -> Res
             Ok(Method { name: format!("builtin-{rest}"), kind: Kind::Builtin(p), source_sha256: None })
         }
         "ref" => {
-            let r = Reference::parse(rest).ok_or(format!("bad reference {rest}"))?;
-            Ok(Method { name: r.name(), kind: Kind::Ref(r), source_sha256: None })
+            let r = Reference::parse(rest).ok_or(format!("bad or unloadable reference {rest}"))?;
+            let sha = match &r {
+                Reference::So(api, _) => Some(format!("zlib {}", api.version)),
+                _ => None,
+            };
+            Ok(Method { name: r.name(), kind: Kind::Ref(r), source_sha256: sha })
         }
         "retok" => {
             let r = Reference::parse(rest).ok_or(format!("bad reference {rest}"))?;
@@ -232,6 +236,13 @@ fn compress(m: &Method, data: &[u8], mode: Mode, h: Coding) -> Result<Run, Strin
         (Kind::Ref(Reference::Zlib(l)), Mode::Stream { flush, .. }) => {
             (vec![reference::zlib_stream(data, *l, STREAM_WRITE, flush)?], None)
         }
+        (Kind::Ref(Reference::So(api, l)), Mode::Stream { flush, .. }) => {
+            let pieces: Vec<&[u8]> = match flush {
+                Some(every) => data.chunks(every).collect(),
+                None => data.chunks(STREAM_WRITE).collect(),
+            };
+            (vec![api.compress(&pieces, *l, 15, flush.is_some())?], None)
+        }
         (Kind::Ref(r), Mode::Stream { .. }) => return Err(format!("{} has no streaming mode here", r.name())),
         (Kind::Ref(r), Mode::Indep { chunk }) => {
             let pieces: Vec<&[u8]> = if data.is_empty() { vec![data] } else { data.chunks(chunk).collect() };
@@ -240,6 +251,9 @@ fn compress(m: &Method, data: &[u8], mode: Mode, h: Coding) -> Result<Run, Strin
         (Kind::Ref(r), Mode::Bgzf) => (vec![container::bgzf(data, |p| r.compress(p))?], None),
         (Kind::Ref(Reference::Zlib(l)), Mode::Messages { window_bits }) => {
             (vec![reference::zlib_messages(&stream::lines(data), *l, window_bits)?], None)
+        }
+        (Kind::Ref(Reference::So(api, l)), Mode::Messages { window_bits }) => {
+            (vec![api.compress(&stream::lines(data), *l, window_bits.max(9) as i32, true)?], None)
         }
         (Kind::Ref(r), Mode::Messages { .. }) => return Err(format!("{} has no streaming mode here", r.name())),
         (_, mode) => {

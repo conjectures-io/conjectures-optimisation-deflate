@@ -302,3 +302,25 @@ fn png_idat_recompression_keeps_the_scanlines() {
     assert_eq!(again.head.len(), 1);
     assert_eq!(again.tail.len(), 1);
 }
+
+#[test]
+fn a_zlib_api_library_loads_by_path_and_round_trips() {
+    let Some(path) = ["/lib/x86_64-linux-gnu/libz.so.1", "/usr/lib/x86_64-linux-gnu/libz.so.1", "/usr/lib/libz.so.1"]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+    else {
+        eprintln!("no system libz.so.1; skipped");
+        return;
+    };
+    let api = reference::ZlibApi::load("syszlib", Path::new(path)).unwrap();
+    assert!(api.version.starts_with('1'), "{}", api.version);
+    for (name, data) in inputs() {
+        let whole = api.compress(&[&data], 6, 15, false).unwrap();
+        verify::raw(&whole, &data).unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The same library through flate2 gives the same bytes.
+        assert_eq!(whole, reference::Reference::Zlib(6).compress(&data).unwrap(), "{name}");
+        let msgs = stream::lines(&data);
+        let synced = api.compress(&msgs, 6, 12, true).unwrap();
+        verify::raw(&synced, &data).unwrap_or_else(|e| panic!("{name} sync: {e}"));
+    }
+}
