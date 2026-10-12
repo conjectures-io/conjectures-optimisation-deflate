@@ -43,8 +43,12 @@ def summarize(meta: dict, rows: list[dict], ref: str) -> list[dict]:
                 worst = (r["file"], g)
             if r.get("median_total_s") and b.get("median_total_s"):
                 tr.append(r["median_total_s"] / b["median_total_s"])
+        timed = [r for r in ok if r.get("median_total_s")]
+        mbps = (sum(r["raw"] for r in timed) / sum(r["median_total_s"] for r in timed) / 1e6) if timed else None
         out.append(
             {
+                "mbps": mbps,
+                "raw": sum(r["raw"] for r in ok),
                 "corpus": meta.get("label"),
                 "mode": meta.get("mode"),
                 "method": method,
@@ -74,7 +78,7 @@ def main() -> None:
         print(json.dumps(table, indent=1))
         return
     table.sort(key=lambda r: (r["corpus"] or "", r["mode"] or "", r["mean_pct"] or 1e9))
-    head = f"{'corpus':6} {'mode':22} {'method':26} {'bytes':>11} {'mean%':>7} {'gain%':>7} {'t/ref':>6}  worst file"
+    head = f"{'corpus':6} {'mode':22} {'method':26} {'bytes':>11} {'mean%':>7} {'gain%':>7} {'t/ref':>6} {'MB/s':>7}  worst file"
     print(head)
     for r in table:
         def fmt(v, spec):
@@ -83,7 +87,7 @@ def main() -> None:
         err = f"  ERRORS {len(r['errors'])}: {r['errors'][0][:60]}" if r["errors"] else ""
         print(
             f"{r['corpus'] or '':6} {(r['mode'] or '')[:22]:22} {r['method'][:26]:26} {r['bytes']:>11,} "
-            f"{fmt(r['mean_pct'], '7.3f')} {fmt(r['file_gain'], '+7.2f')} {fmt(r['time_ratio'], '6.2f')}  {worst}{err}"
+            f"{fmt(r['mean_pct'], '7.3f')} {fmt(r['file_gain'], '+7.2f')} {fmt(r['time_ratio'], '6.2f')} {fmt(r['mbps'], '7.1f')}  {worst}{err}"
         )
 
 
