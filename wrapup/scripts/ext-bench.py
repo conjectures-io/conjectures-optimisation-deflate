@@ -108,14 +108,14 @@ def main() -> None:
                     st = acc[t]
                     if st["error"]:
                         continue
-                    dst = Path(tmp) / f"out-{t}"
+                    dst = Path(tmp) / f"out-{t}.{'png' if output_format(t) == 'png' else 'gz'}"
                     dst.unlink(missing_ok=True)
                     cmd = tool_cmd(t, f, dst)
                     t0 = time.perf_counter()
                     r = subprocess.run(cmd, shell=isinstance(cmd, str), env=env, capture_output=True)
                     dt = time.perf_counter() - t0
-                    if r.returncode != 0 and not dst.exists():
-                        st["error"] = f"exit {r.returncode}: {r.stderr.decode(errors='replace')[:200]}"
+                    if not dst.exists():
+                        st["error"] = f"no output (exit {r.returncode}): {r.stderr.decode(errors='replace')[:200]}"
                         continue
                     res = dst.read_bytes()
                     if st["bytes"] is None:
