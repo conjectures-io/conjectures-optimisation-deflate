@@ -4,7 +4,7 @@
 //! ```text
 //! arena build  --validator DIR --work DIR PARSE.rs...
 //! arena bench  --corpus DIR [--label NAME] --method M... [--mode MODE] [--huffman pinned|fast]
-//!              [--reps N] [--warmup N] [--out FILE.jsonl] [--validator DIR --work DIR]
+//!              [--blocks fixed|adaptive] [--reps N] [--warmup N] [--out FILE.jsonl] [--validator DIR --work DIR]
 //! arena gz     --method M [--mode MODE] [--format gzip|zlib|raw|bgzf] [--huffman ...] IN OUT
 //! ```
 //!
@@ -20,7 +20,7 @@
 //! raw stream each), or `bgzf` (BGZF blocks, sizes include the framing).
 //! Sizes accept `k`/`m` suffixes (KiB/MiB).
 
-use deflate_arena::encoder::{self, Huffman};
+use deflate_arena::encoder::{self, Blocks, Coding, Huffman};
 use deflate_arena::parser::{self, FnParser, Parser, SlotParser};
 use deflate_arena::reference::{self, Reference};
 use deflate_arena::stream::{self, StreamConfig};
@@ -115,12 +115,18 @@ impl Mode {
     }
 }
 
-fn huffman(a: &Args) -> Result<Huffman, String> {
-    match a.one("huffman").unwrap_or("fast") {
-        "fast" => Ok(Huffman::Fast),
-        "pinned" => Ok(Huffman::Pinned),
-        h => Err(format!("bad --huffman {h}")),
-    }
+fn coding(a: &Args) -> Result<Coding, String> {
+    let huffman = match a.one("huffman").unwrap_or("fast") {
+        "fast" => Huffman::Fast,
+        "pinned" => Huffman::Pinned,
+        h => return Err(format!("bad --huffman {h}")),
+    };
+    let blocks = match a.one("blocks").unwrap_or("fixed") {
+        "fixed" => Blocks::Fixed,
+        "adaptive" => Blocks::Adaptive,
+        b => return Err(format!("bad --blocks {b}")),
+    };
+    Ok(Coding { huffman, blocks })
 }
 
 // ── Methods ───────────────────────────────────────────────────────────────────
@@ -190,13 +196,13 @@ struct Run {
     parsed_bytes: Option<u64>,
 }
 
-fn compress(m: &Method, data: &[u8], mode: Mode, h: Huffman) -> Result<Run, String> {
+fn compress(m: &Method, data: &[u8], mode: Mode, h: Coding) -> Result<Run, String> {
     let t0 = Instant::now();
     let (out, st) = match (&m.kind, mode) {
         (Kind::Retok(r), Mode::Whole) => {
             let theirs = r.compress(data)?;
             let d = inflate_tokens::decode(&theirs)?;
-            (vec![encoder::encode(&d.tokens, data.len(), h)?], None)
+            (vec![encoder::encode_with(&d.tokens, data.len(), h.huffman, h.blocks)?], None)
         }
         (Kind::Retok(_), _) => return Err("retok is whole-buffer only".to_string()),
         (Kind::Ref(r), Mode::Whole) => (vec![r.compress(data)?], None),
@@ -287,6 +293,7 @@ struct Meta<'a> {
     corpus_dir: String,
     mode: String,
     huffman: String,
+    blocks: String,
     reps: usize,
     warmup: usize,
     started_at_unix: f64,
@@ -344,11 +351,11 @@ fn corpus_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
 fn cmd_bench(args: &[String]) -> Result<(), String> {
     let a = Args::parse(
         args,
-        &["corpus", "label", "method", "mode", "huffman", "reps", "warmup", "out", "validator", "work"],
+        &["corpus", "label", "method", "mode", "huffman", "blocks", "reps", "warmup", "out", "validator", "work"],
     )?;
     let corpus = PathBuf::from(a.one("corpus").ok_or("--corpus DIR")?);
     let mode = Mode::parse(a.one("mode").unwrap_or("whole"))?;
-    let h = huffman(&a)?;
+    let h = coding(&a)?;
     let reps: usize = a.one("reps").unwrap_or("11").parse().map_err(|_| "bad --reps")?;
     let warmup: usize = a.one("warmup").unwrap_or("1").parse().map_err(|_| "bad --warmup")?;
     let validator = a.one("validator").map(PathBuf::from);
@@ -376,7 +383,8 @@ fn cmd_bench(args: &[String]) -> Result<(), String> {
         label,
         corpus_dir: corpus.display().to_string(),
         mode: format!("{mode:?}"),
-        huffman: format!("{h:?}"),
+        huffman: format!("{:?}", h.huffman),
+        blocks: format!("{:?}", h.blocks),
         reps,
         warmup,
         started_at_unix: std::time::SystemTime::now()
@@ -479,14 +487,14 @@ fn peak_rss_kib() -> Option<u64> {
 }
 
 fn cmd_gz(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["method", "mode", "format", "huffman", "validator", "work"])?;
+    let a = Args::parse(args, &["method", "mode", "format", "huffman", "blocks", "validator", "work"])?;
     let m = load_method(
         a.one("method").ok_or("--method M")?,
         a.one("validator").map(Path::new),
         a.one("work").map(Path::new),
     )?;
     let mode = Mode::parse(a.one("mode").unwrap_or("stream:1m"))?;
-    let h = huffman(&a)?;
+    let h = coding(&a)?;
     let [input, output] = a.positional.as_slice() else {
         return Err("arena gz ... IN OUT".to_string());
     };

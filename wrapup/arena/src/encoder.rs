@@ -72,6 +72,35 @@ pub enum Flush {
     Full,
 }
 
+/// How tokens are cut into blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blocks {
+    /// Every 16384 tokens, as the competition fixes it.
+    Fixed,
+    /// Cut where the symbol statistics change (see [`split_ranges`]): what
+    /// production encoders do and the competition deliberately left out.
+    Adaptive,
+}
+
+/// Huffman construction and blocking together: everything an encoder decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Coding {
+    pub huffman: Huffman,
+    pub blocks: Blocks,
+}
+
+impl From<Huffman> for Coding {
+    fn from(huffman: Huffman) -> Self {
+        Coding { huffman, blocks: Blocks::Fixed }
+    }
+}
+
+impl Encoder {
+    pub fn with_coding(c: Coding) -> Self {
+        Self::with_blocks(c.huffman, c.blocks)
+    }
+}
+
 // ── Bit writer ────────────────────────────────────────────────────────────────
 
 struct BitWriter {
@@ -360,6 +389,11 @@ struct Block {
     raw_len: usize,
 }
 
+/// Tokens gathered before an adaptive split; a segment end is always a block end.
+pub const SEGMENT_TOKENS: usize = 1 << 17;
+/// Candidate cut points are multiples of this many tokens.
+const GRAIN: usize = 1024;
+
 impl Block {
     fn new() -> Self {
         Block {
@@ -433,11 +467,22 @@ fn fixed_tables() -> ([u8; NUM_LITLEN], [u8; NUM_DIST]) {
     (ll, [5u8; NUM_DIST])
 }
 
-fn write_block(w: &mut BitWriter, b: &Block, last: bool, h: Huffman) {
-    let mut lf = b.litlen_freq;
+/// The dynamic-block tables for a block's frequencies, as the pinned encoder builds them.
+struct Tables {
+    ll: Vec<u8>,
+    dl: Vec<u8>,
+    cl: Vec<u8>,
+    rle: Vec<(u8, u32, u32)>,
+    hlit: usize,
+    hdist: usize,
+}
+
+fn tables(litlen_freq: &[u32; NUM_LITLEN], dist_freq: &[u32; NUM_DIST], h: Huffman) -> Tables {
+    let mut lf = *litlen_freq;
     lf[END_OF_BLOCK] += 1;
     let mut ll = package_merge(h, &lf, MAX_BITS_LITLEN);
-    let mut dl = package_merge(h, &b.dist_freq, MAX_BITS_LITLEN);
+    let mut dl = package_merge(h, dist_freq, MAX_BITS_LITLEN);
+    // A block with no matches still has to name at least one distance code.
     if dl.iter().all(|&x| x == 0) {
         dl[0] = 1;
     }
@@ -467,6 +512,48 @@ fn write_block(w: &mut BitWriter, b: &Block, last: bool, h: Huffman) {
         clf[sym as usize] += 1;
     }
     let cl = package_merge(h, &clf, MAX_BITS_CODELEN);
+    Tables { ll, dl, cl, rle, hlit, hdist }
+}
+
+/// Bits of the block the pinned rules would write for these counts: the
+/// cheapest of dynamic, fixed and (all literals, under 64 KiB) stored.
+fn block_bits(
+    litlen_freq: &[u32; NUM_LITLEN],
+    dist_freq: &[u32; NUM_DIST],
+    extra_bits: u64,
+    raw_len: u64,
+    has_match: bool,
+    h: Huffman,
+) -> u64 {
+    let t = tables(litlen_freq, dist_freq, h);
+    let (fll, _) = fixed_tables();
+    let mut dyn_bits: u64 = 3 + 5 + 5 + 4 + 3 * hclen(&t.cl) as u64;
+    for &(sym, _, extra) in &t.rle {
+        dyn_bits += t.cl[sym as usize] as u64 + extra as u64;
+    }
+    dyn_bits += extra_bits + t.ll[END_OF_BLOCK] as u64;
+    let mut fix_bits: u64 = 3 + extra_bits + fll[END_OF_BLOCK] as u64;
+    for s in 0..NUM_LITLEN {
+        let f = litlen_freq[s] as u64;
+        dyn_bits += f * t.ll[s] as u64;
+        fix_bits += f * fll[s] as u64;
+    }
+    for d in 0..NUM_DIST {
+        let f = dist_freq[d] as u64;
+        dyn_bits += f * t.dl[d] as u64;
+        fix_bits += f * 5;
+    }
+    let best = dyn_bits.min(fix_bits);
+    let stored = 3 + 32 + 8 * raw_len;
+    if !has_match && raw_len < 65536 && stored < best {
+        stored
+    } else {
+        best
+    }
+}
+
+fn write_block(w: &mut BitWriter, b: &Block, last: bool, h: Huffman) {
+    let Tables { ll, dl, cl, rle, hlit, hdist } = tables(&b.litlen_freq, &b.dist_freq, h);
 
     let dyn_bits = b.dynamic_cost(&ll, &dl, &cl, &rle);
     let fix_bits = b.fixed_cost();
@@ -535,6 +622,170 @@ fn emit_items(w: &mut BitWriter, b: &Block, ll: &[u8], llc: &[u32], dl: &[u8], d
     w.put(llc[END_OF_BLOCK], ll[END_OF_BLOCK] as u32);
 }
 
+// ── Adaptive block splitting ──────────────────────────────────────────────────
+
+/// Running counts at every `GRAIN`-th token of a block.
+struct Prefix {
+    ll: Vec<[u32; NUM_LITLEN]>,
+    dist: Vec<[u32; NUM_DIST]>,
+    extra: Vec<u64>,
+    raw: Vec<u64>,
+    matches: Vec<u64>,
+    /// Item index of each grain point.
+    at: Vec<usize>,
+}
+
+impl Prefix {
+    fn new(b: &Block) -> Prefix {
+        let n = b.items.len();
+        let mut p = Prefix {
+            ll: vec![[0; NUM_LITLEN]],
+            dist: vec![[0; NUM_DIST]],
+            extra: vec![0],
+            raw: vec![0],
+            matches: vec![0],
+            at: vec![0],
+        };
+        let (mut ll, mut dist) = ([0u32; NUM_LITLEN], [0u32; NUM_DIST]);
+        let (mut extra, mut raw, mut matches) = (0u64, 0u64, 0u64);
+        for (i, &(s, _, lb, d, _, db)) in b.items.iter().enumerate() {
+            ll[s as usize] += 1;
+            extra += lb as u64;
+            if d != u16::MAX {
+                dist[d as usize] += 1;
+                extra += db as u64;
+                matches += 1;
+                raw += LEN_TABLE[s as usize - 257].1 as u64 + b.items[i].1 as u64;
+            } else {
+                raw += 1;
+            }
+            if (i + 1) % GRAIN == 0 || i + 1 == n {
+                p.ll.push(ll);
+                p.dist.push(dist);
+                p.extra.push(extra);
+                p.raw.push(raw);
+                p.matches.push(matches);
+                p.at.push(i + 1);
+            }
+        }
+        p
+    }
+
+    /// Entropy estimate of grains `[i, j)` as one dynamic block, in bits.
+    fn estimate(&self, i: usize, j: usize) -> f64 {
+        fn flog(f: u64) -> f64 {
+            if f == 0 { 0.0 } else { f as f64 * (f as f64).log2() }
+        }
+        let (mut t, mut sum, mut used) = (1u64, 0.0f64, 1u32);
+        for s in 0..NUM_LITLEN {
+            let f = (self.ll[j][s] - self.ll[i][s]) as u64;
+            if f > 0 {
+                t += f;
+                sum += flog(f);
+                used += 1;
+            }
+        }
+        let mut bits = flog(t) - sum;
+        let (mut td, mut sumd) = (0u64, 0.0f64);
+        for d in 0..NUM_DIST {
+            let f = (self.dist[j][d] - self.dist[i][d]) as u64;
+            if f > 0 {
+                td += f;
+                sumd += flog(f);
+                used += 1;
+            }
+        }
+        bits += flog(td) - sumd;
+        // Header: fixed fields, code-length code, about 4 bits per used length.
+        bits + 74.0 + 4.0 * used as f64 + (self.extra[j] - self.extra[i]) as f64
+    }
+
+    fn exact(&self, i: usize, j: usize, h: Huffman) -> u64 {
+        let mut ll = [0u32; NUM_LITLEN];
+        let mut dist = [0u32; NUM_DIST];
+        for s in 0..NUM_LITLEN {
+            ll[s] = self.ll[j][s] - self.ll[i][s];
+        }
+        for d in 0..NUM_DIST {
+            dist[d] = self.dist[j][d] - self.dist[i][d];
+        }
+        let matches = self.matches[j] - self.matches[i];
+        block_bits(&ll, &dist, self.extra[j] - self.extra[i], self.raw[j] - self.raw[i], matches > 0, h)
+    }
+}
+
+/// Item ranges to write as separate blocks: recursive binary splitting at grain
+/// points, choosing each cut by the entropy estimate and keeping it only if the
+/// exact cost (the tables the block would really get) goes down.
+fn split_ranges(b: &Block, h: Huffman) -> Vec<(usize, usize)> {
+    let n = b.items.len();
+    if n < 2 * GRAIN {
+        return vec![(0, n)];
+    }
+    let p = Prefix::new(b);
+    let grains = p.at.len() - 1;
+    let mut out = Vec::new();
+    let mut todo = vec![(0usize, grains, p.exact(0, grains, h))];
+    while let Some((i, j, whole)) = todo.pop() {
+        let mut best: Option<(usize, f64)> = None;
+        if j - i >= 2 {
+            for c in i + 1..j {
+                let e = p.estimate(i, c) + p.estimate(c, j);
+                if best.is_none_or(|(_, b)| e < b) {
+                    best = Some((c, e));
+                }
+            }
+        }
+        match best {
+            Some((c, _)) => {
+                let (l, r) = (p.exact(i, c, h), p.exact(c, j, h));
+                if l + r < whole {
+                    // Right first so ranges come out in order.
+                    todo.push((c, j, r));
+                    todo.push((i, c, l));
+                } else {
+                    out.push((p.at[i], p.at[j]));
+                }
+            }
+            None => out.push((p.at[i], p.at[j])),
+        }
+    }
+    out
+}
+
+fn sub_block(b: &Block, from: usize, to: usize) -> Block {
+    let mut s = Block::new();
+    for &it in &b.items[from..to] {
+        let (sym, lval, _, d, _, _) = it;
+        s.litlen_freq[sym as usize] += 1;
+        if d != u16::MAX {
+            s.dist_freq[d as usize] += 1;
+            s.raw_len += (LEN_TABLE[sym as usize - 257].1 + lval) as usize;
+        } else {
+            s.raw_len += 1;
+        }
+        s.items.push(it);
+    }
+    s
+}
+
+fn write_segment(w: &mut BitWriter, b: &Block, last: bool, h: Huffman, blocks: Blocks) {
+    match blocks {
+        Blocks::Fixed => write_block(w, b, last, h),
+        Blocks::Adaptive => {
+            let ranges = split_ranges(b, h);
+            let k = ranges.len();
+            for (idx, (from, to)) in ranges.into_iter().enumerate() {
+                if from == 0 && to == b.items.len() {
+                    write_block(w, b, last, h);
+                } else {
+                    write_block(w, &sub_block(b, from, to), last && idx + 1 == k, h);
+                }
+            }
+        }
+    }
+}
+
 // ── The incremental encoder ───────────────────────────────────────────────────
 
 /// Raw DEFLATE from tokens pushed in any batches.
@@ -548,11 +799,17 @@ pub struct Encoder {
     /// Bytes a back-reference may reach: reset by a full flush.
     window: u64,
     huffman: Huffman,
+    blocks: Blocks,
     finished: bool,
 }
 
 impl Encoder {
+    /// The pinned blocking: byte-identical to `pinned::encode`.
     pub fn new(huffman: Huffman) -> Self {
+        Self::with_blocks(huffman, Blocks::Fixed)
+    }
+
+    pub fn with_blocks(huffman: Huffman, blocks: Blocks) -> Self {
         Encoder {
             w: BitWriter::new(),
             cur: Block::new(),
@@ -560,7 +817,15 @@ impl Encoder {
             produced: 0,
             window: 0,
             huffman,
+            blocks,
             finished: false,
+        }
+    }
+
+    fn segment(&self) -> usize {
+        match self.blocks {
+            Blocks::Fixed => BLOCK_TOKENS,
+            Blocks::Adaptive => SEGMENT_TOKENS,
         }
     }
 
@@ -571,7 +836,7 @@ impl Encoder {
 
     fn release_held(&mut self) {
         if let Some(b) = self.held.take() {
-            write_block(&mut self.w, &b, false, self.huffman);
+            write_segment(&mut self.w, &b, false, self.huffman, self.blocks);
         }
     }
 
@@ -600,7 +865,7 @@ impl Encoder {
                 }
                 token::Token::Invalid => return Err(format!("{t} is not a legal token")),
             }
-            if self.cur.items.len() >= BLOCK_TOKENS {
+            if self.cur.items.len() >= self.segment() {
                 self.held = Some(std::mem::replace(&mut self.cur, Block::new()));
             }
         }
@@ -613,7 +878,7 @@ impl Encoder {
         self.release_held();
         if !self.cur.items.is_empty() {
             let b = std::mem::replace(&mut self.cur, Block::new());
-            write_block(&mut self.w, &b, false, self.huffman);
+            write_segment(&mut self.w, &b, false, self.huffman, self.blocks);
         }
         self.w.put(0, 1);
         self.w.put(0, 2);
@@ -632,7 +897,7 @@ impl Encoder {
             Some(b) => b,
             None => std::mem::replace(&mut self.cur, Block::new()),
         };
-        write_block(&mut self.w, &b, true, self.huffman);
+        write_segment(&mut self.w, &b, true, self.huffman, self.blocks);
         self.w.align();
         self.finished = true;
     }
@@ -645,7 +910,11 @@ impl Encoder {
 
 /// One-shot encode, the counterpart of `pinned::encode`.
 pub fn encode(tokens: &[u32], input_len: usize, huffman: Huffman) -> Result<Vec<u8>, String> {
-    let mut e = Encoder::new(huffman);
+    encode_with(tokens, input_len, huffman, Blocks::Fixed)
+}
+
+pub fn encode_with(tokens: &[u32], input_len: usize, huffman: Huffman, blocks: Blocks) -> Result<Vec<u8>, String> {
+    let mut e = Encoder::with_blocks(huffman, blocks);
     e.push(tokens)?;
     if e.produced() != input_len as u64 {
         return Err(format!(

@@ -207,3 +207,29 @@ fn a_sync_flush_ends_on_the_zlib_marker() {
     out.extend(c.take());
     verify::raw(&out, &data).unwrap();
 }
+
+#[test]
+fn adaptive_blocks_round_trip_and_do_not_grow_the_output() {
+    use deflate_arena::encoder::{Blocks, Coding};
+    let adaptive = Coding { huffman: Huffman::Fast, blocks: Blocks::Adaptive };
+    let (mut fixed_total, mut adaptive_total) = (0usize, 0usize);
+    for p in builtin::all() {
+        for (name, data) in inputs() {
+            let t = tokens(&p, &data);
+            let a = encoder::encode_with(&t, data.len(), Huffman::Fast, Blocks::Adaptive).unwrap();
+            verify::raw(&a, &data).unwrap_or_else(|e| panic!("{} {name}: {e}", p.name));
+            // The split only moves block boundaries: the parse is unchanged.
+            assert_eq!(inflate_tokens::decode(&a).unwrap().tokens, t, "{} {name}", p.name);
+            fixed_total += encoder::encode(&t, data.len(), Huffman::Fast).unwrap().len();
+            adaptive_total += a.len();
+
+            let cfg = StreamConfig::new(70_000, adaptive);
+            let (s, _) = stream::compress_stream(&p, &data, cfg, 30_000, Some(150_000)).unwrap();
+            verify::raw(&s, &data).unwrap_or_else(|e| panic!("{} {name} stream: {e}", p.name));
+            let (one, _) = stream::compress_independent(&p, &data, 50_000, adaptive, false).unwrap();
+            verify::raw(&one[0], &data).unwrap_or_else(|e| panic!("{} {name} independent: {e}", p.name));
+        }
+    }
+    assert!(adaptive_total < fixed_total, "adaptive {adaptive_total} vs fixed {fixed_total}");
+    eprintln!("adaptive {adaptive_total} vs fixed {fixed_total}");
+}

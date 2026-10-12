@@ -10,7 +10,7 @@
 //! points inside bytes the decoder already has, because it pointed inside the
 //! parsed buffer and the buffer starts at bytes already emitted.
 
-use crate::encoder::{Encoder, Flush, Huffman};
+use crate::encoder::{Coding, Encoder, Flush};
 use crate::parser::Parser;
 use crate::token;
 use std::time::Instant;
@@ -40,7 +40,8 @@ fn tok_len(t: u32) -> Result<(usize, u32), String> {
 }
 
 /// Parse `input` in one call and encode it: the competition's own setting.
-pub fn compress_whole(p: &dyn Parser, input: &[u8], h: Huffman) -> Result<(Vec<u8>, Stats), String> {
+pub fn compress_whole(p: &dyn Parser, input: &[u8], c: impl Into<Coding>) -> Result<(Vec<u8>, Stats), String> {
+    let c = c.into();
     let mut st = Stats::default();
     let mut toks = vec![0u32; input.len().max(1)];
     let t0 = Instant::now();
@@ -50,7 +51,7 @@ pub fn compress_whole(p: &dyn Parser, input: &[u8], h: Huffman) -> Result<(Vec<u
     st.parse_calls = 1;
     st.committed_tokens = n as u64;
     let t1 = Instant::now();
-    let out = crate::encoder::encode(&toks[..n], input.len(), h)?;
+    let out = crate::encoder::encode_with(&toks[..n], input.len(), c.huffman, c.blocks)?;
     st.encode_s = t1.elapsed().as_secs_f64();
     Ok((out, st))
 }
@@ -62,14 +63,15 @@ pub fn compress_independent(
     p: &dyn Parser,
     input: &[u8],
     chunk: usize,
-    h: Huffman,
+    c: impl Into<Coding>,
     members: bool,
 ) -> Result<(Vec<Vec<u8>>, Stats), String> {
+    let c = c.into();
     assert!(chunk > 0);
     let mut st = Stats::default();
     let mut toks = vec![0u32; chunk.min(input.len()).max(1)];
     let mut outs = Vec::new();
-    let mut enc = Encoder::new(h);
+    let mut enc = Encoder::with_coding(c);
     let pieces: Vec<&[u8]> = if input.is_empty() { vec![&input[..0]] } else { input.chunks(chunk).collect() };
     let last = pieces.len() - 1;
     for (i, piece) in pieces.into_iter().enumerate() {
@@ -81,7 +83,7 @@ pub fn compress_independent(
         st.committed_tokens += n as u64;
         let t1 = Instant::now();
         if members {
-            outs.push(crate::encoder::encode(&toks[..n], piece.len(), h)?);
+            outs.push(crate::encoder::encode_with(&toks[..n], piece.len(), c.huffman, c.blocks)?);
         } else {
             let before = enc.produced();
             enc.push(&toks[..n])?;
@@ -109,12 +111,12 @@ pub struct StreamConfig {
     /// Bytes parsed past the commit point and parsed again next call. At least
     /// `MAX_MATCH`, so a committed match is never cut short by the buffer end.
     pub lookahead: usize,
-    pub huffman: Huffman,
+    pub coding: Coding,
 }
 
 impl StreamConfig {
-    pub fn new(chunk: usize, huffman: Huffman) -> Self {
-        StreamConfig { chunk, lookahead: 4096, huffman }
+    pub fn new(chunk: usize, coding: impl Into<Coding>) -> Self {
+        StreamConfig { chunk, lookahead: 4096, coding: coding.into() }
     }
 }
 
@@ -138,7 +140,7 @@ impl<'p> HistoryCompressor<'p> {
         HistoryCompressor {
             parser,
             cfg,
-            enc: Encoder::new(cfg.huffman),
+            enc: Encoder::with_coding(cfg.coding),
             buf: Vec::new(),
             start: 0,
             hist: 0,
