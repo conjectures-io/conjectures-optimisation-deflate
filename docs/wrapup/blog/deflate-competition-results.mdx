@@ -160,10 +160,10 @@ parts.
   loops, bounds checks, no word-at-a-time matching. Turning off overflow checks, which the
   proofs make redundant, changes nothing measurable.
 - **From about 1.6 to 3.6 times the baseline's time, the miners' parsers are the best
-  option measured.** #85, #355 and #243 are on average 1 to 1.5% smaller than libdeflate-9
-  and two to four times faster than libdeflate-12. On average they are also 1.5 to 2.3%
-  smaller than zlib level 9 and miniz_oxide level 9. At about the speed of zlib-9, #657
-  matches its size.
+  option measured.** #85, #355 and #243 are on average 1.1 to 1.6% smaller than
+  libdeflate-9 and two to four times faster than libdeflate-12. They are also 1.7 to 2.3%
+  smaller than zlib level 9 and 2.8 to 3.3% smaller than miniz_oxide level 9. At about the
+  speed of zlib-9, #657 matches its size.
 - **libdeflate's level 12 produces the smallest output, but not because of its parse.**
   Feed libdeflate-12's own tokens through the competition's encoder and the result is
   larger than #243's on the competition corpus. The difference is the block splitter. We
