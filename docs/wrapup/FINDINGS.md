@@ -152,7 +152,41 @@ the competition's fixed blocks, the selected points sit between them.
 
 ## 6. Real-world scenarios S1–S7
 
-*Pending.*
+Parsers run with the arena's adaptive blocks (what a production encoder would use);
+sizes are hierarchical geometric means per scenario, relative to zlib-6 unless noted;
+"time" is the same mean of per-file time ratios, MB/s is total input over total time.
+
+### S1 static web precompression (13,268 files, 345 MB; gzip framing)
+
+| method | size | time | MB/s | total bytes |
+|---|---|---|---|---|
+| libdeflate-12 | 0.9747 | 5.83 | 4.8 | 71,264,203 |
+| libdeflate-12's parse, our encoder | 0.9745 | – | – | 71,222,645 |
+| #243 | 0.9753 | 6.32 | 6.4 | 71,254,175 |
+| #355 | 0.9760 | 4.55 | 12.0 | 71,426,971 |
+| #649 (best c1) | 0.9766 | 12.36 | 3.3 | 71,858,367 |
+| #657 | 0.9789 | 3.19 | 22.3 | 71,754,818 |
+| #85 | 0.9791 | 3.15 | 15.0 | 71,849,882 |
+| #521 | 0.9854 | 2.37 | 26.5 | 71,988,911 |
+| #232 | 0.9877 | 1.64 | 20.9 | 71,887,047 |
+| libdeflate-9 | 0.9923 | 0.89 | 32.2 | 74,177,845 |
+| zlib-9 | 0.9966 | 1.09 | 17.7 | 74,797,839 |
+| libdeflate-6 | 0.9986 | 0.63 | 104.3 | 75,595,435 |
+| miniz_oxide-9 | 0.9999 | 1.40 | 19.7 | 74,983,061 |
+| zlib-6 | 1.0000 | 1.00 | 41.9 | 75,535,808 |
+| incumbent | 1.0000 | 1.60 | 28.6 | 76,033,002 |
+| #55 | 1.0024 | 1.45 | 46.8 | 75,584,785 |
+| #125 (dossier) | 1.0030 | 1.39 | 50.4 | 75,263,507 |
+| #632 (fastest official) | 1.4328 | 1.12 | 63.0 | 105,782,179 |
+
+- #243 ties libdeflate-12 (smaller in total bytes, 0.06% larger per file) with higher
+  throughput on large files; #355 gets within 0.13% of it at 2.5× the throughput.
+- Web assets leave little: the best is 2.5% under zlib-6.
+- Per-call cost shows on small files: #55 has more throughput than zlib-6 but is slower
+  per file (zeroing its tables on every call).
+- *Pending:* zopfli, 7-Zip and gzip -9 sizes.
+
+*Pending:* S2–S7.
 
 ## 7. Lessons for the next competition
 
