@@ -16,7 +16,7 @@ before the holdout was run, and every later deviation are in
 
 | | |
 |---|---|
-| Host | s66 (`nl-vmv3-heavy`), KVM VM, AMD EPYC 9354, 8 vCPU (1 thread per core), 31 GiB, Ubuntu 24.04.5, kernel 6.8.0 |
+| Host |  KVM VM, AMD EPYC 9354, 8 vCPU (1 thread per core), 31 GiB, Ubuntu 24.04.5, kernel 6.8.0 |
 | Why this host | it ran the competition's dashboard reruns, so results line up with them; the user chose a single host (PLAN.md §8.4) |
 | Pinning | every timed run on one core (`taskset -c 7`); nothing else heavy ran during timed runs (each run logs load and competing processes before and after in `<run>.jsonl.log`) |
 | Order | interleaved rounds: every method once per round, file by file (the gate's scheme), so drift hits all methods alike |
