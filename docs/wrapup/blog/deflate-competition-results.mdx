@@ -207,11 +207,12 @@ output was decoded by zlib, miniz_oxide and libdeflate before it counted.
 - **Genomics in BGZF's 64 KiB blocks** (VCF, FASTQ, BAM records). #355 is 6% smaller than
   zlib-6, but libdeflate-12 is another 2.5% smaller: a solid result, not a headline.
 - **PNG image data.** Not a job for these parsers. zopflipng and oxipng, which also choose
-  filters, are 3 to 4% smaller than the best of them, and so is libdeflate-12 alone. No
+  filters, are about 4% smaller than the best of them, and libdeflate-12 alone is 3%
+  smaller. No
   parser was ever tuned on filtered scanlines.
 - **One small message at a time, with a flush after each** (WebSocket style). Not a job
-  for a one-shot parser either. With a 32 KiB window they are 3% smaller than zlib but up
-  to 40 times slower, because the history is parsed again for every message. With a
+  for a one-shot parser either. With a 32 KiB window they are 3% smaller than zlib but 7
+  to 45 times slower, because the history is parsed again for every message. With a
   4 KiB window they are 40% larger, because a parser that does not know the window picks
   matches the window cannot reach.
 

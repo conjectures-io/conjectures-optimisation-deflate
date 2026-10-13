@@ -12,20 +12,18 @@ website (`conjectures-web-new/posts/<slug>.mdx`).
 - s66: tools built, scenario data S1–S7 fetched, set A and C4 generated, PROD export
   unpacked, reference run on c1/c2/c3, stage 1 (public candidates) on C4 and set A.
 
-## In progress
+## Done since
 
-- Stage 1b and the final selection are done (`results/05-select/`: `select-{revised,strict}.{txt,json}`,
-  `withheld-fails.tsv` from a supplementary c1–c3 run of the four withheld frontier points,
-  `parsers.txt`). Selected: #55 #232 #657 #355 #243; also run: #85 #521, contrasts #649 #632 #125.
-- Scenarios S1–S7 running since 2026-10-12 16:35 (`results/06-scenarios`, log
-  `results/05-select/scenarios.log`), about 6–7 hours on core 7.
+- Stage 1b, final selection (`results/05-select/`), all seven scenarios
+  (`results/06-scenarios/`, 2026-10-12 16:35–23:53), report tables
+  (`results/07-report/scenarios.{md,json}`).
+- FINDINGS.md complete; blog post drafted at `docs/wrapup/blog/deflate-competition-results.mdx`.
 
-## Next
+## Open
 
-1. When the scenarios finish: `summarize.py` and `rank.py --ref zlib-6` per scenario
-   (`results/06-scenarios/<tag>.jsonl` and `<tag>-ext.jsonl`), finish FINDINGS.md §6–7.
-2. Write the blog post (`conjectures-web-new/posts/<slug>.mdx`: `export const meta`,
-   `Figures`/`Source`/`Disclaimer`; no pipe tables, no `$`).
+- Review of the blog post by the team; then copy it to `conjectures-web-new/posts/` (the
+  site has no remark-gfm: the post avoids pipe tables and `$`).
+- Optional: per-scenario charts for the post; a parser variant with a smaller window for S7.
 
 ## Where things are on s66 (`/root/deflate-wrapup`, nothing else touched)
 

@@ -318,3 +318,10 @@ speed, and collapses on whole buffers.
   shared encoder, would make the results directly comparable with libraries.
 - The proof gives correctness, not compression or speed guarantees; robustness needs its
   own tests.
+- Size robustness is content-dependent: #355 passed 64 MiB of text but degrades above
+  32 MB on tarballs and dictionaries. Test single buffers well past any intended use, on
+  several kinds of data.
+- A streaming signature (`parse(buf, start, out)` with persistent state) would make the
+  results usable for flushing workloads (logs, messages) and for reduced windows; a
+  one-shot parser behind an adapter re-parses its history on every flush and cannot honour
+  a window smaller than the one it was written for.
