@@ -1,7 +1,6 @@
 # DEFLATE competition: findings
 
-Status: **in progress** (2026-10-12). Numbers below are final for what they cover; sections
-marked *pending* are not. Method and decisions: [PLAN.md](PLAN.md),
+Status: complete for the technical record (2026-10-13). Method and decisions: [PLAN.md](PLAN.md),
 [PREREGISTRATION.md](PREREGISTRATION.md). All timing is on s66 (AMD EPYC 9354, KVM,
 8 vCPU), one pinned core, interleaved rounds. Sizes are deterministic.
 
@@ -152,45 +151,160 @@ the competition's fixed blocks, the selected points sit between them.
 
 ## 6. Real-world scenarios S1–S7
 
-Parsers run with the arena's adaptive blocks (what a production encoder would use);
-sizes are hierarchical geometric means per scenario, relative to zlib-6 unless noted;
-"time" is the same mean of per-file time ratios, MB/s is total input over total time.
+Parsers run with the arena's adaptive blocks (what a production encoder would use) and
+are called unchanged through the adapters. Size and "time" are hierarchical geometric
+means of per-file ratios against the scenario's reference (zlib-6 unless noted); MB/s is
+total input over total median time. Command-line tools are timed per process, so their
+MB/s includes start-up (negligible on S2's large files). Every output was decoded by
+zlib, miniz_oxide and libdeflate. Raw tables: `results/07-report/scenarios.md` on s66.
 
-### S1 static web precompression (13,268 files, 345 MB; gzip framing)
+### S1 static web precompression (13,268 files, 345 MB, gzip framing)
 
-| method | size | time | MB/s | total bytes |
-|---|---|---|---|---|
-| libdeflate-12 | 0.9747 | 5.83 | 4.8 | 71,264,203 |
-| libdeflate-12's parse, our encoder | 0.9745 | – | – | 71,222,645 |
-| #243 | 0.9753 | 6.32 | 6.4 | 71,254,175 |
-| #355 | 0.9760 | 4.55 | 12.0 | 71,426,971 |
-| #649 (best c1) | 0.9766 | 12.36 | 3.3 | 71,858,367 |
-| #657 | 0.9789 | 3.19 | 22.3 | 71,754,818 |
-| #85 | 0.9791 | 3.15 | 15.0 | 71,849,882 |
-| #521 | 0.9854 | 2.37 | 26.5 | 71,988,911 |
-| #232 | 0.9877 | 1.64 | 20.9 | 71,887,047 |
-| libdeflate-9 | 0.9923 | 0.89 | 32.2 | 74,177,845 |
-| zlib-9 | 0.9966 | 1.09 | 17.7 | 74,797,839 |
-| libdeflate-6 | 0.9986 | 0.63 | 104.3 | 75,595,435 |
-| miniz_oxide-9 | 0.9999 | 1.40 | 19.7 | 74,983,061 |
-| zlib-6 | 1.0000 | 1.00 | 41.9 | 75,535,808 |
-| incumbent | 1.0000 | 1.60 | 28.6 | 76,033,002 |
-| #55 | 1.0024 | 1.45 | 46.8 | 75,584,785 |
-| #125 (dossier) | 1.0030 | 1.39 | 50.4 | 75,263,507 |
-| #632 (fastest official) | 1.4328 | 1.12 | 63.0 | 105,782,179 |
+| method | size vs zlib-6 | MB/s | total bytes |
+|---|---|---|---|
+| zopfli --i15 | 0.968 | 0.22 | 70,893,790 |
+| libdeflate-12 | 0.975 | 4.8 | 71,264,203 |
+| **#243** | 0.975 | 6.4 | 71,254,175 |
+| **#355** | 0.976 | 12.0 | 71,426,971 |
+| **#657** | 0.979 | 22.3 | 71,754,818 |
+| #85 | 0.979 | 15.0 | 71,849,882 |
+| #521 | 0.985 | 26.5 | 71,988,911 |
+| **#232** | 0.988 | 20.9 | 71,887,047 |
+| 7-Zip gzip -mx9 | 1.006* | 1.43 | 71,507,481 |
+| libdeflate-9 | 0.992 | 32.2 | 74,177,845 |
+| zlib-9 / gzip -9 | 0.997 | 17.7 / 7.1 | 74,797,839 |
+| zlib-6 | 1.000 | 41.9 | 75,535,808 |
+| **#55** | 1.002 | 46.8 | 75,584,785 |
+| #632 (fastest official) | 1.433 | 63.0 | 105,782,179 |
 
-- #243 ties libdeflate-12 (smaller in total bytes, 0.06% larger per file) with higher
-  throughput on large files; #355 gets within 0.13% of it at 2.5× the throughput.
-- Web assets leave little: the best is 2.5% under zlib-6.
-- Per-call cost shows on small files: #55 has more throughput than zlib-6 but is slower
-  per file (zeroing its tables on every call).
-- *Pending:* zopfli, 7-Zip and gzip -9 sizes.
+\* 7-Zip writes the file name into each gzip header, which costs it on small files.
 
-*Pending:* S2–S7.
+**Verdict:** #243 matches libdeflate-12 and is within 0.5% of zopfli at 29× zopfli's speed;
+#355 and #657 trade 0.1–0.4% of that for 1.9–3.5× more speed. Web assets only leave about 2.5%
+over zlib-6 for anyone.
+
+### S2 large files (Silesia, enwik8, CPython and Linux tarballs, GitHub events; 824 MB)
+
+Streamed in 1 MiB chunks through the history adapter (gzip framing):
+
+| method | size vs zlib-6 | MB/s | total bytes |
+|---|---|---|---|
+| **#243** | 0.950 | 6.1 | 195,370,262 |
+| **#355** | 0.952 | 11.5 | 195,699,645 |
+| 7-Zip gzip -mx9 | 0.952 | 1.8 | 195,547,336 |
+| #85 | 0.955 | 16.1 | 196,284,825 |
+| **#657** | 0.956 | 20.7 | 196,514,501 |
+| **#232** | 0.957 | 21.0 | 196,869,154 |
+| #521 | 0.957 | 27.1 | 196,664,178 |
+| zlib-9 / pigz -9 / gzip -9 | 0.991 | 19.0 / 18.7 / 17.3 | 203,718,196 |
+| zlib-ng-9 | 0.993 | 37.6 | 203,991,880 |
+| zlib-6 | 1.000 | 39.3 | 205,497,334 |
+| zlib-ng-6 | 1.003 | 81.8 | 206,487,620 |
+| **#55** | 0.997 | 46.5 | 205,173,342 |
+| igzip -3 | 1.112 | 249 | 227,965,604 |
+
+Whole buffer, against libdeflate (which has no streaming API): libdeflate-12 is 0.954 of
+libdeflate-6 at 5.1 MB/s, #243 0.955 at 5.0 MB/s, #85 0.959 at 16.7, #521 0.960 at 27.4,
+libdeflate-9 0.986 at 41.1.
+
+**Verdict:** streamed, every selected parser above #55 is 3.4–4.1% smaller than zlib-9;
+#232, #657 and #521 at equal or better speed (21–27 MB/s against 19), #243 at a third of
+it. #243 is smaller than 7-Zip's deflate at 3.4× its speed. **But two selected
+parsers degrade on single large buffers:** relative to libdeflate-6, #355 is fine up to 33.6 MB
+(2^25 bytes), then +4% at 41 MB rising to +36% at 268 MB; #657 +8% at 51 MB to +51% at
+268 MB; #649 (the record lineage) from 8.5 MB, up to 4.4× on 134 MB. #243, #85, #232 and #521 hold at
+every size. Set A stopped at 64 MiB of text, which #355 passed. Chunked streaming hides
+the problem completely, so these parsers are safe behind the adapter and unsafe as
+whole-buffer compressors for large inputs.
+
+### S3 BGZF genomics (VCF, FASTQ, BAM records; 569 MB; 64 KiB independent blocks)
+
+| method | size vs zlib-6 | MB/s |
+|---|---|---|
+| libdeflate-12 | 0.912 | 4.6 |
+| **#355** | 0.937 | 12.8 |
+| **#243** | 0.946 | 12.0 |
+| #85 | 0.949 | 14.5 |
+| **#657** | 0.953 | 23.4 |
+| #521 | 0.964 | 30.2 |
+| **#232** | 0.989 | 29.2 |
+| zlib-ng-6 | 0.993 | 80.5 |
+| libdeflate-6 (htslib's default) | 0.999 | 103.1 |
+| **#55** | 1.010 | 42.7 |
+| #125 (dossier) | 1.357 | 55.7 (2.5× on VCF) |
+
+**Verdict:** a real but not a headline win: #355 is 6% smaller than zlib-6 at 12.8 MB/s,
+but libdeflate-12 is another 2.5% smaller. The large VCF gains seen on corpus 3 come from
+long-range structure that 64 KiB blocks cut off.
+
+### S4 PNG (IDAT recompressed with each image's own filters; Kodak, Fluent emoji, Python docs)
+
+zopflipng 0.927 and oxipng -o4 0.930 (both also choose filters; 0.05 and 0.31 MB/s),
+zopfli 0.928, libdeflate-12 0.939; best miner #85 0.967, #521 0.979, #243 0.989, zlib-9
+1.000, #355 1.009, #657 1.026, #55 1.036.
+
+**Verdict:** not a use for these parsers. Image data was their weakest category on C4
+too: none of them was tuned on filtered scanlines.
+
+### S5 archive members (CPython `Lib/`, a Guava JAR; one stream per file)
+
+libdeflate-12 0.978 (5.6 MB/s); **#243 0.978 (7.6)**; **#355 0.978 (12.6)**; #85 0.980
+(17.2); **#657 0.981 (21.0)**; #521 0.988 (25.8); **#232 0.992 (27.6)**; zlib-9 0.996
+(19.2); zlib-ng-6 0.998 (75.3); zlib-6 1.000 (52.4); **#55 1.003 (43.8)**.
+
+**Verdict:** #243 and #355 tie libdeflate-12 on many small files, #355 at 2.3× its speed.
+
+### S6 logs (this host's journal, nginx and pm2 logs; 281 MB; sync flush every 64 KiB)
+
+| method | size vs zlib-6 | MB/s |
+|---|---|---|
+| **#355** | 0.854 | 26.9 |
+| #85 | 0.858 | 38.4 |
+| #649 | 0.863 | 1.8 |
+| **#243** | 0.870 | 21.0 |
+| **#657** | 0.926 | 35.4 |
+| zlib-ng-6 | 0.941 | 301 |
+| Cloudflare zlib-6 | 0.962 | 330 |
+| **#232** | 0.984 | 93.6 |
+| zlib-6 | 1.000 | 195 |
+| #521 | 1.025 | 57.8 |
+| **#55** | 1.026 | 152 |
+
+**Verdict:** the largest size win anywhere: #355 and #85 write logs 14–15% smaller than
+zlib-6 and 9% smaller than zlib-ng-6. But at 27–38 MB/s against 300 for zlib-ng, they
+suit log archiving, not a log shipper's hot path.
+
+### S7 messages with a sync flush per message (20,000 GitHub events; 58 MB)
+
+32 KiB window: #85 0.967, #355 0.968, #243 0.969, #232 0.976 against zlib-6 1.000 and
+zlib-ng-6 1.000; but 1.4–8.6 MB/s against 62–100, because the adapter re-parses up to 32 KiB
+of history for every message. 4 KiB window: every parser, the incumbent included, is
+37–43% larger than zlib-6. That is an adapter limit, not a parser result: a parser picks
+the longest match it finds, often more than 4 KiB back, and the adapter can only replace
+it with literals. A reduced window needs the parser's window constant changed.
+
+**Verdict:** not a use for one-shot parsers. Per-message flushing needs a parser that
+keeps its state between calls (`parse(buf, start, out)`), which is a different contest.
+
+### Recommendation: the few to keep
+
+| parser | when | why |
+|---|---|---|
+| **#243** (10-02) | maximum compression: static assets, archives, large files | libdeflate-12's size on web assets, archives and large files (zopfli within 0.5%) at its speed or better; robust at every size and on every screen input |
+| **#355** (10-05) | high compression, streamed | best miner on logs and genomics; 2× #243's speed; **only behind the chunking adapter** (degrades on single buffers above 32 MB) |
+| **#85** (09-29) | high compression, robust | passes even the strict screen; within 0.5% of #355 except on genomics (1.2%), better on PNG; robust at every size |
+| **#521** (10-08) | balanced | passes the strict screen; 3.4% smaller than zlib-9 at 1.4× its speed on large files |
+| **#657** (10-12), **#232** (10-02) | balanced | as #521; #657 also needs the chunking adapter above 50 MB |
+
+#55, the fastest selected point, is at best level with zlib-6 and slower than zlib-ng-6
+or libdeflate-6 in every scenario, the expected outcome at the fast end. The contrasts
+confirm the overfitting verdict in practice: #632 (fastest official) is 7–86% larger than
+zlib-6 in every scenario; #125 (the 09-30 dossier) is never more than 0.5% better than
+zlib-6 and 2.5× on VCF; #649 (best c1) is within 1% of #243 when streamed, at 9–56% of its
+speed, and collapses on whole buffers.
 
 ## 7. Lessons for the next competition
 
-*Pending; collected so far:*
 - A held-out twin of the public corpus detects nothing; rotate genuinely different
   private corpora, and do not publish their aggregates (c3's became an oracle).
 - Include tiny files and files far larger than the corpus maximum: the 1.5 MB ceiling hid
