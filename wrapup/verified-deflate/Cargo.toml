@@ -1,0 +1,43 @@
+[package]
+name = "verified-deflate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "gzip/zlib/DEFLATE compression with LZ77 parsers proved correct in Lean (conjectures.io DEFLATE competition)"
+readme = "README.md"
+keywords = ["gzip", "deflate", "zlib", "compression", "verified"]
+categories = ["compression"]
+publish = false # licence of the competition submissions not decided yet; see README
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vgzip"
+path = "src/bin/vgzip.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# The command-line tool; decompression (-d) uses flate2's pure-Rust inflater.
+cli = ["dep:flate2"]
+
+[dependencies]
+crc32fast = "1.4"
+adler2 = "2"
+flate2 = { version = "1.0", optional = true }
+
+[dev-dependencies]
+flate2 = "1.0"
+miniz_oxide = "0.8"
+libdeflater = "1.22"
+# The benchmark harness: the library must produce exactly the bytes it measured.
+deflate-arena = { path = "../arena" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[profile.test]
+opt-level = 3

@@ -1,6 +1,6 @@
 # Wrap-up status and how to resume
 
-Updated 2026-10-12. Plan: [PLAN.md](PLAN.md). Rules: [PREREGISTRATION.md](PREREGISTRATION.md).
+Updated 2026-10-13. Plan: [PLAN.md](PLAN.md). Rules: [PREREGISTRATION.md](PREREGISTRATION.md).
 Results: [FINDINGS.md](FINDINGS.md). Method and reproduction: [METHODOLOGY.md](METHODOLOGY.md) and `wrapup/scripts/reproduce.sh`. The final deliverable is a blog post for the
 website (`conjectures-web-new/posts/<slug>.mdx`).
 
@@ -18,6 +18,9 @@ website (`conjectures-web-new/posts/<slug>.mdx`).
   (`results/06-scenarios/`, 2026-10-12 16:35–23:53), report tables
   (`results/07-report/scenarios.{md,json}`).
 - FINDINGS.md complete; blog post drafted at `docs/wrapup/blog/deflate-competition-results.mdx`.
+- METHODOLOGY.md and `wrapup/scripts/reproduce.sh` (2026-10-13).
+- `wrapup/verified-deflate`: the library and `vgzip` CLI with #521/#85/#243 (2026-10-13);
+  `publish = false` until the licence of miners' code is decided.
 
 ## Open
 

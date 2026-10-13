@@ -7,6 +7,13 @@ untouched: `arena` includes the pinned `token.rs`, `loader.rs` and `deflate.rs`
 from `validator/measure/src` by path, and its own encoder is tested to be
 byte-identical to the pinned one.
 
+## `verified-deflate/`: the library
+
+The usable result: a Rust crate and a `vgzip` command that compress gzip, zlib, raw
+DEFLATE and BGZF with three of the competition's proved parsers (#521, #85, #243 as
+levels Balanced, High, Max). Output is standard DEFLATE. See
+[`verified-deflate/README.md`](verified-deflate/README.md).
+
 ## `arena/`
 
 A Rust crate and CLI:
