@@ -8,7 +8,7 @@ export const meta = {
     "Every one of the 648 accepted parsers is proved to decode back to its input. Being proved correct is not the same as being good in general, and that is the second half of this story.",
   category: "Competitions",
   publishedAt: "2026-10-13",
-  readingTime: "12 min read",
+  readingTime: "14 min read",
 };
 
 From 28 September to 12 October 2026, miners on the subnet competed on one small, old
@@ -171,22 +171,70 @@ parts.
   keep a cut only if the exact cost drops). It makes every parse 0.7 to 0.9% smaller, and
   libdeflate-12's tokens through it come out smaller than libdeflate-12 itself.
 
-## Real-world scenarios
+## Seven real-world jobs
 
-*Pending: results of the seven scenario runs.*
+Last, we put the selected parsers to work, unchanged, on seven jobs DEFLATE does every day.
+An adapter calls each one on "the last 32 KiB plus the new data", keeps only the tokens
+past the history, and trims a match that straddles the boundary, so a whole-buffer parser
+can stream. The parsers got adaptive block splitting, as any production encoder has. Every
+output was decoded by zlib, miniz_oxide and libdeflate before it counted.
 
-- Static web precompression, as a CDN or `gzip_static` does it.
-- Large files through `gzip`, streamed in 1 MiB chunks.
-- BGZF genomics, the 64 KiB block format behind BAM and tabix.
-- PNG image data, recompressed with the image's own filters.
-- Archive members: every file its own stream, as in ZIP or git objects.
-- Logs streamed with a flush every 64 KiB.
-- WebSocket-style messages with a flush per message.
+<Figures
+  label="Real-world results"
+  items={[
+    { value: "29×", detail: "faster than zopfli for #243 on 345 MB of web assets, with output within 0.5% of zopfli's" },
+    { value: "3.4×", detail: "faster than 7-Zip's deflate for #243 on 824 MB of large files, with smaller output" },
+    { value: "−15%", detail: "the size of streamed server logs with #355 and #85, against zlib level 6" },
+    { value: "+36%", detail: "what #355 loses on a single 268 MB buffer, and nothing when the same data is streamed" },
+  ]}
+/>
 
-The parsers needed no changes for any of this. An adapter calls each one on "the last
-32 KiB plus the new data", keeps only the tokens past the history, and trims a match
-that straddles the boundary. Every output was decoded by zlib, miniz_oxide and
-libdeflate before it counted.
+- **Static web assets, precompressed once** (npm releases and the Python documentation).
+  #243 matches libdeflate-12 and lands within 0.5% of zopfli, the usual tool for this job,
+  at 29 times zopfli's speed. #355 and #657 give up 0.1 to 0.4% of that for two to three
+  and a half times more speed. Web assets leave only about 2.5% over zlib level 6 for
+  anyone.
+- **Large files, streamed in 1 MiB chunks** (Silesia, Wikipedia, source tarballs). Every
+  selected parser except the fastest is 3.4 to 4.1% smaller than `gzip -9`. #232, #657
+  and #521 manage it at equal or better speed. #243 is smaller than 7-Zip's deflate at
+  3.4 times its speed.
+- **Logs, streamed with a flush every 64 KiB.** The biggest win anywhere: #355 and #85
+  write our servers' logs 14 to 15% smaller than zlib-6 and 9% smaller than zlib-ng. At 27
+  to 38 MB/s against zlib-ng's 300, that is a job for log archiving, not for a log
+  shipper's hot path.
+- **Archive members, one stream per file** (CPython's standard library, a Java JAR). #243
+  and #355 tie libdeflate-12, #355 at more than twice its speed.
+- **Genomics in BGZF's 64 KiB blocks** (VCF, FASTQ, BAM records). #355 is 6% smaller than
+  zlib-6, but libdeflate-12 is another 2.5% smaller: a solid result, not a headline.
+- **PNG image data.** Not a job for these parsers. zopflipng and oxipng, which also choose
+  filters, are 3 to 4% smaller than the best of them, and so is libdeflate-12 alone. No
+  parser was ever tuned on filtered scanlines.
+- **One small message at a time, with a flush after each** (WebSocket style). Not a job
+  for a one-shot parser either. With a 32 KiB window they are 3% smaller than zlib but up
+  to 40 times slower, because the history is parsed again for every message. With a
+  4 KiB window they are 40% larger, because a parser that does not know the window picks
+  matches the window cannot reach.
+
+Large files also caught one more defect. Two of the five selected parsers, #355 and #657,
+compress normally up to about 32 and 50 MB in a single buffer and then degrade, by up to
+36% and 51% on a 268 MB input. Streamed in chunks, they are fine. Our robustness set
+stopped at 64 MB, which they passed. #243, #85, #232 and #521 hold at every size we tried.
+
+### The few worth keeping
+
+- **#243** (2 October): the maximum-compression choice for static assets, archives and
+  large files. libdeflate-12's size there, zopfli within half a percent, robust at every
+  size.
+- **#85** (29 September): nearly the same compression as #355 at a little more speed, and
+  the only high-compression parser that passes even the strictest version of our screen.
+- **#355** (5 October): the best of them on logs and genomics, but only behind the
+  streaming adapter.
+- **#521** (8 October), **#657** (12 October) and **#232** (2 October): the balanced
+  choices, 3 to 4% under `gzip -9` at its speed or better.
+
+The fastest selected parser, #55, is at best level with zlib-6 and slower than zlib-ng or
+libdeflate in every job, which is what the fast end of the competition looked like from
+the start.
 
 ## What we would do differently
 

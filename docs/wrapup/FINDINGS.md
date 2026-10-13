@@ -229,13 +229,14 @@ whole-buffer compressors for large inputs.
 | #521 | 0.964 | 30.2 |
 | **#232** | 0.989 | 29.2 |
 | zlib-ng-6 | 0.993 | 80.5 |
-| libdeflate-6 (htslib's default) | 0.999 | 103.1 |
+| libdeflate-6 | 0.999 | 103.1 |
 | **#55** | 1.010 | 42.7 |
 | #125 (dossier) | 1.357 | 55.7 (2.5× on VCF) |
 
 **Verdict:** a real but not a headline win: #355 is 6% smaller than zlib-6 at 12.8 MB/s,
-but libdeflate-12 is another 2.5% smaller. The large VCF gains seen on corpus 3 come from
-long-range structure that 64 KiB blocks cut off.
+but libdeflate-12 is another 2.5% smaller. The much larger VCF gains seen on corpus 3
+(whole files) do not carry over to 64 KiB blocks; a likely reason, not tested here, is
+that the block boundary cuts the long matches they relied on.
 
 ### S4 PNG (IDAT recompressed with each image's own filters; Kodak, Fluent emoji, Python docs)
 
