@@ -1,6 +1,6 @@
 # DEFLATE competition: findings
 
-Status: complete for the technical record (2026-10-13). Method and decisions: [PLAN.md](PLAN.md),
+Status: complete for the technical record (2026-10-13). How every number was produced and how to reproduce it: [METHODOLOGY.md](METHODOLOGY.md). Design and decisions: [PLAN.md](PLAN.md),
 [PREREGISTRATION.md](PREREGISTRATION.md). All timing is on s66 (AMD EPYC 9354, KVM,
 8 vCPU), one pinned core, interleaved rounds. Sizes are deterministic.
 

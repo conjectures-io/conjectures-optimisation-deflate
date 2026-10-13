@@ -1,6 +1,6 @@
 # Competition wrap-up: real-world evaluation
 
-Plan and decisions: [`docs/wrapup/PLAN.md`](../docs/wrapup/PLAN.md).
+Plan and decisions: [`docs/wrapup/PLAN.md`](../docs/wrapup/PLAN.md). Methodology and how to reproduce every result: [`docs/wrapup/METHODOLOGY.md`](../docs/wrapup/METHODOLOGY.md) (`scripts/reproduce.sh <stage>...`).
 
 Nothing here is part of the gate. `validator/` (and its verifier fingerprint) is
 untouched: `arena` includes the pinned `token.rs`, `loader.rs` and `deflate.rs`

@@ -1,7 +1,7 @@
 # Wrap-up status and how to resume
 
 Updated 2026-10-12. Plan: [PLAN.md](PLAN.md). Rules: [PREREGISTRATION.md](PREREGISTRATION.md).
-Results so far: [FINDINGS.md](FINDINGS.md). The final deliverable is a blog post for the
+Results: [FINDINGS.md](FINDINGS.md). Method and reproduction: [METHODOLOGY.md](METHODOLOGY.md) and `wrapup/scripts/reproduce.sh`. The final deliverable is a blog post for the
 website (`conjectures-web-new/posts/<slug>.mdx`).
 
 ## Done
